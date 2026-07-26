@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="256" height="256" viewBox="0 0 256 256"
+     xmlns="http://www.w3.org/2000/svg" version="1.1">
+
+  <!-- ========== DEFS ========== -->
+  <defs>
+    <!-- Arka plan gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#101633"/>
+      <stop offset="100%" stop-color="#050812"/>
+    </linearGradient>
+
+    <!-- Ana daire (scan) gradient -->
+    <radialGradient id="scanGrad" cx="50%" cy="35%" r="60%">
+      <stop offset="0%" stop-color="#37F3FF"/>
+      <stop offset="45%" stop-color="#00C4FF"/>
+      <stop offset="100%" stop-color="#0050B8"/>
+    </radialGradient>
+
+    <!-- Glow highlight -->
+    <radialGradient id="dotGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#7CFFD8" stop-opacity="1"/>
+      <stop offset="40%" stop-color="#3DFFCC" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#00FFCC" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Dosya ikonu için gradient -->
+    <linearGradient id="fileGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#F8FBFF"/>
+      <stop offset="100%" stop-color="#D9E4FF"/>
+    </linearGradient>
+
+    <!-- İnce çizgiler için ortak renk -->
+    <style type="text/css"><![CDATA[
+      .scan-ring {
+        fill: none;
+        stroke: #62E5FF;
+        stroke-width: 3;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        opacity: 0.35;
+      }
+    ]]></style>
+  </defs>
+
+  <!-- ========== BACKGROUND ========== -->
+  <!-- Hafif köşeli kare (app icon formu) -->
+  <rect x="20" y="20" width="216" height="216" rx="48" ry="48" fill="url(#bgGrad)"/>
+
+  <!-- ========== MAIN SCAN CIRCLE ========== -->
+  <!-- Ana daire (OmniSpot'un “spot”u) -->
+  <circle cx="128" cy="124" r="78" fill="url(#scanGrad)"/>
+
+  <!-- İç halka (radar hissi) -->
+  <circle cx="128" cy="124" r="58" class="scan-ring"/>
+  <circle cx="128" cy="124" r="42" class="scan-ring" opacity="0.25"/>
+
+  <!-- ========== FILE (TARGET) ========== -->
+  <!-- Dosya gövdesi -->
+  <path d="
+    M96 76
+    H148
+    L176 104
+    V168
+    C176 178 168 186 158 186
+    H96
+    C86 186 78 178 78 168
+    V94
+    C78 84 86 76 96 76
+    Z"
+    fill="url(#fileGrad)" />
+
+  <!-- Kıvrık köşe (fold) -->
+  <path d="M148 76 L176 104 H152
+           C150 104 148 102 148 100 Z"
+        fill="#C5D5FF"/>
+
+  <!-- Dosya içindeki satır çizgileri -->
+  <path d="M94 112 H160" stroke="#A0B6FF" stroke-width="4" stroke-linecap="round" opacity="0.85"/>
+  <path d="M94 128 H152" stroke="#A0B6FF" stroke-width="4" stroke-linecap="round" opacity="0.75"/>
+  <path d="M94 144 H144" stroke="#A0B6FF" stroke-width="4" stroke-linecap="round" opacity="0.65"/>
+
+  <!-- ========== INDEXED DOTS ========== -->
+  <!-- Küçük noktalar: indexlenmiş dosyalar -->
+  <circle cx="72" cy="150" r="4" fill="#C8F5FF" opacity="0.8"/>
+  <circle cx="190" cy="108" r="4" fill="#C8F5FF" opacity="0.9"/>
+  <circle cx="176" cy="162" r="4" fill="#C8F5FF" opacity="0.7"/>
+  <circle cx="80" cy="102" r="4" fill="#C8F5FF" opacity="0.6"/>
+
+  <!-- ========== HIGHLIGHTED MATCH ========== -->
+  <!-- Glow arka planı -->
+  <circle cx="184" cy="152" r="22" fill="url(#dotGlow)"/>
+
+  <!-- Parlayan nokta: bulunan dosya -->
+  <circle cx="184" cy="152" r="6" fill="#E8FFF9"/>
+
+  <!-- ========== SUBTLE TOP GLOW ========== -->
+  <ellipse cx="128" cy="70" rx="80" ry="26" fill="#FFFFFF" opacity="0.07"/>
+
+</svg>

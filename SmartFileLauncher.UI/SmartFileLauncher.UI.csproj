@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
+    
+    <!-- Product Info -->
+    <AssemblyName>OmniSpot</AssemblyName>
+    <Product>OmniSpot</Product>
+    <Company>OmniSpot</Company>
+    <Authors>OmniSpot</Authors>
+    <Description>Hafif, hızlı ve akıllı dosya tarayıcısı</Description>
+    <Copyright>© 2024-2025 OmniSpot</Copyright>
+    
+    <!-- Version -->
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0.0</FileVersion>
+    <AssemblyVersion>1.0.0.0</AssemblyVersion>
+    
+    <!-- Publish Settings -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <ProjectReference Include="..\SmartFileLauncher.Core\SmartFileLauncher.Core.csproj" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <None Include="..\ai\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>ai\%(RecursiveDir)%(Filename)%(Extension)</Link>
+    </None>
+  </ItemGroup>
+  
+  <ItemGroup>
+    <Resource Include="Resources\app.ico" />
+  </ItemGroup>
+  
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="10.0.0" />
+    <PackageReference Include="Microsoft.WindowsAPICodePack-Shell" Version="1.1.0" />
+    <PackageReference Include="Microsoft.VisualBasic" Version="10.3.0" />
+  </ItemGroup>
+</Project>

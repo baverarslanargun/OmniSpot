@@ -1,0 +1,187 @@
+FuzzyMatcher.cs Bu sınıf, uygulamanızın "Bulanık Arama" (Fuzzy Search) yeteneğini sağlayan kritik bir bileşendir.
+
+1. Dosyanın İşlevi (Functionality)
+Bu sınıfın temel amacı, kullanıcının yaptığı yazım hatalarını (typo) tolere ederek doğru sonuçları bulmaktır. Örneğin kullanıcı "rapor" yerine "rapır" veya "rpr" yazsa bile, sistemin bunu "rapor" dosyasıyla eşleştirmesini sağlar. Bunu yapmak için Levenshtein Distance (Edit Distance) algoritmasını kullanır. Bu algoritma, bir kelimeyi diğerine dönüştürmek için gereken minimum işlem sayısını (ekleme, silme, değiştirme) hesaplar.
+
+IsFuzzyMatch: İki kelimenin benzer olup olmadığını kontrol eder (belirli bir eşik değerine göre, varsayılan 2 harf hatası).
+LevenshteinDistance: İki kelime arasındaki matematiksel "uzaklığı" hesaplar.
+FindFuzzyMatches: Bir kelime listesi içinden, aranan kelimeye en çok benzeyenleri bulur ve benzerlik sırasına göre dizer.
+2. Kullanılan Veri Yapıları
+Bu dosyada kullanılan en önemli veri yapısı 2 Boyutlu Dizi (Matris) yapısıdır.
+A. 2D Array (Matris) - Dinamik Programlama Tablosu
+Kod: int[,] dp = new int[m + 1, n + 1];
+Türü: İki boyutlu tamsayı dizisi (Matrix).
+Kullanım Amacı: Dinamik Programlama (Dynamic Programming) tekniği için kullanılır.
+Algoritma, problemi küçük parçalara böler.
+dp[i, j] hücresi, birinci kelimenin ilk i harfi ile ikinci kelimenin ilk j harfi arasındaki mesafeyi saklar.
+Matrisin sağ alt köşesi (dp[m, n]), iki kelimenin tamamı arasındaki nihai mesafeyi verir.
+Karmaşıklık (Complexity):
+Zaman: 
+O(M×N) - İki kelimenin uzunluklarının çarpımı kadar işlem yapılır.
+O(M×N) - Matris bellekte bu kadar yer kaplar.
+B. List ve Tuple
+Kod: var matches = new List<(string candidate, int distance)>();
+Türü: List içinde ValueTuple.
+Kullanım Amacı: Aday kelimeleri ve hesaplanan uzaklık skorlarını geçici olarak saklamak için kullanılır. Daha sonra bu liste distance değerine göre sıralanarak (OrderBy) en iyi eşleşmeler kullanıcıya sunulur.
+
+
+1. Services
+
+FileSystemScanner.cs
+Kullanılan Veri Yapısı: N-ary Tree (Ağaç oluşturur), Dictionary (Metadata haritası oluşturur), Inverted Index (Ters dizin oluşturur).
+Algoritma: DFS (Depth-First Search) - Klasörleri derinlemesine (recursive) tarar.
+İşlevi: Diski tarayıp bellekteki veri yapılarını (Ağaç ve İndeks) inşa eder.
+
+IndexManager.cs
+Kullanılan Veri Yapısı: HashSet (Senkronize edilen dosyaları O(1) ile takip eder), Dictionary (Dosya yollarını düğümlere eşler).
+Algoritma: Delta Sync - İki küme arasındaki farkı (Disk vs DB) bulur.
+İşlevi: İndeksleme sürecini yönetir, veritabanı ve bellek arasındaki senkronizasyonu sağlar.
+
+IndexDatabase.cs
+Kullanılan Veri Yapısı: B-Tree (SQLite'ın disk üzerindeki veri yapısı).
+İşlevi: Verilerin kalıcı olarak saklanmasını (Persistence) sağlar. SQL sorguları ile verilere erişir.
+
+FileWatcherService.cs
+Kullanılan Veri Yapısı: ConcurrentQueue (Thread-Safe Kuyruk), HashSet (Hariç tutulan yollar için O(1) kontrol).
+Algoritma: Producer-Consumer - Olayları kuyruğa atar (Producer) ve arka planda işler (Consumer).
+İşlevi: Dosya sistemi değişikliklerini anlık izler ve kuyruğa atar.
+
+IntentParser.cs
+Kullanılan Veri Yapısı: Dictionary (Dosya türü ve uzantı eşleştirmeleri için), HashSet (Stopwords - gereksiz kelimeler için).
+Algoritma: Regex (Kural tabanlı ayrıştırma) ve LLM Inference (Yapay zeka tabanlı ayrıştırma).
+İşlevi: Doğal dil sorgularını yapılandırılmış verilere dönüştürür.
+
+FileTypeMapper.cs
+Kullanılan Veri Yapısı: Dictionary (Tür -> Uzantı Listesi eşleşmesi).
+İşlevi: "Video" gibi genel terimleri .mp4, .avi gibi uzantılara çevirir.
+
+
+2. Services
+
+ThumbnailService.cs
+Kullanılan Veri Yapısı: Dictionary (Memory Cache - Bellek önbelleği), SemaphoreSlim (Eşzamanlılık kontrolü).
+Algoritma: LRU Cache mantığına benzer (Basit versiyonu: Belirli sayıda öğe tutar).
+İşlevi: Dosya önizlemelerini oluşturur ve önbellekte saklar.
+
+
+GlobalHotkeyService.cs
+Kullanılan Veri Yapısı: Veri yapısı kullanmaz. (Doğrudan Windows API çağrıları yapar).
+İşlevi: Sistem genelinde klavye kısayollarını dinler.
+
+
+Shell32Helper.cs
+Kullanılan Veri Yapısı: Struct (Windows API veri yapıları - SHELLEXECUTEINFO).
+İşlevi: Windows Shell işlemlerini (Özellikler penceresi vb.) yürütür.
+
+Search klasörü, uygulamanın arama motoru mantığını barındırır. Burada basit kelime eşleştirmesinden, yapay zeka destekli karmaşık sorgulara kadar farklı seviyelerde arama algoritmaları bulunur.
+
+1. SearchEngine.cs (Temel Arama Motoru)
+İşlevi: Kullanıcının girdiği kelimeleri (keyword) kullanarak basit ve hızlı arama yapar.
+Algoritma:
+Sorguyu parçalar (Tokenize).
+Her parça için Inverted Index'ten dosya listesini çeker.
+Dosyaları puanlar (Scoring).
+PriorityQueue kullanarak en yüksek puanlıları sıralar.
+Veri Yapısı: PriorityQueue (Sıralama için), Dictionary (Eşleşme takibi için).
+
+2. AdvancedSearchEngine.cs (Gelişmiş Arama Motoru)
+İşlevi: IntentParser'dan gelen Yapılandırılmış Sorguyu (StructuredQuery) işler.
+Özellikleri:
+Filtreleme: Dosya türü (resim, pdf), tarih (geçen hafta), boyut (>100MB) gibi filtreleri uygular.
+Filter-Only Mode: Anahtar kelime olmadan sadece filtrelerle arama yapabilir (örn: "tüm pdf'leri göster").
+AI Entegrasyonu: Yapay zekanın tahmin ettiği dosya uzantılarını kullanır.
+Algoritma: Önce aday dosyaları bulur, sonra filtreleri (LINQ Where ile) uygular.
+
+3. BasicTokenizer.cs (Kelime Parçalayıcı)
+İşlevi: Metni anlamlı parçalara (token) böler.
+Özellik: Türkçe karakter desteği (tr-TR culture) vardır. Büyük/küçük harf duyarsızdır.
+Ayırıcılar: Boşluk, nokta, virgül, tire, alt çizgi vb. (_, -, ., ,).
+
+4. BasicScoringStrategy.cs (Puanlama Stratejisi)
+İşlevi: Bir dosyanın aranan kelimeyle ne kadar alakalı olduğunu hesaplar.
+Formül:
+Tam eşleşme (Exact Match): 100 puan
+Kısmi eşleşme: 25 puan
+Sıklık Bonusu: + (Açılma Sayısı * 2) puan. (Sık kullanılan dosyalar üstte çıkar).
+
+5. Arayüzler (Interfaces)
+ITokenizer: Farklı diller veya algoritmalar için parçalayıcı değiştirmeyi kolaylaştırır (Dependency Injection).
+IScoringStrategy: Puanlama mantığını değiştirmeyi sağlar (örn: ileride TF-IDF eklenebilir).
+
+
+
+
+Models
+klasörü, uygulamanın veri taşıyıcılarını (Data Transfer Objects - DTO) ve temel varlıklarını (Entities) içerir. Bu sınıflar genellikle sadece veri tutar ve çok az iş mantığı içerir
+
+
+1. FileSystemNode.cs
+Kullanılan Veri Yapısı: N-ary Tree (Genel Ağaç)
+Açıklama: Bu sınıfın kendisi bir ağaç düğümüdür (Node). İçindeki List<FileSystemNode> Children özelliği, bu düğümün N tane çocuğa sahip olmasını sağlar. Bu yapı, dosya sisteminin hiyerarşik doğasını (klasör içinde klasör) birebir modeller.
+
+2. StructuredQuery.cs
+Kullanılan Veri Yapısı: List (Dinamik Dizi)
+Açıklama: İçerisinde List<string> Keywords, List<string> FileTypes gibi dinamik diziler barındırır. Bu listeler, yapay zekadan gelen belirsiz sayıdaki anahtar kelime ve filtreleri saklamak için kullanılır.
+
+3. SearchResult.cs
+Kullanılan Veri Yapısı: Yok (Plain Object)
+Açıklama: Bu sınıf sadece veri taşıyıcıdır (DTO). Ancak, bu nesneler SearchEngine içinde bir Priority Queue (Öncelik Kuyruğu) veri yapısında saklanır ve işlenir.
+
+4. FileMetadata.cs
+Kullanılan Veri Yapısı: Yok (Plain Object)
+Açıklama: Sadece temel veri tiplerini (long, DateTime, int) tutar. Bu nesneler IndexManager içinde bir Dictionary (Hash Map) veri yapısında (Dictionary<string, FileMetadata>) değer (value) olarak saklanır.
+
+5. FileChangeEvent.cs
+Kullanılan Veri Yapısı: Yok (Plain Object)
+Açıklama: Olay verilerini taşır. Bu nesneler FileWatcherService içinde bir ConcurrentQueue (Eşzamanlı Kuyruk) veri yapısında saklanır.
+
+6. IndexedDirectory.cs
+Kullanılan Veri Yapısı: Relational Table Row (İlişkisel Tablo Satırı)
+Açıklama: Bu sınıf, SQLite veritabanındaki bir tablo satırını temsil eder. Veritabanı arka planda bu verileri indekslemek için B-Tree veri yapısını kullanır. Sınıfın kendisinde özel bir veri yapısı yoktur.
+
+7. IndexedFile.cs
+Kullanılan Veri Yapısı: Relational Table Row (İlişkisel Tablo Satırı)
+Açıklama: IndexedDirectory ile aynıdır. SQLite veritabanında B-Tree yapısı üzerinde saklanır.
+
+8. IndexMetadata.cs
+Kullanılan Veri Yapısı: Key-Value Pair (Anahtar-Değer Çifti)
+Açıklama: Basit bir anahtar-değer yapısıdır. Veritabanında genellikle bir Hash Map veya B-Tree mantığıyla saklanan ayarları temsil eder.
+
+
+
+InvertedIndex.cs
+dosyası, projenizin arama motorunun kalbidir. Bu dosya, DataStructures klasörü altında yer alır ve özel bir veri yapısı implementasyonudur.
+
+1. Kullanılan Veri Yapıları
+Bu sınıf, iki temel veri yapısını bir arada kullanarak hem hızlı arama hem de hızlı silme işlemi sağlar:
+
+A. Ana İndeks (Forward Index)
+Kod: Dictionary<string, List<FileSystemNode>> _index
+Yapı: Token (Kelime) -> Dosya Listesi
+İşlevi: Bir kelimenin hangi dosyalarda geçtiğini tutar.
+Örnek:
+"rapor" -> [rapor_2024.pdf, yıllık_rapor.docx]
+"2024" -> [rapor_2024.pdf, bütçe_2024.xlsx]
+Karmaşıklık:
+Ekleme: 
+O(1) (Dictionary lookup + List append).
+Arama: 
+O(1) (Dictionary lookup).
+B. Ters İndeks (Reverse Index / Node Map)
+Kod: Dictionary<string, HashSet<string>> _nodeTokens
+Yapı: Dosya Yolu -> Token Kümesi
+İşlevi: Bir dosyanın hangi kelimelerle indekslendiğini tutar. Bu yapı, bir dosya silindiğinde veya adı değiştiğinde, o dosyaya ait tüm kelimeleri ana indeksten hızlıca bulup silmek için gereklidir.
+Örnek:
+c:\belgeler\rapor_2024.pdf -> {"rapor", "2024", "pdf"}
+Karmaşıklık:
+Silme: 
+O(T) (T: Dosyadaki kelime sayısı). Eğer bu yapı olmasaydı, tüm indeksi taramak gerekirdi
+O(N)).
+2. Algoritmalar ve İşlevler
+Add(token, node):
+Hem _index'e hem de _nodeTokens'a ekleme yapar. İki yapıyı senkronize tutar.
+RemoveByPath(path):
+Dosya silindiğinde çağrılır.
+Önce _nodeTokens'tan dosyanın sahip olduğu kelimeleri bulur.
+Sonra bu kelimeleri _index'ten tek tek temizler.
+Bu "çift yönlü haritalama" (bidirectional mapping) tekniği, silme işlemini çok hızlandırır.

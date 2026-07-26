@@ -1,0 +1,296 @@
+<Window x:Class="SmartFileLauncher.UI.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OmniSpot Ayarları"
+        Width="520"
+        Height="580"
+        WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize"
+        Background="#F5F5F7">
+    
+    <Window.Resources>
+        <!-- Modern Button Style -->
+        <Style x:Key="ModernButton" TargetType="Button">
+            <Setter Property="Background" Value="#007AFF"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="{TemplateBinding Background}"
+                                CornerRadius="6"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Opacity" Value="0.85"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Opacity" Value="0.7"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        
+        <!-- Secondary Button Style -->
+        <Style x:Key="SecondaryButton" TargetType="Button" BasedOn="{StaticResource ModernButton}">
+            <Setter Property="Background" Value="#E5E5EA"/>
+            <Setter Property="Foreground" Value="#1D1D1F"/>
+        </Style>
+        
+        <!-- Section Header Style -->
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#1D1D1F"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+    </Window.Resources>
+    
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+        
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,24">
+            <TextBlock Text="⚙️ Ayarlar" 
+                       FontSize="24" 
+                       FontWeight="Bold"
+                       Foreground="#1D1D1F"/>
+            <TextBlock Text="OmniSpot kısayol ve tercihlerini düzenleyin"
+                       FontSize="13"
+                       Foreground="#86868B"
+                       Margin="0,4,0,0"/>
+        </StackPanel>
+        
+        <!-- Settings Content -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                
+                <!-- Hotkey Section -->
+                <Border Background="White" 
+                        CornerRadius="12" 
+                        Padding="16"
+                        Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="🔑 Kısayol Tuşu" Style="{StaticResource SectionHeader}"/>
+                        
+                        <TextBlock Text="OmniSpot'u uyandırmak için kullanılacak global kısayol:"
+                                   FontSize="12"
+                                   Foreground="#86868B"
+                                   Margin="0,0,0,12"/>
+                        
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            
+                            <!-- Current Hotkey Display -->
+                            <Border Grid.Column="0"
+                                    Background="#F5F5F7"
+                                    BorderBrush="#E5E5EA"
+                                    BorderThickness="1"
+                                    CornerRadius="8"
+                                    Padding="12,10"
+                                    Margin="0,0,12,0">
+                                <TextBlock x:Name="CurrentHotkeyText"
+                                           Text="Alt + Space"
+                                           FontSize="14"
+                                           FontWeight="Medium"
+                                           Foreground="#1D1D1F"
+                                           VerticalAlignment="Center"/>
+                            </Border>
+                            
+                            <!-- Change Button -->
+                            <Button Grid.Column="1"
+                                    x:Name="ChangeHotkeyButton"
+                                    Content="Değiştir"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="ChangeHotkeyButton_Click"/>
+                        </Grid>
+                        
+                        <!-- Hotkey Recording Overlay -->
+                        <Border x:Name="HotkeyRecordingPanel"
+                                Background="#FFF3CD"
+                                BorderBrush="#FFECB5"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="12"
+                                Margin="0,12,0,0"
+                                Visibility="Collapsed">
+                            <StackPanel>
+                                <TextBlock Text="⌨️ Yeni kısayolu girin..."
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="#856404"/>
+                                <TextBlock x:Name="RecordingHotkeyText"
+                                           Text="Bir tuş kombinasyonu basın"
+                                           FontSize="12"
+                                           Foreground="#856404"
+                                           Margin="0,4,0,8"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <Button Content="Tamam"
+                                            Style="{StaticResource ModernButton}"
+                                            Width="80"
+                                            Click="ConfirmHotkey_Click"
+                                            Margin="0,0,8,0"/>
+                                    <Button Content="İptal"
+                                            Style="{StaticResource SecondaryButton}"
+                                            Width="80"
+                                            Click="CancelHotkey_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Startup Section -->
+                <Border Background="White" 
+                        CornerRadius="12" 
+                        Padding="16"
+                        Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="🚀 Başlangıç" Style="{StaticResource SectionHeader}"/>
+                        
+                        <CheckBox x:Name="StartMinimizedCheckbox"
+                                  Content="Minimize başlat"
+                                  FontSize="13"
+                                  Foreground="#1D1D1F"
+                                  Margin="0,0,0,8"/>
+                        
+                        <CheckBox x:Name="StartWithWindowsCheckbox"
+                                  Content="Windows ile birlikte başlat"
+                                  FontSize="13"
+                                  Foreground="#1D1D1F"
+                                  Margin="0,0,0,8"/>
+                        
+                        <CheckBox x:Name="MinimizeToTrayCheckbox"
+                                  Content="Kapatma butonunda system tray'e küçült"
+                                  FontSize="13"
+                                  Foreground="#1D1D1F"
+                                  IsChecked="True"/>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Defaults Section -->
+                <Border Background="White" 
+                        CornerRadius="12" 
+                        Padding="16"
+                        Margin="0,0,0,16">
+                    <StackPanel>
+                        <TextBlock Text="📋 Varsayılanlar" Style="{StaticResource SectionHeader}"/>
+                        
+                        <CheckBox x:Name="NaturalLanguageDefaultCheckbox"
+                                  Content="AI modunu varsayılan olarak aç"
+                                  FontSize="13"
+                                  Foreground="#1D1D1F"
+                                  Margin="0,0,0,8"/>
+                        
+                        <CheckBox x:Name="GridViewDefaultCheckbox"
+                                  Content="Grid görünümünü varsayılan olarak aç"
+                                  FontSize="13"
+                                  Foreground="#1D1D1F"/>
+                    </StackPanel>
+                </Border>
+                
+                <!-- Cache Section -->
+                <Border Background="White" 
+                        CornerRadius="12" 
+                        Padding="16">
+                    <StackPanel>
+                        <TextBlock Text="💾 Önbellek (Cache)" Style="{StaticResource SectionHeader}"/>
+                        
+                        <CheckBox x:Name="UseCacheCheckbox"
+                                  Content="SQLite önbellek kullan (hızlı başlangıç)"
+                                  FontSize="13"
+                                  Foreground="#1D1D1F"
+                                  IsChecked="True"
+                                  Margin="0,0,0,12"/>
+                        
+                        <TextBlock Text="Önbellek durumu:"
+                                   FontSize="12"
+                                   Foreground="#86868B"
+                                   Margin="0,0,0,4"/>
+                        
+                        <Border Background="#F5F5F7"
+                                CornerRadius="8"
+                                Padding="12"
+                                Margin="0,0,0,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Grid.Column="0">
+                                    <TextBlock x:Name="CacheStatusText"
+                                               Text="✅ Önbellek mevcut"
+                                               FontSize="13"
+                                               FontWeight="Medium"
+                                               Foreground="#1D1D1F"/>
+                                    <TextBlock x:Name="CacheSizeText"
+                                               Text="Boyut: 0 KB"
+                                               FontSize="11"
+                                               Foreground="#86868B"
+                                               Margin="0,2,0,0"/>
+                                    <TextBlock x:Name="CachePathText"
+                                               Text="Konum: %APPDATA%\OmniSpot\index.db"
+                                               FontSize="10"
+                                               Foreground="#AAAAAA"
+                                               Margin="0,2,0,0"
+                                               TextTrimming="CharacterEllipsis"/>
+                                </StackPanel>
+                            </Grid>
+                        </Border>
+                        
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="ClearCacheButton"
+                                    Content="🗑️ Önbelleği Temizle"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="ClearCache_Click"
+                                    Padding="12,8"/>
+                            <Button x:Name="OpenCacheFolderButton"
+                                    Content="📂 Klasörü Aç"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="OpenCacheFolder_Click"
+                                    Padding="12,8"
+                                    Margin="8,0,0,0"/>
+                        </StackPanel>
+                        
+                        <TextBlock Text="💡 Önbellek temizlendiğinde sonraki açılışta dosyalar yeniden taranır."
+                                   FontSize="11"
+                                   Foreground="#86868B"
+                                   TextWrapping="Wrap"
+                                   Margin="0,12,0,0"/>
+                    </StackPanel>
+                </Border>
+                
+            </StackPanel>
+        </ScrollViewer>
+        
+        <!-- Footer Buttons -->
+        <StackPanel Grid.Row="2" 
+                    Orientation="Horizontal" 
+                    HorizontalAlignment="Right"
+                    Margin="0,24,0,0">
+            <Button Content="Varsayılanlara Sıfırla"
+                    Style="{StaticResource SecondaryButton}"
+                    Click="ResetDefaults_Click"
+                    Margin="0,0,12,0"/>
+            <Button Content="Kaydet"
+                    Style="{StaticResource ModernButton}"
+                    Click="Save_Click"
+                    Width="100"/>
+        </StackPanel>
+    </Grid>
+</Window>
