@@ -10,11 +10,6 @@ using SmartFileLauncher.Core.Search;
 
 namespace SmartFileLauncher.Core.Services;
 
-
-// İki indexin modunu yönetir:
-// - İlk çalıştırma: Tamamen diski tarar Sqlite kaydeder
-// - Sonraki Çalıştırma: Load from SQLite + delta sync + FileSystemWatcher
-
 public class IndexManager : IDisposable
 {
     private readonly IndexDatabase _db;
@@ -23,11 +18,13 @@ public class IndexManager : IDisposable
     private readonly object _lock = new();
     private readonly object _notificationLock = new();
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private readonly SemaphoreSlim _reconciliationGate = new(1, 1);
+    private readonly SemaphoreSlim _reconciliationSignal = new(0, 1);
+    private readonly TimeSpan _reconciliationInterval;
     private Task _notificationTask = Task.CompletedTask;
     private CancellationTokenSource? _backgroundSyncCts;
     private Task? _backgroundSyncTask;
     
-    // In-memory structures (loaded from DB or built fresh)
     private InvertedIndex _invertedIndex;
     private Dictionary<string, FileMetadata> _metadataMap;
     private FileSystemNode? _rootNode;
@@ -36,33 +33,19 @@ public class IndexManager : IDisposable
     private volatile bool _disposed;
     private bool _isInitialized;
     
-    // Background delta sync tracking
     private volatile bool _isDeltaSyncRunning = false;
     private volatile int _deltaSyncProgress = 0;
     private volatile int _deltaSyncTotal = 0;
     private volatile int _deltaSyncProcessed = 0;
-    private readonly HashSet<string> _syncedPaths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _currentlySyncing = new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<string> _activeRootPaths = Array.Empty<string>();
+    private long _reconciliationRunCount;
 
-    /// <summary>
-    /// Progress reporting during indexing.
-    /// </summary>
     public event Action<IndexProgress>? OnProgress;
 
-    /// <summary>
-    /// Fired when a file system change is processed.
-    /// </summary>
     public event Action<FileChangeEvent>? OnFileChange;
 
-    /// <summary>
-    /// Fired when an error occurs.
-    /// </summary>
     public event Action<string>? OnError;
     
-    /// <summary>
-    /// Fired when background delta sync progress changes.
-    /// Args: (processed, total, percentage)
-    /// </summary>
     public event Action<int, int, int>? OnDeltaSyncProgress;
 
     public IndexManager(ITokenizer? tokenizer = null)
@@ -70,18 +53,25 @@ public class IndexManager : IDisposable
     {
     }
 
-    internal IndexManager(IndexDatabase database, FileWatcherService watcher, ITokenizer? tokenizer = null)
+    internal IndexManager(
+        IndexDatabase database,
+        FileWatcherService watcher,
+        ITokenizer? tokenizer = null,
+        TimeSpan? reconciliationInterval = null)
     {
         _tokenizer = tokenizer ?? new BasicTokenizer();
         _db = database;
         _watcher = watcher;
+        _reconciliationInterval = reconciliationInterval ?? TimeSpan.FromMinutes(10);
+        if (_reconciliationInterval <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(reconciliationInterval));
         _invertedIndex = new InvertedIndex();
         _metadataMap = new Dictionary<string, FileMetadata>(
             StringComparer.OrdinalIgnoreCase);
         _pathToNode = new Dictionary<string, FileSystemNode>(StringComparer.OrdinalIgnoreCase);
 
         _watcher.OnChange += HandleFileChange;
-        _watcher.OnError += ex => NotifyError(ex.Message);
+        _watcher.OnError += HandleWatcherError;
     }
 
     #region Properties
@@ -110,21 +100,17 @@ public class IndexManager : IDisposable
     public int IndexedFileCount => _invertedIndex.NodeCount;
     public int IndexedTokenCount => _invertedIndex.TokenCount;
     
-    // Background delta sync properties
     public bool IsDeltaSyncRunning => _isDeltaSyncRunning;
     public bool IsDeltaSyncComplete => !_isDeltaSyncRunning;
     public int DeltaSyncProgress => _deltaSyncProgress;
     public int DeltaSyncProcessed => _deltaSyncProcessed;
     public int DeltaSyncTotal => _deltaSyncTotal;
+    internal long ReconciliationRunCount => Interlocked.Read(ref _reconciliationRunCount);
 
     #endregion
 
     #region Initialization
 
-    /// <summary>
-    /// Initialize the index manager with multiple root directories.
-    /// Loads from cache if available, otherwise performs full scan.
-    /// </summary>
     public async Task InitializeAsync(IEnumerable<string> rootPaths, CancellationToken ct = default)
     {
         await _lifecycleGate.WaitAsync(ct);
@@ -152,7 +138,6 @@ public class IndexManager : IDisposable
 
         _db.Open();
 
-        // Check if we have a cached index for these roots
         var cachedRoot = _db.GetMetadata(IndexMetadata.Keys.ScanRootPath);
         var newRootsKey = string.Join("|", paths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
         var hasCache = cachedRoot != null && 
@@ -163,22 +148,15 @@ public class IndexManager : IDisposable
         {
             ReportProgress("Önbellekten yükleniyor...", 0, 0, 0);
             await LoadFromCacheMultiAsync(paths, ct);
-            
-            // Start background delta sync (non-blocking).
-            var syncCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            _backgroundSyncCts = syncCts;
-            _backgroundSyncTask = Task.Run(
-                () => BackgroundDeltaSyncAsync(paths, syncCts.Token),
-                syncCts.Token);
         }
         else
         {
-            // Fresh bootstrap scan
             ReportProgress("İlk kurulum - dosyalar taranıyor...", 0, 0, 0);
             await BootstrapScanMultiAsync(paths, ct);
         }
 
-        // Configure every root first, then start the shared event processor once.
+        _activeRootPaths = paths;
+
         SetupWatchers(paths);
 
         sw.Stop();
@@ -186,21 +164,15 @@ public class IndexManager : IDisposable
         _db.SetMetadata(IndexMetadata.Keys.ScanRootPath, newRootsKey);
 
         _isInitialized = true;
+        StartBackgroundReconciliation(paths);
         ReportProgress("Hazır", 100, _invertedIndex.NodeCount, sw.ElapsedMilliseconds);
     }
 
-    /// <summary>
-    /// Initialize the index manager with a single root directory.
-    /// Loads from cache if available, otherwise performs full scan.
-    /// </summary>
     public async Task InitializeAsync(string rootPath, CancellationToken ct = default)
     {
         await InitializeAsync(new[] { rootPath }, ct);
     }
 
-    /// <summary>
-    /// Force a complete rescan (clears existing index).
-    /// </summary>
     public async Task RescanAsync(string rootPath, CancellationToken ct = default)
     {
         await _lifecycleGate.WaitAsync(ct);
@@ -218,7 +190,10 @@ public class IndexManager : IDisposable
 
             var normalizedRootPath = NormalizeIndexedPath(rootPath);
             await BootstrapScanAsync(normalizedRootPath, ct);
-            SetupWatchers(new[] { normalizedRootPath });
+            var paths = new List<string> { normalizedRootPath };
+            _activeRootPaths = paths;
+            SetupWatchers(paths);
+            StartBackgroundReconciliation(paths);
         }
         finally
         {
@@ -234,41 +209,35 @@ public class IndexManager : IDisposable
     {
         var sw = Stopwatch.StartNew();
 
-        // Clear existing data
         _db.ClearIndex();
         lock (_lock)
         {
             ResetInMemoryIndex();
         }
 
-        // Create root node
         var rootName = Path.GetFileName(rootPath);
         if (string.IsNullOrEmpty(rootName)) rootName = rootPath;
         _rootNode = new FileSystemNode(rootName, rootPath, true);
         _pathToNode[rootPath] = _rootNode;
 
-        // Count total items for progress
         int totalItems = 0;
         int processedItems = 0;
 
         await Task.Run(() =>
         {
-            // First pass: count items
             try
             {
                 totalItems = CountItems(rootPath);
             }
             catch
             {
-                totalItems = 100; // fallback estimate
+                totalItems = 100;
             }
 
-            // Begin transaction for bulk insert
             using var transaction = _db.BeginTransaction();
 
             try
             {
-                // Insert root directory
                 var rootDir = new IndexedDirectory
                 {
                     FullPath = rootPath,
@@ -280,7 +249,6 @@ public class IndexManager : IDisposable
                 };
                 var rootDirId = _db.InsertDirectory(rootDir);
 
-                // Scan recursively
                 ScanDirectoryRecursive(rootPath, _rootNode, rootDirId, 1, ref processedItems, totalItems, ct);
 
                 transaction.Commit();
@@ -292,7 +260,6 @@ public class IndexManager : IDisposable
             }
         }, ct);
 
-        // Save metadata
         _db.SetMetadata(IndexMetadata.Keys.ScanRootPath, rootPath);
         _db.SetMetadata(IndexMetadata.Keys.LastFullScanTime, DateTime.UtcNow.Ticks.ToString());
         _db.SetMetadata(IndexMetadata.Keys.TotalFilesIndexed, _invertedIndex.NodeCount.ToString());
@@ -301,30 +268,23 @@ public class IndexManager : IDisposable
         ReportProgress("Tarama tamamlandı", 100, _invertedIndex.NodeCount, sw.ElapsedMilliseconds);
     }
 
-    /// <summary>
-    /// Bootstrap scan for multiple root directories.
-    /// </summary>
     private async Task BootstrapScanMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
 
-        // Clear existing data
         _db.ClearIndex();
         lock (_lock)
         {
             ResetInMemoryIndex();
         }
 
-        // Create virtual root node that contains all paths
         _rootNode = new FileSystemNode("Root", "", true);
 
-        // Count total items for progress
         int totalItems = 0;
         int processedItems = 0;
 
         await Task.Run(() =>
         {
-            // First pass: count items in all paths
             foreach (var rootPath in rootPaths)
             {
                 if (!Directory.Exists(rootPath)) continue;
@@ -334,11 +294,10 @@ public class IndexManager : IDisposable
                 }
                 catch
                 {
-                    totalItems += 100; // fallback estimate
+                    totalItems += 100;
                 }
             }
 
-            // Begin transaction for bulk insert
             using var transaction = _db.BeginTransaction();
 
             try
@@ -350,12 +309,10 @@ public class IndexManager : IDisposable
                     var rootName = Path.GetFileName(rootPath);
                     if (string.IsNullOrEmpty(rootName)) rootName = rootPath;
                     
-                    // Create node for this root
                     var rootPathNode = new FileSystemNode(rootName, rootPath, true);
                     _rootNode.AddChild(rootPathNode);
                     _pathToNode[rootPath] = rootPathNode;
 
-                    // Insert root directory
                     var rootDir = new IndexedDirectory
                     {
                         FullPath = rootPath,
@@ -367,7 +324,6 @@ public class IndexManager : IDisposable
                     };
                     var rootDirId = _db.InsertDirectory(rootDir);
 
-                    // Scan recursively
                     ScanDirectoryRecursive(rootPath, rootPathNode, rootDirId, 1, ref processedItems, totalItems, ct);
                 }
 
@@ -380,7 +336,6 @@ public class IndexManager : IDisposable
             }
         }, ct);
 
-        // Save metadata
         var rootsKey = string.Join("|", rootPaths.OrderBy(p => p, StringComparer.OrdinalIgnoreCase));
         _db.SetMetadata(IndexMetadata.Keys.ScanRootPath, rootsKey);
         _db.SetMetadata(IndexMetadata.Keys.LastFullScanTime, DateTime.UtcNow.Ticks.ToString());
@@ -398,7 +353,6 @@ public class IndexManager : IDisposable
 
         try
         {
-            // Process subdirectories
             foreach (var dir in Directory.GetDirectories(path))
             {
                 ct.ThrowIfCancellationRequested();
@@ -406,7 +360,6 @@ public class IndexManager : IDisposable
                 var dirName = Path.GetFileName(dir);
                 var dirInfo = new DirectoryInfo(dir);
 
-                // Skip hidden/system directories
                 if ((dirInfo.Attributes & FileAttributes.Hidden) != 0 ||
                     (dirInfo.Attributes & FileAttributes.System) != 0)
                     continue;
@@ -415,10 +368,8 @@ public class IndexManager : IDisposable
                 parentNode.AddChild(dirNode);
                 _pathToNode[dir] = dirNode;
 
-                // Index directory name tokens
                 IndexNode(dirNode);
 
-                // Insert into DB
                 var indexedDir = new IndexedDirectory
                 {
                     FullPath = dir,
@@ -438,7 +389,6 @@ public class IndexManager : IDisposable
                     ReportProgress($"Taranıyor: {dirName}", pct, processedItems, 0);
                 }
 
-                // Recurse
                 ScanDirectoryRecursive(
                     dir,
                     dirNode,
@@ -450,7 +400,6 @@ public class IndexManager : IDisposable
                     reportProgress);
             }
 
-            // Process files
             foreach (var file in Directory.GetFiles(path))
             {
                 ct.ThrowIfCancellationRequested();
@@ -459,7 +408,6 @@ public class IndexManager : IDisposable
                 {
                     var fi = new FileInfo(file);
 
-                    // Skip hidden/system files
                     if ((fi.Attributes & FileAttributes.Hidden) != 0 ||
                         (fi.Attributes & FileAttributes.System) != 0)
                         continue;
@@ -476,13 +424,10 @@ public class IndexManager : IDisposable
                     parentNode.AddChild(fileNode);
                     _pathToNode[file] = fileNode;
 
-                    // Index file name tokens
                     IndexNode(fileNode);
 
-                    // Add to metadata map
                     _metadataMap[file] = fileNode.Metadata!;
 
-                    // Insert into DB
                     var indexedFile = new IndexedFile
                     {
                         FullPath = file,
@@ -539,13 +484,11 @@ public class IndexManager : IDisposable
 
         await Task.Run(() =>
         {
-            // Create root node
             var rootName = Path.GetFileName(rootPath);
             if (string.IsNullOrEmpty(rootName)) rootName = rootPath;
             _rootNode = new FileSystemNode(rootName, rootPath, true);
             _pathToNode[rootPath] = _rootNode;
 
-            // Load directories first (to build tree structure)
             var dirMap = new Dictionary<long, (IndexedDirectory Dir, FileSystemNode Node)>();
             long? rootDirId = null;
 
@@ -553,12 +496,10 @@ public class IndexManager : IDisposable
             {
                 ct.ThrowIfCancellationRequested();
 
-                // Root dizini özel olarak işle
                 if (dir.FullPath.Equals(rootPath, StringComparison.OrdinalIgnoreCase))
                 {
                     rootDirId = dir.Id;
                     dirMap[dir.Id] = (dir, _rootNode);
-                    // Root için token indexleme
                     IndexNode(_rootNode);
                     continue;
                 }
@@ -567,14 +508,11 @@ public class IndexManager : IDisposable
                 _pathToNode[dir.FullPath] = node;
                 dirMap[dir.Id] = (dir, node);
 
-                // Index tokens
                 IndexNode(node);
             }
 
-            // Build tree relationships
             foreach (var (id, (dir, node)) in dirMap)
             {
-                // Root'u atla
                 if (node == _rootNode) continue;
                 
                 if (dir.ParentId.HasValue && dirMap.TryGetValue(dir.ParentId.Value, out var parent))
@@ -583,12 +521,10 @@ public class IndexManager : IDisposable
                 }
                 else
                 {
-                    // Parent bulunamadı, root'a ekle
                     _rootNode.AddChild(node);
                 }
             }
 
-            // Load files
             int fileCount = 0;
             int totalFiles = _db.GetFileCount();
 
@@ -610,7 +546,6 @@ public class IndexManager : IDisposable
                 _pathToNode[file.FullPath] = node;
                 _metadataMap[file.FullPath] = node.Metadata!;
 
-                // Try to find parent by DirectoryId first, then by path
                 if (file.DirectoryId > 0 && dirMap.TryGetValue(file.DirectoryId, out var parentDir))
                 {
                     parentDir.Node.AddChild(node);
@@ -644,9 +579,6 @@ public class IndexManager : IDisposable
         ReportProgress("Önbellek yüklendi", 100, _invertedIndex.NodeCount, sw.ElapsedMilliseconds);
     }
 
-    /// <summary>
-    /// Load from cache for multiple root directories.
-    /// </summary>
     private async Task LoadFromCacheMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
@@ -658,10 +590,8 @@ public class IndexManager : IDisposable
 
         await Task.Run(() =>
         {
-            // Create virtual root node
             _rootNode = new FileSystemNode("Root", "", true);
 
-            // Create nodes for each root path
             var rootPathNodes = new Dictionary<string, FileSystemNode>(StringComparer.OrdinalIgnoreCase);
             foreach (var rootPath in rootPaths)
             {
@@ -676,14 +606,12 @@ public class IndexManager : IDisposable
                 _pathToNode[rootPath] = node;
             }
 
-            // Load directories (to build tree structure)
             var dirMap = new Dictionary<long, (IndexedDirectory Dir, FileSystemNode Node)>();
 
             foreach (var dir in _db.GetAllDirectories())
             {
                 ct.ThrowIfCancellationRequested();
 
-                // Check if this is one of our root paths
                 if (rootPathNodes.TryGetValue(dir.FullPath, out var existingRootNode))
                 {
                     dirMap[dir.Id] = (dir, existingRootNode);
@@ -697,7 +625,6 @@ public class IndexManager : IDisposable
                 IndexNode(node);
             }
 
-            // Build tree relationships
             foreach (var (id, (dir, node)) in dirMap)
             {
                 if (rootPathNodes.ContainsKey(dir.FullPath)) continue;
@@ -708,7 +635,6 @@ public class IndexManager : IDisposable
                 }
                 else
                 {
-                    // Find which root path this belongs to
                     var matchingRoot = rootPathNodes.Keys.FirstOrDefault(rp => 
                         dir.FullPath.StartsWith(rp, StringComparison.OrdinalIgnoreCase));
                     
@@ -723,7 +649,6 @@ public class IndexManager : IDisposable
                 }
             }
 
-            // Load files
             int fileCount = 0;
             int totalFiles = _db.GetFileCount();
 
@@ -745,7 +670,6 @@ public class IndexManager : IDisposable
                 _pathToNode[file.FullPath] = node;
                 _metadataMap[file.FullPath] = node.Metadata!;
 
-                // Try to find parent by DirectoryId first, then by path
                 if (file.DirectoryId > 0 && dirMap.TryGetValue(file.DirectoryId, out var parentDir))
                 {
                     parentDir.Node.AddChild(node);
@@ -759,7 +683,6 @@ public class IndexManager : IDisposable
                     }
                     else if (parentPath != null)
                     {
-                        // Check if file is directly in one of the root paths
                         foreach (var rootPath in rootPathNodes.Keys)
                         {
                             if (string.Equals(parentPath, rootPath, StringComparison.OrdinalIgnoreCase))
@@ -788,273 +711,51 @@ public class IndexManager : IDisposable
 
     #endregion
 
-    #region Delta Sync
+    #region Reconciliation
 
-    private async Task DeltaSyncAsync(string rootPath, CancellationToken ct)
+    private void StartBackgroundReconciliation(List<string> rootPaths)
     {
-        var changes = 0;
+        while (_reconciliationSignal.Wait(0)) { }
 
-        await Task.Run(() =>
+        var syncCts = new CancellationTokenSource();
+        _backgroundSyncCts = syncCts;
+        _backgroundSyncTask = Task.Run(
+            () => BackgroundReconciliationLoopAsync(rootPaths, syncCts.Token),
+            syncCts.Token);
+    }
+
+    private async Task BackgroundReconciliationLoopAsync(
+        IReadOnlyList<string> rootPaths,
+        CancellationToken ct)
+    {
+        while (!ct.IsCancellationRequested)
         {
-            // Check each cached file still exists and hasn't changed
-            var filesToRemove = new List<string>();
-            var filesToUpdate = new List<string>();
-
-            foreach (var file in _db.GetAllFiles())
-            {
-                ct.ThrowIfCancellationRequested();
-
-                if (!File.Exists(file.FullPath))
-                {
-                    filesToRemove.Add(file.FullPath);
-                }
-                else
-                {
-                    var fi = new FileInfo(file.FullPath);
-                    if (fi.LastWriteTimeUtc.Ticks != file.LastWriteTimeUtc)
-                    {
-                        filesToUpdate.Add(file.FullPath);
-                    }
-                }
-            }
-
-            lock (_lock)
-            {
-                // Process removals
-                foreach (var path in filesToRemove)
-                {
-                    _db.DeleteFile(path);
-                    RemoveFromIndex(path);
-                    changes++;
-                }
-
-                // Process updates (re-index)
-                foreach (var path in filesToUpdate)
-                {
-                    if (_pathToNode.TryGetValue(path, out var node))
-                    {
-                        // Update metadata
-                        var fi = new FileInfo(path);
-                        if (node.Metadata != null)
-                        {
-                            node.Metadata.SizeBytes = fi.Length;
-                            node.Metadata.LastWriteTime = fi.LastWriteTime;
-                        }
-
-                        // Update DB
-                        var existing = _db.GetFileByPath(path);
-                        if (existing != null)
-                        {
-                            existing.LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks;
-                            existing.SizeBytes = fi.Length;
-                            existing.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
-                            _db.InsertFile(existing); // upsert
-                        }
-                    }
-                    changes++;
-                }
-            }
-
-            // Check for new files in all indexed directories
-            // Scan all directories that are in _pathToNode for new files
             try
             {
-                List<string> indexedDirs;
-                lock (_lock)
-                {
-                    indexedDirs = _pathToNode
-                        .Where(kvp => kvp.Value.IsDirectory)
-                        .Select(kvp => kvp.Key)
-                        .ToList();
-                }
-
-                foreach (var dirPath in indexedDirs)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    
-                    if (!Directory.Exists(dirPath)) continue;
-                    FileSystemNode? parentNode;
-                    lock (_lock)
-                    {
-                        _pathToNode.TryGetValue(dirPath, out parentNode);
-                    }
-                    if (parentNode == null) continue;
-
-                    try
-                    {
-                        foreach (var file in Directory.GetFiles(dirPath))
-                        {
-                            lock (_lock)
-                            {
-                                if (!_pathToNode.ContainsKey(file))
-                                {
-                                    AddFileToIndex(file, parentNode);
-                                    changes++;
-                                }
-                            }
-                        }
-                    }
-                    catch { /* Access denied or other IO error */ }
-                }
+                await ReconcilePathsAsync(rootPaths, ct).ConfigureAwait(false);
             }
-            catch { }
-
-        }, ct);
-
-        if (changes > 0)
-        {
-            ReportProgress($"Delta senk: {changes} değişiklik.", 100, _invertedIndex.NodeCount, 0);
-        }
-    }
-    
-    /// <summary>
-    /// Background delta sync - runs in background without blocking UI.
-    /// Reports progress via OnDeltaSyncProgress event.
-    /// </summary>
-    private async Task BackgroundDeltaSyncAsync(List<string> rootPaths, CancellationToken ct)
-    {
-        _isDeltaSyncRunning = true;
-        _deltaSyncProgress = 0;
-        _deltaSyncProcessed = 0;
-        
-        try
-        {
-            await Task.Run(() =>
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
-                var allFiles = _db.GetAllFiles().ToList();
-                _deltaSyncTotal = allFiles.Count;
-                
-                var filesToRemove = new List<string>();
-                var filesToUpdate = new List<string>();
-                
-                // Check each cached file
-                for (int i = 0; i < allFiles.Count; i++)
-                {
-                    if (ct.IsCancellationRequested) break;
-                    
-                    var file = allFiles[i];
-                    
-                    if (!File.Exists(file.FullPath))
-                    {
-                        filesToRemove.Add(file.FullPath);
-                    }
-                    else
-                    {
-                        var fi = new FileInfo(file.FullPath);
-                        if (fi.LastWriteTimeUtc.Ticks != file.LastWriteTimeUtc)
-                        {
-                            filesToUpdate.Add(file.FullPath);
-                        }
-                    }
-                    
-                    _deltaSyncProcessed = i + 1;
-                    _deltaSyncProgress = (_deltaSyncProcessed * 100) / _deltaSyncTotal;
-                    
-                    // Report progress every 100 files
-                    if (_deltaSyncProcessed % 100 == 0 || _deltaSyncProcessed == _deltaSyncTotal)
-                    {
-                        NotifyDeltaSyncProgress(_deltaSyncProcessed, _deltaSyncTotal, _deltaSyncProgress);
-                    }
-                    
-                    // Yield to other threads occasionally
-                    if (i % 50 == 0)
-                    {
-                        Thread.Sleep(1);
-                    }
-                }
-                
-                // Process removals
-                lock (_lock)
-                {
-                    foreach (var path in filesToRemove)
-                    {
-                        _db.DeleteFile(path);
-                        RemoveFromIndex(path);
-                    }
-                }
-                
-                // Process updates
-                lock (_lock)
-                {
-                    foreach (var path in filesToUpdate)
-                    {
-                        if (_pathToNode.TryGetValue(path, out var node))
-                        {
-                            var fi = new FileInfo(path);
-                            if (node.Metadata != null)
-                            {
-                                node.Metadata.SizeBytes = fi.Length;
-                                node.Metadata.LastWriteTime = fi.LastWriteTime;
-                            }
-                            
-                            var existing = _db.GetFileByPath(path);
-                            if (existing != null)
-                            {
-                                existing.LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks;
-                                existing.SizeBytes = fi.Length;
-                                existing.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
-                                _db.InsertFile(existing);
-                            }
-                        }
-                    }
-                }
-                
-                // Check for new files in all indexed directories
-                List<string> indexedDirs;
-                lock (_lock)
-                {
-                    indexedDirs = _pathToNode
-                        .Where(kvp => kvp.Value.IsDirectory)
-                        .Select(kvp => kvp.Key)
-                        .ToList();
-                }
+                break;
+            }
+            catch (Exception ex)
+            {
+                NotifyError($"Background reconciliation error: {ex.Message}");
+            }
 
-                foreach (var dirPath in indexedDirs)
-                {
-                    if (ct.IsCancellationRequested) break;
-
-                    if (!Directory.Exists(dirPath)) continue;
-                    FileSystemNode? parentNode;
-                    lock (_lock)
-                    {
-                        _pathToNode.TryGetValue(dirPath, out parentNode);
-                    }
-                    if (parentNode == null) continue;
-
-                    try
-                    {
-                        foreach (var file in Directory.GetFiles(dirPath))
-                        {
-                            lock (_lock)
-                            {
-                                if (!_pathToNode.ContainsKey(file))
-                                {
-                                    AddFileToIndex(file, parentNode);
-                                }
-                            }
-                        }
-                    }
-                    catch { /* Access denied or other IO error */ }
-                }
-                
-            }, ct);
-        }
-        catch (OperationCanceledException)
-        {
-            // Cancelled - that's fine
-        }
-        catch (Exception ex)
-        {
-            NotifyError($"Background delta sync error: {ex.Message}");
-        }
-        finally
-        {
-            _isDeltaSyncRunning = false;
-            _deltaSyncProgress = 100;
-            NotifyDeltaSyncProgress(_deltaSyncTotal, _deltaSyncTotal, 100);
+            try
+            {
+                await _reconciliationSignal
+                    .WaitAsync(_reconciliationInterval, ct)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                break;
+            }
         }
     }
-    
+
     private async Task StopBackgroundSyncAsync()
     {
         var syncCts = _backgroundSyncCts;
@@ -1075,11 +776,10 @@ public class IndexManager : IDisposable
         }
         catch (OperationCanceledException)
         {
-            // Cancellation is the expected lifecycle transition.
         }
         catch (Exception ex)
         {
-            NotifyError($"Background delta sync shutdown error: {ex.Message}");
+            NotifyError($"Background reconciliation shutdown error: {ex.Message}");
         }
         finally
         {
@@ -1087,70 +787,17 @@ public class IndexManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Ensures a specific path is synced. If delta sync hasn't processed it yet,
-    /// performs a quick on-demand sync for just that path.
-    /// OPTIMIZED: Non-blocking wait with timeout to prevent deadlock.
-    /// </summary>
     public async Task<bool> EnsureSyncedAsync(string path, CancellationToken ct = default)
     {
-        // If delta sync is complete, we're already synced
-        if (IsDeltaSyncComplete)
-        {
-            lock (_lock)
-            {
-                _syncedPaths.Add(path);
-            }
-            return true;
-        }
-        
-        // Check if already synced
-        lock (_lock)
-        {
-            if (_syncedPaths.Contains(path))
-                return true;
-        }
-        
-        // Check if currently syncing (with timeout to prevent infinite wait)
-        var maxWaitTime = TimeSpan.FromSeconds(30);
-        var startTime = DateTime.UtcNow;
-        
-        while (true)
-        {
-            bool isCurrentlySyncing;
-            lock (_lock)
-            {
-                isCurrentlySyncing = _currentlySyncing.Contains(path);
-                if (!isCurrentlySyncing)
-                {
-                    _currentlySyncing.Add(path);
-                    break;
-                }
-            }
-            
-            if (isCurrentlySyncing)
-            {
-                // Another task is syncing this path - wait a bit
-                if (DateTime.UtcNow - startTime > maxWaitTime)
-                {
-                    NotifyError($"Timeout waiting for sync of {path}");
-                    return false;
-                }
-                
-                await Task.Delay(50, ct);
-            }
-        }
-        
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
         try
         {
-            await QuickSyncPathAsync(path, ct);
-            
-            lock (_lock)
-            {
-                _syncedPaths.Add(path);
-            }
-            
-            return true;
+            return await ReconcilePathsAsync(
+                    new[] { NormalizeIndexedPath(path) },
+                    ct)
+                .ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1158,168 +805,560 @@ public class IndexManager : IDisposable
         }
         catch (Exception ex)
         {
-            NotifyError($"On-demand sync error for {path}: {ex.Message}");
+            NotifyError($"On-demand reconciliation error for {path}: {ex.Message}");
             return false;
+        }
+    }
+
+    private async Task<bool> ReconcilePathsAsync(
+        IReadOnlyList<string> rootPaths,
+        CancellationToken ct)
+    {
+        var normalizedRoots = NormalizeRootPaths(rootPaths);
+        if (normalizedRoots.Count == 0)
+            return true;
+
+        await _reconciliationGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+
+            _isDeltaSyncRunning = true;
+            _deltaSyncProgress = 0;
+            _deltaSyncProcessed = 0;
+            _deltaSyncTotal = 0;
+
+            var snapshot = await Task.Run(
+                    () => CaptureDiskSnapshot(normalizedRoots, ct),
+                    ct)
+                .ConfigureAwait(false);
+
+            _deltaSyncTotal = snapshot.Entries.Count;
+            var changes = ApplyReconciliationSnapshot(
+                normalizedRoots,
+                snapshot,
+                ct);
+
+            _deltaSyncProcessed = _deltaSyncTotal;
+            _deltaSyncProgress = 100;
+            Interlocked.Increment(ref _reconciliationRunCount);
+            NotifyDeltaSyncProgress(
+                _deltaSyncProcessed,
+                _deltaSyncTotal,
+                _deltaSyncProgress);
+
+            if (changes > 0)
+            {
+                ReportProgress(
+                    $"İndeks uzlaştırıldı: {changes} değişiklik.",
+                    100,
+                    _invertedIndex.NodeCount,
+                    0);
+            }
+
+            if (snapshot.Errors.Count > 0)
+            {
+                NotifyError(
+                    $"Reconciliation skipped {snapshot.ProtectedScopes.Count} inaccessible scope(s): " +
+                    string.Join(" | ", snapshot.Errors.Take(3)));
+            }
+
+            return snapshot.ProtectedScopes.Count == 0;
         }
         finally
         {
-            lock (_lock)
+            _isDeltaSyncRunning = false;
+            _reconciliationGate.Release();
+        }
+    }
+
+    private int ApplyReconciliationSnapshot(
+        IReadOnlyList<string> rootPaths,
+        ReconciliationSnapshot snapshot,
+        CancellationToken ct)
+    {
+        lock (_lock)
+        {
+            var changes = 0;
+            var cachedNodes = _pathToNode.Values
+                .Where(node => rootPaths.Any(root =>
+                    IsSameOrDescendantPath(node.FullPath, root)))
+                .OrderBy(node => node.FullPath.Length)
+                .ToList();
+
+            var removedDirectories = new List<string>();
+            foreach (var node in cachedNodes)
             {
-                _currentlySyncing.Remove(path);
+                ct.ThrowIfCancellationRequested();
+
+                if (rootPaths.Any(root =>
+                        string.Equals(root, node.FullPath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                if (removedDirectories.Any(parent =>
+                        IsSameOrDescendantPath(node.FullPath, parent)))
+                {
+                    continue;
+                }
+
+                if (!ShouldRemoveCachedNode(node, snapshot))
+                    continue;
+
+                DeletePersistedPath(node.FullPath, node.IsDirectory);
+                RemoveFromIndex(node.FullPath);
+                changes++;
+
+                if (node.IsDirectory)
+                {
+                    removedDirectories.Add(node.FullPath);
+                }
+            }
+
+            foreach (var entry in snapshot.Entries.Values
+                         .Where(entry => entry.IsDirectory)
+                         .OrderBy(entry => entry.Path.Length))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (_pathToNode.TryGetValue(entry.Path, out var existing))
+                {
+                    if (existing.IsDirectory)
+                    {
+                        changes += UpdatePersistedDirectory(existing, entry);
+                    }
+                    continue;
+                }
+
+                if (snapshot.ProtectedScopes.Any(scope =>
+                        IsSameOrDescendantPath(entry.Path, scope)))
+                {
+                    continue;
+                }
+
+                if (rootPaths.Any(root =>
+                        string.Equals(root, entry.Path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    AddRootDirectoryToIndex(entry.Path, ct);
+                }
+                else
+                {
+                    AddPathToIndex(entry.Path, isDirectory: true, ct);
+                }
+
+                if (_pathToNode.ContainsKey(entry.Path))
+                {
+                    changes++;
+                }
+            }
+
+            foreach (var entry in snapshot.Entries.Values
+                         .Where(entry => !entry.IsDirectory)
+                         .OrderBy(entry => entry.Path.Length))
+            {
+                ct.ThrowIfCancellationRequested();
+
+                if (!_pathToNode.TryGetValue(entry.Path, out var existing))
+                {
+                    AddPathToIndex(entry.Path, isDirectory: false, ct);
+                    if (_pathToNode.ContainsKey(entry.Path))
+                    {
+                        changes++;
+                    }
+                    continue;
+                }
+
+                if (existing.IsDirectory)
+                    continue;
+
+                changes += UpdatePersistedFile(existing, entry);
+            }
+
+            return changes;
+        }
+    }
+
+    private bool ShouldRemoveCachedNode(
+        FileSystemNode node,
+        ReconciliationSnapshot snapshot)
+    {
+        if (snapshot.Entries.TryGetValue(node.FullPath, out var diskEntry))
+            return diskEntry.IsDirectory != node.IsDirectory;
+
+        if (snapshot.ExcludedScopes.Any(scope =>
+                IsSameOrDescendantPath(node.FullPath, scope)))
+        {
+            return true;
+        }
+
+        if (snapshot.ProtectedScopes.Any(scope =>
+                IsSameOrDescendantPath(node.FullPath, scope)))
+        {
+            return false;
+        }
+
+        return node.IsDirectory
+            ? !Directory.Exists(node.FullPath)
+            : !File.Exists(node.FullPath);
+    }
+
+    private int UpdatePersistedDirectory(
+        FileSystemNode node,
+        ReconciliationEntry entry)
+    {
+        var persisted = _db.GetDirectoryByPath(entry.Path);
+        if (persisted == null)
+        {
+            var parentPath = node.Parent?.FullPath;
+            var parent = string.IsNullOrEmpty(parentPath)
+                ? null
+                : _db.GetDirectoryByPath(parentPath);
+            if (!string.IsNullOrEmpty(parentPath) && parent == null)
+                return 0;
+
+            var directoryInfo = new DirectoryInfo(entry.Path);
+            persisted = new IndexedDirectory
+            {
+                FullPath = entry.Path,
+                Name = node.Name,
+                ParentId = parent?.Id,
+                Depth = parent?.Depth + 1 ?? 0,
+                LastWriteTimeUtc = entry.LastWriteTimeUtc,
+                LastIndexedTimeUtc = DateTime.UtcNow.Ticks,
+                IsHidden = (directoryInfo.Attributes & FileAttributes.Hidden) != 0
+            };
+            _db.InsertDirectory(persisted);
+            return 1;
+        }
+
+        if (persisted.LastWriteTimeUtc == entry.LastWriteTimeUtc)
+        {
+            return 0;
+        }
+
+        persisted.LastWriteTimeUtc = entry.LastWriteTimeUtc;
+        persisted.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
+        _db.InsertDirectory(persisted);
+        return 1;
+    }
+
+    private int UpdatePersistedFile(
+        FileSystemNode node,
+        ReconciliationEntry entry)
+    {
+        var persisted = _db.GetFileByPath(entry.Path);
+        if (persisted == null)
+        {
+            var parentPath = node.Parent?.FullPath;
+            var parent = string.IsNullOrEmpty(parentPath)
+                ? null
+                : _db.GetDirectoryByPath(parentPath);
+            if (parent == null)
+                return 0;
+
+            var fileInfo = new FileInfo(entry.Path);
+            persisted = new IndexedFile
+            {
+                FullPath = entry.Path,
+                FileName = node.Name,
+                Extension = fileInfo.Extension.ToLowerInvariant(),
+                DirectoryId = parent.Id,
+                SizeBytes = entry.SizeBytes,
+                CreatedTimeUtc = fileInfo.CreationTimeUtc.Ticks,
+                LastWriteTimeUtc = entry.LastWriteTimeUtc,
+                LastIndexedTimeUtc = DateTime.UtcNow.Ticks,
+                OpenCount = node.Metadata?.OpenCount ?? 0,
+                IsHidden = (fileInfo.Attributes & FileAttributes.Hidden) != 0,
+                IsSystem = (fileInfo.Attributes & FileAttributes.System) != 0
+            };
+            _db.InsertFile(persisted);
+
+            if (node.Metadata != null)
+            {
+                node.Metadata.SizeBytes = entry.SizeBytes;
+                node.Metadata.LastWriteTime = new DateTime(
+                        entry.LastWriteTimeUtc,
+                        DateTimeKind.Utc)
+                    .ToLocalTime();
+            }
+
+            return 1;
+        }
+
+        if (persisted.LastWriteTimeUtc == entry.LastWriteTimeUtc &&
+            persisted.SizeBytes == entry.SizeBytes)
+        {
+            return 0;
+        }
+
+        persisted.LastWriteTimeUtc = entry.LastWriteTimeUtc;
+        persisted.SizeBytes = entry.SizeBytes;
+        persisted.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
+        _db.InsertFile(persisted);
+
+        if (node.Metadata != null)
+        {
+            node.Metadata.SizeBytes = entry.SizeBytes;
+            node.Metadata.LastWriteTime = new DateTime(
+                    entry.LastWriteTimeUtc,
+                    DateTimeKind.Utc)
+                .ToLocalTime();
+        }
+
+        return 1;
+    }
+
+    private void AddRootDirectoryToIndex(string rootPath, CancellationToken ct)
+    {
+        if (_pathToNode.ContainsKey(rootPath) || !Directory.Exists(rootPath))
+            return;
+
+        var directoryInfo = new DirectoryInfo(rootPath);
+        var node = new FileSystemNode(directoryInfo.Name, rootPath, true);
+        _rootNode ??= new FileSystemNode("Root", "", true);
+
+        using var transaction = _db.BeginTransaction();
+        try
+        {
+            var rootDirectory = new IndexedDirectory
+            {
+                FullPath = rootPath,
+                Name = directoryInfo.Name,
+                ParentId = null,
+                Depth = 0,
+                LastWriteTimeUtc = directoryInfo.LastWriteTimeUtc.Ticks,
+                LastIndexedTimeUtc = DateTime.UtcNow.Ticks,
+                IsHidden = (directoryInfo.Attributes & FileAttributes.Hidden) != 0
+            };
+            var rootId = _db.InsertDirectory(rootDirectory);
+
+            _rootNode.AddChild(node);
+            _pathToNode[rootPath] = node;
+            IndexNode(node);
+
+            var processedItems = 0;
+            ScanDirectoryRecursive(
+                rootPath,
+                node,
+                rootId,
+                1,
+                ref processedItems,
+                totalItems: 1,
+                ct,
+                reportProgress: false);
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            RemoveFromIndex(rootPath);
+            throw;
+        }
+    }
+
+    private static ReconciliationSnapshot CaptureDiskSnapshot(
+        IReadOnlyList<string> rootPaths,
+        CancellationToken ct)
+    {
+        var snapshot = new ReconciliationSnapshot();
+
+        foreach (var rootPath in rootPaths)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            if (Directory.Exists(rootPath))
+            {
+                CaptureDirectoryTree(rootPath, snapshot, ct);
+            }
+            else if (File.Exists(rootPath))
+            {
+                CaptureFile(rootPath, snapshot);
+            }
+        }
+
+        return snapshot;
+    }
+
+    private static void CaptureDirectoryTree(
+        string rootPath,
+        ReconciliationSnapshot snapshot,
+        CancellationToken ct)
+    {
+        var pending = new Stack<string>();
+        pending.Push(rootPath);
+
+        while (pending.Count > 0)
+        {
+            ct.ThrowIfCancellationRequested();
+            var directoryPath = pending.Pop();
+
+            FileAttributes attributes;
+            try
+            {
+                attributes = File.GetAttributes(directoryPath);
+                if (!string.Equals(
+                        directoryPath,
+                        rootPath,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    IsHiddenOrSystem(attributes))
+                {
+                    snapshot.ExcludedScopes.Add(directoryPath);
+                    continue;
+                }
+
+                var directoryInfo = new DirectoryInfo(directoryPath);
+                snapshot.Entries[directoryPath] = new ReconciliationEntry(
+                    directoryPath,
+                    IsDirectory: true,
+                    directoryInfo.LastWriteTimeUtc.Ticks,
+                    SizeBytes: 0);
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    snapshot.ProtectedScopes.Add(directoryPath);
+                    snapshot.Errors.Add($"{directoryPath}: reparse point traversal skipped");
+                    continue;
+                }
+            }
+            catch (Exception ex) when (
+                ex is UnauthorizedAccessException or IOException)
+            {
+                if (Directory.Exists(directoryPath))
+                {
+                    snapshot.ProtectedScopes.Add(directoryPath);
+                    snapshot.Errors.Add($"{directoryPath}: {ex.Message}");
+                }
+                continue;
+            }
+
+            string[] entries;
+            try
+            {
+                entries = Directory.GetFileSystemEntries(directoryPath);
+            }
+            catch (Exception ex) when (
+                ex is UnauthorizedAccessException or IOException)
+            {
+                if (Directory.Exists(directoryPath))
+                {
+                    snapshot.ProtectedScopes.Add(directoryPath);
+                    snapshot.Errors.Add($"{directoryPath}: {ex.Message}");
+                }
+                continue;
+            }
+
+            foreach (var path in entries)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                try
+                {
+                    var entryAttributes = File.GetAttributes(path);
+                    if (IsHiddenOrSystem(entryAttributes))
+                    {
+                        snapshot.ExcludedScopes.Add(path);
+                        continue;
+                    }
+
+                    if ((entryAttributes & FileAttributes.Directory) != 0)
+                    {
+                        pending.Push(NormalizeIndexedPath(path));
+                    }
+                    else
+                    {
+                        CaptureFile(path, snapshot);
+                    }
+                }
+                catch (Exception ex) when (
+                    ex is UnauthorizedAccessException or IOException)
+                {
+                    if (Directory.Exists(path) || File.Exists(path))
+                    {
+                        var normalizedPath = NormalizeIndexedPath(path);
+                        snapshot.ProtectedScopes.Add(normalizedPath);
+                        snapshot.Errors.Add($"{normalizedPath}: {ex.Message}");
+                    }
+                }
             }
         }
     }
-    
-    /// <summary>
-    /// Quick sync for a specific directory path.
-    /// Checks only files in this directory (non-recursive).
-    /// OPTIMIZED for large folders (10,000+ files).
-    /// </summary>
-    private async Task QuickSyncPathAsync(string dirPath, CancellationToken ct)
+
+    private static void CaptureFile(
+        string filePath,
+        ReconciliationSnapshot snapshot)
     {
-        await Task.Run(() =>
+        var normalizedPath = NormalizeIndexedPath(filePath);
+        try
         {
-            if (!Directory.Exists(dirPath)) return;
-            
-            // OPTIMIZATION: Use enumerable instead of loading all files into memory
-            var diskFilesSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            
-            try
+            var fileInfo = new FileInfo(normalizedPath);
+            snapshot.Entries[normalizedPath] = new ReconciliationEntry(
+                normalizedPath,
+                IsDirectory: false,
+                fileInfo.LastWriteTimeUtc.Ticks,
+                fileInfo.Length);
+        }
+        catch (Exception ex) when (
+            ex is UnauthorizedAccessException or IOException)
+        {
+            if (File.Exists(normalizedPath))
             {
-                foreach (var file in Directory.EnumerateFiles(dirPath))
-                {
-                    ct.ThrowIfCancellationRequested();
-                    diskFilesSet.Add(file);
-                }
+                snapshot.ProtectedScopes.Add(normalizedPath);
+                snapshot.Errors.Add($"{normalizedPath}: {ex.Message}");
             }
-            catch (Exception ex)
-            {
-                NotifyError($"Error enumerating files in {dirPath}: {ex.Message}");
-                return;
-            }
-            
-            // Get files from cache
-            HashSet<string> cachedFiles;
-            lock (_lock)
-            {
-                cachedFiles = _pathToNode
-                    .Where(kvp => !kvp.Value.IsDirectory && 
-                                  string.Equals(Path.GetDirectoryName(kvp.Key), dirPath, StringComparison.OrdinalIgnoreCase))
-                    .Select(kvp => kvp.Key)
-                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
-            }
-            
-            // Find differences
-            var newFiles = diskFilesSet.Except(cachedFiles).ToList();
-            var deletedFiles = cachedFiles.Except(diskFilesSet).ToList();
-            
-            // OPTIMIZATION: Batch operations with transaction
-            if (newFiles.Any() || deletedFiles.Any())
-            {
-                using var transaction = _db.BeginTransaction();
-                
-                try
-                {
-                    // Add new files in batch
-                    if (newFiles.Any())
-                    {
-                        FileSystemNode? parentNode = null;
-                        lock (_lock)
-                        {
-                            _pathToNode.TryGetValue(dirPath, out parentNode);
-                        }
-                        
-                        if (parentNode != null)
-                        {
-                            // Process in smaller chunks to allow cancellation
-                            for (int i = 0; i < newFiles.Count; i++)
-                            {
-                                if (i % 100 == 0)
-                                {
-                                    ct.ThrowIfCancellationRequested();
-                                    Thread.Sleep(1); // Yield to other threads
-                                }
-                                
-                                lock (_lock)
-                                {
-                                    AddFileToIndex(newFiles[i], parentNode);
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Remove deleted files in batch
-                    if (deletedFiles.Any())
-                    {
-                        for (int i = 0; i < deletedFiles.Count; i++)
-                        {
-                            if (i % 100 == 0)
-                            {
-                                ct.ThrowIfCancellationRequested();
-                                Thread.Sleep(1);
-                            }
-                            
-                            lock (_lock)
-                            {
-                                _db.DeleteFile(deletedFiles[i]);
-                                RemoveFromIndex(deletedFiles[i]);
-                            }
-                        }
-                    }
-                    
-                    transaction.Commit();
-                }
-                catch
-                {
-                    transaction.Rollback();
-                    throw;
-                }
-            }
-            
-            // Check for modified files (sample only if too many)
-            var filesToCheck = cachedFiles.Intersect(diskFilesSet).ToList();
-            int checkCount = Math.Min(filesToCheck.Count, 1000); // Limit to 1000 for performance
-            
-            for (int i = 0; i < checkCount; i++)
-            {
-                if (i % 50 == 0)
-                {
-                    ct.ThrowIfCancellationRequested();
-                }
-                
-                var file = filesToCheck[i];
-                
-                try
-                {
-                    var fi = new FileInfo(file);
-                    var cached = _db.GetFileByPath(file);
-                    
-                    if (cached != null && fi.LastWriteTimeUtc.Ticks != cached.LastWriteTimeUtc)
-                    {
-                        lock (_lock)
-                        {
-                            if (_pathToNode.TryGetValue(file, out var node) && node.Metadata != null)
-                            {
-                                node.Metadata.SizeBytes = fi.Length;
-                                node.Metadata.LastWriteTime = fi.LastWriteTime;
-                            }
-                            
-                            cached.LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks;
-                            cached.SizeBytes = fi.Length;
-                            cached.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
-                            _db.InsertFile(cached);
-                        }
-                    }
-                }
-                catch { /* Skip files with access errors */ }
-            }
-            
-        }, ct);
+        }
+    }
+
+    private static bool IsHiddenOrSystem(FileAttributes attributes) =>
+        (attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0;
+
+    private sealed record ReconciliationEntry(
+        string Path,
+        bool IsDirectory,
+        long LastWriteTimeUtc,
+        long SizeBytes);
+
+    private sealed class ReconciliationSnapshot
+    {
+        public Dictionary<string, ReconciliationEntry> Entries { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public HashSet<string> ProtectedScopes { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public HashSet<string> ExcludedScopes { get; } =
+            new(StringComparer.OrdinalIgnoreCase);
+
+        public List<string> Errors { get; } = new();
     }
 
     #endregion
 
     #region FileWatcher Integration
+
+    private void HandleWatcherError(Exception exception)
+    {
+        NotifyError(exception.Message);
+        RequestReconciliation();
+    }
+
+    private void RequestReconciliation()
+    {
+        if (_disposed || !_isInitialized || _activeRootPaths.Count == 0)
+            return;
+
+        try
+        {
+            if (_reconciliationSignal.CurrentCount == 0)
+            {
+                _reconciliationSignal.Release();
+            }
+        }
+        catch (SemaphoreFullException)
+        {
+        }
+    }
 
     private void SetupWatchers(IEnumerable<string> rootPaths)
     {
@@ -1415,8 +1454,6 @@ public class IndexManager : IDisposable
             }
         }
 
-        // User callbacks are external code. Invoke them after releasing the index
-        // lock so lifecycle operations (including Dispose) cannot deadlock.
         if (error != null)
         {
             NotifyError(error);
@@ -1438,7 +1475,10 @@ public class IndexManager : IDisposable
         AddPathToIndex(evt.FullPath, isDirectory);
     }
 
-    private void AddPathToIndex(string path, bool isDirectory)
+    private void AddPathToIndex(
+        string path,
+        bool isDirectory,
+        CancellationToken ct = default)
     {
         path = NormalizeIndexedPath(path);
 
@@ -1461,7 +1501,7 @@ public class IndexManager : IDisposable
 
         if (isDirectory)
         {
-            AddDirectoryTreeToIndex(path, parentNode);
+            AddDirectoryTreeToIndex(path, parentNode, ct);
         }
         else
         {
@@ -1497,7 +1537,6 @@ public class IndexManager : IDisposable
         DeletePersistedPath(persistedOldPath, wasDirectory);
         RemoveFromIndex(persistedOldPath);
 
-        // A rename can race with a subsequent delete. Do not add a phantom path.
         if (!Directory.Exists(newPath) && !File.Exists(newPath))
         {
             return;
@@ -1517,7 +1556,6 @@ public class IndexManager : IDisposable
                 node.Metadata.SizeBytes = fi.Length;
                 node.Metadata.LastWriteTime = fi.LastWriteTime;
 
-                // Update DB
                 var existing = _db.GetFileByPath(path);
                 if (existing != null)
                 {
@@ -1548,12 +1586,13 @@ public class IndexManager : IDisposable
         _invertedIndex.Clear();
         _metadataMap.Clear();
         _pathToNode.Clear();
-        _syncedPaths.Clear();
-        _currentlySyncing.Clear();
         _rootNode = null;
     }
 
-    private void AddDirectoryTreeToIndex(string directoryPath, FileSystemNode parentNode)
+    private void AddDirectoryTreeToIndex(
+        string directoryPath,
+        FileSystemNode parentNode,
+        CancellationToken ct = default)
     {
         if (!Directory.Exists(directoryPath)) return;
 
@@ -1594,7 +1633,7 @@ public class IndexManager : IDisposable
                 indexedDir.Depth + 1,
                 ref processedItems,
                 totalItems: 1,
-                CancellationToken.None,
+                ct,
                 reportProgress: false);
 
             transaction.Commit();
@@ -1722,9 +1761,6 @@ public class IndexManager : IDisposable
 
     #region Public API
 
-    /// <summary>
-    /// Get a node by its path.
-    /// </summary>
     public FileSystemNode? GetNode(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
@@ -1735,9 +1771,6 @@ public class IndexManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Capture an immutable, internally consistent view for a single search.
-    /// </summary>
     public SearchSnapshot CreateSearchSnapshot(
         CancellationToken cancellationToken = default)
     {
@@ -1753,9 +1786,6 @@ public class IndexManager : IDisposable
         }
     }
 
-    /// <summary>
-    /// Increment the open count for a file (for frequency-based scoring).
-    /// </summary>
     public void IncrementOpenCount(string path)
     {
         lock (_lock)
@@ -1779,9 +1809,6 @@ public class IndexManager : IDisposable
             OpenCount = metadata.OpenCount
         };
 
-    /// <summary>
-    /// Get index statistics.
-    /// </summary>
     public IndexStats GetStats()
     {
         return new IndexStats
@@ -1828,13 +1855,21 @@ public class IndexManager : IDisposable
                 }
                 finally
                 {
+                    _reconciliationGate.Wait();
                     try
                     {
                         _watcher.Dispose();
                     }
                     finally
                     {
-                        _db.Dispose();
+                        try
+                        {
+                            _db.Dispose();
+                        }
+                        finally
+                        {
+                            _reconciliationGate.Release();
+                        }
                     }
                 }
             }
@@ -1891,9 +1926,6 @@ public class IndexManager : IDisposable
     #endregion
 }
 
-/// <summary>
-/// Progress information during indexing.
-/// </summary>
 public class IndexProgress
 {
     public string Status { get; set; } = string.Empty;
@@ -1902,9 +1934,6 @@ public class IndexProgress
     public long ElapsedMs { get; set; }
 }
 
-/// <summary>
-/// Index statistics.
-/// </summary>
 public class IndexStats
 {
     public int FileCount { get; set; }
