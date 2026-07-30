@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using Microsoft.VisualBasic.FileIO;
+using SmartFileLauncher.Core.Application.Files;
 using SmartFileLauncher.Core.Application.Indexing;
 
 namespace SmartFileLauncher.UI.Services;

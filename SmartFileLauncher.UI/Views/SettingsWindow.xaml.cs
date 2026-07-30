@@ -1,7 +1,8 @@
 using System;
 using System.Windows;
 using System.Windows.Input;
-using SmartFileLauncher.UI.Models;
+using SmartFileLauncher.Core.Application.Indexing;
+using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.UI.Services;
 
 namespace SmartFileLauncher.UI.Views;
@@ -9,6 +10,8 @@ namespace SmartFileLauncher.UI.Views;
 public partial class SettingsWindow : Window
 {
     private readonly AppSettings _settings;
+    private readonly ISettingsApplicationService _settingsApplication;
+    private readonly IIndexMaintenanceService _indexMaintenance;
     private readonly Action<string>? _log;
     
     private bool _isRecordingHotkey = false;
@@ -19,11 +22,20 @@ public partial class SettingsWindow : Window
     /// Ayarlar değiştiğinde tetiklenir
     /// </summary>
     public event EventHandler<AppSettings>? SettingsChanged;
+    public event EventHandler? IndexRebuildRequested;
 
-    public SettingsWindow(AppSettings settings, Action<string>? log = null)
+    public SettingsWindow(
+        AppSettings settings,
+        ISettingsApplicationService settingsApplication,
+        IIndexMaintenanceService indexMaintenance,
+        Action<string>? log = null)
     {
         InitializeComponent();
-        _settings = settings;
+        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        _settingsApplication = settingsApplication
+            ?? throw new ArgumentNullException(nameof(settingsApplication));
+        _indexMaintenance = indexMaintenance
+            ?? throw new ArgumentNullException(nameof(indexMaintenance));
         _log = log;
         
         LoadSettingsToUI();
@@ -59,12 +71,13 @@ public partial class SettingsWindow : Window
     /// </summary>
     private void UpdateIndexStatus()
     {
-        if (_settings.IndexExists)
+        var status = _indexMaintenance.GetStatus();
+        if (status.Exists)
         {
             IndexStatusText.Text = "✅ İndeks mevcut";
             IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1F));
-            IndexSizeText.Text = $"Boyut: {_settings.IndexSizeKB:N0} KB";
+            IndexSizeText.Text = $"Boyut: {status.SizeKilobytes:N0} KB";
             RebuildIndexButton.IsEnabled = true;
         }
         else
@@ -76,7 +89,7 @@ public partial class SettingsWindow : Window
             RebuildIndexButton.IsEnabled = false;
         }
         
-        IndexPathText.Text = $"Konum: {AppSettings.IndexPath}";
+        IndexPathText.Text = $"Konum: {status.Path}";
     }
 
     /// <summary>
@@ -97,44 +110,10 @@ public partial class SettingsWindow : Window
 
         try
         {
-            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-            if (string.IsNullOrEmpty(exePath))
-            {
-                throw new InvalidOperationException("Uygulama yolu bulunamadı.");
-            }
-
-            // SQLite bağlantısı uygulama kapanınca serbest kalacağı için silme ve
-            // yeniden başlatma işlemini kısa ömürlü bir batch dosyası tamamlar.
-            var batchPath = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                $"omnispot_rebuild_index_{Environment.ProcessId}.bat");
-            var commands = $@"
-@echo off
-timeout /t 2 /nobreak > nul
-del ""{AppSettings.IndexPath}"" 2>nul
-del ""{AppSettings.IndexPath}-wal"" 2>nul
-del ""{AppSettings.IndexPath}-shm"" 2>nul
-start """" ""{exePath}""
-del ""%~f0""
-";
-            System.IO.File.WriteAllText(batchPath, commands);
-
-            var startInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = batchPath,
-                CreateNoWindow = true,
-                UseShellExecute = true,
-                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
-            };
-            System.Diagnostics.Process.Start(startInfo);
-
+            _indexMaintenance.ScheduleRebuild();
             _log?.Invoke("🔄 İndeks yeniden oluşturuluyor...");
             Close();
-
-            Dispatcher.BeginInvoke(new Action(() =>
-            {
-                Environment.Exit(0);
-            }), System.Windows.Threading.DispatcherPriority.Background);
+            IndexRebuildRequested?.Invoke(this, EventArgs.Empty);
         }
         catch (Exception ex)
         {
@@ -153,12 +132,7 @@ del ""%~f0""
     {
         try
         {
-            var folderPath = System.IO.Path.GetDirectoryName(AppSettings.IndexPath);
-            if (!string.IsNullOrEmpty(folderPath) && System.IO.Directory.Exists(folderPath))
-            {
-                System.Diagnostics.Process.Start("explorer.exe", folderPath);
-            }
-            else
+            if (!_indexMaintenance.OpenIndexFolder())
             {
                 System.Windows.MessageBox.Show("İndeks klasörü bulunamadı.", "Uyarı",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -331,7 +305,6 @@ del ""%~f0""
     /// </summary>
     private void Save_Click(object sender, RoutedEventArgs e)
     {
-        // UI'dan ayarlara aktar
         _settings.HotkeyModifiers = (uint)_pendingModifiers;
         _settings.HotkeyKey = _pendingKey;
         _settings.StartMinimized = StartMinimizedCheckbox.IsChecked ?? false;
@@ -339,52 +312,24 @@ del ""%~f0""
         _settings.MinimizeToTrayOnClose = MinimizeToTrayCheckbox.IsChecked ?? true;
         _settings.NaturalLanguageModeEnabled = NaturalLanguageDefaultCheckbox.IsChecked ?? false;
         _settings.GridViewEnabled = GridViewDefaultCheckbox.IsChecked ?? false;
-        
-        // Dosyaya kaydet
-        _settings.Save();
-        
-        // Windows ile başlatma ayarını uygula
-        ApplyStartWithWindows(_settings.StartWithWindows);
-        
-        _log?.Invoke("💾 Ayarlar kaydedildi");
-        
-        // Event tetikle
-        SettingsChanged?.Invoke(this, _settings);
-        
-        DialogResult = true;
-        Close();
-    }
 
-    /// <summary>
-    /// Windows ile başlatma özelliğini ayarlar
-    /// </summary>
-    private void ApplyStartWithWindows(bool enable)
-    {
         try
         {
-            var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
-                @"SOFTWARE\Microsoft\Windows\CurrentVersion\Run", true);
-            
-            if (key == null) return;
-            
-            if (enable)
-            {
-                var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-                if (!string.IsNullOrEmpty(exePath))
-                {
-                    key.SetValue("OmniSpot", $"\"{exePath}\"");
-                }
-            }
-            else
-            {
-                key.DeleteValue("OmniSpot", false);
-            }
-            
-            key.Close();
+            _settingsApplication.Save(_settings);
+            _log?.Invoke("💾 Ayarlar kaydedildi");
+            SettingsChanged?.Invoke(this, _settings);
+            DialogResult = true;
+            Close();
         }
         catch (Exception ex)
         {
-            _log?.Invoke($"⚠️ Registry ayarı yapılamadı: {ex.Message}");
+            _log?.Invoke($"⚠️ Ayarlar kaydedilemedi: {ex.Message}");
+            System.Windows.MessageBox.Show(
+                $"Ayarlar kaydedilemedi: {ex.Message}",
+                "Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
+
 }

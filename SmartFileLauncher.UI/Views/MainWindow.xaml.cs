@@ -7,354 +7,134 @@ using System.Windows.Controls;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using System.Text.Json;
-using System.Windows.Media;
-using System.Net.NetworkInformation;
 using System.IO;
+using SmartFileLauncher.Core.Application.Connectivity;
 using SmartFileLauncher.Core.Application.Files;
 using SmartFileLauncher.Core.Application.Indexing;
+using SmartFileLauncher.Core.Application.Refresh;
 using SmartFileLauncher.Core.Application.Search;
+using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
-using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.UI.Services;
-using SmartFileLauncher.UI.Models;
+using SmartFileLauncher.UI.ViewModels;
 
 namespace SmartFileLauncher.UI.Views;
 
-public class DesktopIconViewModel : System.ComponentModel.INotifyPropertyChanged {
-    private string _name = "";
-    private string _fullPath = "";
-    private string _icon = "📄";
-    private bool _isDirectory = false;
-    private bool _isCut = false;
-    private double _opacity = 1.0;
-    
-    // Thread-safe frozen brushes (cached and reused)
-    private static readonly Dictionary<string, System.Windows.Media.Brush> _brushCache = new();
-    private static readonly object _brushCacheLock = new();
-    
-    private static System.Windows.Media.Brush GetOrCreateFrozenBrush(byte r, byte g, byte b)
-    {
-        var key = $"{r},{g},{b}";
-        lock (_brushCacheLock)
-        {
-            if (_brushCache.TryGetValue(key, out var cached))
-                return cached;
-            
-            var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
-            brush.Freeze(); // Makes it thread-safe
-            _brushCache[key] = brush;
-            return brush;
-        }
-    }
-    
-    public string Name { 
-        get => _name; 
-        set { 
-            if (_name != value) { 
-                _name = value; 
-                OnPropertyChanged(nameof(Name)); 
-            } 
-        } 
-    }
-    
-    public string FullPath { 
-        get => _fullPath; 
-        set { 
-            if (_fullPath != value) { 
-                _fullPath = value; 
-                OnPropertyChanged(nameof(FullPath)); 
-            } 
-        } 
-    }
-    
-    public string Icon { 
-        get => _icon; 
-        set { 
-            if (_icon != value) { 
-                _icon = value; 
-                OnPropertyChanged(nameof(Icon)); 
-            } 
-        } 
-    }
-    
-    public bool IsDirectory { 
-        get => _isDirectory; 
-        set { 
-            if (_isDirectory != value) { 
-                _isDirectory = value; 
-                OnPropertyChanged(nameof(IsDirectory)); 
-            } 
-        } 
-    }
-    
-    /// <summary>
-    /// Kes işlemi yapıldığında true olur - silik görünüm için
-    /// </summary>
-    public bool IsCut { 
-        get => _isCut; 
-        set { 
-            if (_isCut != value) { 
-                _isCut = value; 
-                Opacity = value ? 0.5 : 1.0; // Kesilen öğe %50 şeffaf
-                OnPropertyChanged(nameof(IsCut)); 
-            } 
-        } 
-    }
-    
-    /// <summary>
-    /// Öğenin opaklığı (0-1 arası, kes işleminde 0.5)
-    /// </summary>
-    public double Opacity { 
-        get => _opacity; 
-        set { 
-            if (_opacity != value) { 
-                _opacity = value; 
-                OnPropertyChanged(nameof(Opacity)); 
-            } 
-        } 
-    }
-    
-    // Folder colors based on folder type (using frozen brushes for thread safety)
-    private System.Windows.Media.Brush _folderColor = GetOrCreateFrozenBrush(99, 102, 241);
-    private System.Windows.Media.Brush _folderColorLight = GetOrCreateFrozenBrush(129, 140, 248);
-    
-    public System.Windows.Media.Brush FolderColor { 
-        get => _folderColor; 
-        set { 
-            if (_folderColor != value) { 
-                _folderColor = value; 
-                OnPropertyChanged(nameof(FolderColor)); 
-            } 
-        } 
-    }
-    
-    public System.Windows.Media.Brush FolderColorLight { 
-        get => _folderColorLight; 
-        set { 
-            if (_folderColorLight != value) { 
-                _folderColorLight = value; 
-                OnPropertyChanged(nameof(FolderColorLight)); 
-            } 
-        } 
-    }
-    
-    private ImageSource? _thumbnail;
-    public ImageSource? Thumbnail
-    {
-        get => _thumbnail;
-        set
-        {
-            if (_thumbnail != value)
-            {
-                _thumbnail = value;
-                OnPropertyChanged(nameof(Thumbnail));
-            }
-        }
-    }
-    
-    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-    
-    private void OnPropertyChanged(string propertyName) {
-        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
-    }
-    
-    /// <summary>
-    /// Klasör adına göre renk belirler (thread-safe frozen brushes kullanır)
-    /// </summary>
-    public void SetFolderColors(string folderName)
-    {
-        var name = folderName.ToLowerInvariant();
-        
-        if (name.Contains("document") || name.Contains("belgeler") || name == "documents")
-        {
-            // Blue
-            FolderColor = GetOrCreateFrozenBrush(59, 130, 246);
-            FolderColorLight = GetOrCreateFrozenBrush(96, 165, 250);
-        }
-        else if (name.Contains("download") || name.Contains("indirilenler") || name == "downloads")
-        {
-            // Green
-            FolderColor = GetOrCreateFrozenBrush(16, 185, 129);
-            FolderColorLight = GetOrCreateFrozenBrush(52, 211, 153);
-        }
-        else if (name.Contains("desktop") || name.Contains("masaüstü") || name == "masaüstü")
-        {
-            // Purple
-            FolderColor = GetOrCreateFrozenBrush(139, 92, 246);
-            FolderColorLight = GetOrCreateFrozenBrush(167, 139, 250);
-        }
-        else if (name.Contains("music") || name.Contains("müzik") || name == "music")
-        {
-            // Pink
-            FolderColor = GetOrCreateFrozenBrush(236, 72, 153);
-            FolderColorLight = GetOrCreateFrozenBrush(244, 114, 182);
-        }
-        else if (name.Contains("picture") || name.Contains("resim") || name == "pictures")
-        {
-            // Orange/Amber
-            FolderColor = GetOrCreateFrozenBrush(245, 158, 11);
-            FolderColorLight = GetOrCreateFrozenBrush(251, 191, 36);
-        }
-        else if (name.Contains("video") || name.Contains("videolar") || name == "videos")
-        {
-            // Red
-            FolderColor = GetOrCreateFrozenBrush(239, 68, 68);
-            FolderColorLight = GetOrCreateFrozenBrush(248, 113, 113);
-        }
-        else
-        {
-            // Default Indigo
-            FolderColor = GetOrCreateFrozenBrush(99, 102, 241);
-            FolderColorLight = GetOrCreateFrozenBrush(129, 140, 248);
-        }
-    }
-}
-
-public class SearchResultViewModel : System.ComponentModel.INotifyPropertyChanged {
-    public string Name { get; set; } = "";
-    public string FullPath { get; set; } = "";
-    public double Score { get; set; }
-    public string Icon { get; set; } = "📄";
-    public bool IsDirectory { get; set; } = false;
-    
-    // Thread-safe frozen brush helper (reuses DesktopIconViewModel's cache)
-    private static System.Windows.Media.Brush GetFrozenBrush(byte r, byte g, byte b)
-    {
-        var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
-        brush.Freeze(); // Makes it thread-safe
-        return brush;
-    }
-    
-    // Folder colors based on folder type (using frozen brushes)
-    private static readonly System.Windows.Media.Brush DefaultFolderColor = GetFrozenBrush(99, 102, 241);
-    private static readonly System.Windows.Media.Brush DefaultFolderColorLight = GetFrozenBrush(129, 140, 248);
-    
-    public System.Windows.Media.Brush FolderColor { get; set; } = DefaultFolderColor;
-    public System.Windows.Media.Brush FolderColorLight { get; set; } = DefaultFolderColorLight;
-    
-    private ImageSource? _thumbnail;
-    public ImageSource? Thumbnail
-    {
-        get => _thumbnail;
-        set
-        {
-            if (_thumbnail != value)
-            {
-                _thumbnail = value;
-                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Thumbnail)));
-            }
-        }
-    }
-    
-    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-    
-    /// <summary>
-    /// Klasör adına göre renk belirler (thread-safe frozen brushes kullanır)
-    /// </summary>
-    public void SetFolderColors(string folderName)
-    {
-        var name = folderName.ToLowerInvariant();
-        
-        if (name.Contains("document") || name.Contains("belgeler") || name == "documents")
-        {
-            // Blue
-            FolderColor = GetFrozenBrush(59, 130, 246);
-            FolderColorLight = GetFrozenBrush(96, 165, 250);
-        }
-        else if (name.Contains("download") || name.Contains("indirilenler") || name == "downloads")
-        {
-            // Green
-            FolderColor = GetFrozenBrush(16, 185, 129);
-            FolderColorLight = GetFrozenBrush(52, 211, 153);
-        }
-        else if (name.Contains("desktop") || name.Contains("masaüstü") || name == "masaüstü")
-        {
-            // Purple
-            FolderColor = GetFrozenBrush(139, 92, 246);
-            FolderColorLight = GetFrozenBrush(167, 139, 250);
-        }
-        else if (name.Contains("music") || name.Contains("müzik") || name == "music")
-        {
-            // Pink
-            FolderColor = GetFrozenBrush(236, 72, 153);
-            FolderColorLight = GetFrozenBrush(244, 114, 182);
-        }
-        else if (name.Contains("picture") || name.Contains("resim") || name == "pictures")
-        {
-            // Orange/Amber
-            FolderColor = GetFrozenBrush(245, 158, 11);
-            FolderColorLight = GetFrozenBrush(251, 191, 36);
-        }
-        else if (name.Contains("video") || name.Contains("videolar") || name == "videos")
-        {
-            // Red
-            FolderColor = GetFrozenBrush(239, 68, 68);
-            FolderColorLight = GetFrozenBrush(248, 113, 113);
-        }
-        else
-        {
-            // Default Indigo
-            FolderColor = DefaultFolderColor;
-            FolderColorLight = DefaultFolderColorLight;
-        }
-    }
-}
 
 public partial class MainWindow : Window {
+    private readonly MainWindowViewModel _viewModel;
+    private readonly ISettingsApplicationService _settingsApplication;
+    private readonly IIndexMaintenanceService _indexMaintenance;
     private readonly IIndexLifecycleService _indexLifecycle;
     private readonly ISearchApplicationService _searchService;
+    private readonly ISearchDiagnosticsService _searchDiagnostics;
     private readonly IThumbnailService _thumbnailService;
-    private readonly IFolderBrowserService _folderBrowser;
+    private readonly IFolderNavigationService _folderNavigation;
+    private readonly IConnectivityMonitor _connectivityMonitor;
     private readonly IFileOperationService _fileOperations;
-    private readonly GlobalHotkeyService _hotkeyService;
+    private readonly IApplicationShellService _shellService;
     private readonly ApplicationLog _applicationLog;
-    private string _desktopPath = ""; // Desktop path for icon loading
-    private string? _currentFolderPath = null; // Currently browsed folder (null = home/desktop)
-    private List<string> _indexedRootPaths = new(); // İndekslenen kök dizinler
-    private readonly ObservableCollection<DesktopIconViewModel> _desktopIcons = new();
-    private readonly ObservableCollection<SearchResultViewModel> _searchResults = new();
-    private bool _isIndexed = false;
-    private bool _isNaturalLanguageMode = false;
-    private bool _isGridViewMode = false; // Grid görünümü için
-    private bool _hasInternetConnection = true; // İnternet bağlantısı durumu
-    private System.Threading.Timer? _internetCheckTimer;
+    private string _desktopPath {
+        get => _viewModel.DesktopPath;
+        set => _viewModel.DesktopPath = value;
+    }
+    private string? _currentFolderPath {
+        get => _viewModel.CurrentFolderPath;
+        set => _viewModel.CurrentFolderPath = value;
+    }
+    private List<string> _indexedRootPaths {
+        get => _viewModel.IndexedRootPaths;
+        set => _viewModel.IndexedRootPaths = value;
+    }
+    private ObservableCollection<DesktopIconViewModel> _desktopIcons =>
+        _viewModel.DesktopIcons;
+    private ObservableCollection<SearchResultViewModel> _searchResults =>
+        _viewModel.SearchResults;
+    private bool _isIndexed {
+        get => _viewModel.IsIndexed;
+        set => _viewModel.IsIndexed = value;
+    }
+    private bool _isNaturalLanguageMode {
+        get => _viewModel.IsNaturalLanguageMode;
+        set => _viewModel.IsNaturalLanguageMode = value;
+    }
+    private bool _isGridViewMode {
+        get => _viewModel.IsGridViewMode;
+        set => _viewModel.IsGridViewMode = value;
+    }
     private System.Threading.Timer? _fileChangeDebounceTimer; // Dosya değişikliği debounce
+    private readonly object _fileChangeTimerLock = new();
+    private readonly RefreshCoalescer _fileChangeRefresh = new();
     private const int FILE_CHANGE_DEBOUNCE_MS = 1000; // 1 saniye debounce (daha az kasma için artırıldı)
-    private bool _isProcessingFileChange = false; // Çift işleme engeli
     private CancellationTokenSource? _currentSearchCancellation;
     private CancellationTokenSource? _folderLoadCancellation;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private long _searchVersion;
-    private bool _isPreparedForShutdown;
-    private string _lastSearchQuery = ""; // Son arama sorgusu (retry için)
+    private volatile bool _isPreparedForShutdown;
+    private string _lastSearchQuery {
+        get => _viewModel.LastSearchQuery;
+        set => _viewModel.LastSearchQuery = value;
+    }
+    private string? _selectedItemPath {
+        get => _viewModel.SelectedItemPath;
+        set => _viewModel.SelectedItemPath = value;
+    }
+    private string? _clipboardPath {
+        get => _viewModel.ClipboardPath;
+        set => _viewModel.ClipboardPath = value;
+    }
+    private bool _isCutOperation {
+        get => _viewModel.IsCutOperation;
+        set => _viewModel.IsCutOperation = value;
+    }
+    private string? _hoveredItemPath {
+        get => _viewModel.HoveredItemPath;
+        set => _viewModel.HoveredItemPath = value;
+    }
+    private DesktopIconViewModel? _hoveredItem {
+        get => _viewModel.HoveredItem;
+        set => _viewModel.HoveredItem = value;
+    }
+    private DesktopIconViewModel? _cutItem {
+        get => _viewModel.CutItem;
+        set => _viewModel.CutItem = value;
+    }
     private const int DEBOUNCE_DELAY_MS = 1200; // 1.2 seconds delay after last keystroke (increased from 400ms)
     private const int THUMBNAIL_SIZE = 128; // Thumbnail boyutu
-    private const int INTERNET_CHECK_INTERVAL_MS = 10000; // 10 saniyede bir kontrol
     
-    // Global Hotkey ve Ayarlar
     private AppSettings _appSettings;
-    private System.Windows.Forms.NotifyIcon? _notifyIcon;
     
     public MainWindow(
+        MainWindowViewModel viewModel,
         AppSettings appSettings,
+        ISettingsApplicationService settingsApplication,
+        IIndexMaintenanceService indexMaintenance,
         IIndexLifecycleService indexLifecycle,
         ISearchApplicationService searchService,
+        ISearchDiagnosticsService searchDiagnostics,
         IThumbnailService thumbnailService,
-        IFolderBrowserService folderBrowser,
+        IFolderNavigationService folderNavigation,
+        IConnectivityMonitor connectivityMonitor,
         IFileOperationService fileOperations,
-        GlobalHotkeyService hotkeyService,
+        IApplicationShellService shellService,
         ApplicationLog applicationLog) {
+        _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
+        _settingsApplication = settingsApplication ?? throw new ArgumentNullException(nameof(settingsApplication));
+        _indexMaintenance = indexMaintenance ?? throw new ArgumentNullException(nameof(indexMaintenance));
         _indexLifecycle = indexLifecycle ?? throw new ArgumentNullException(nameof(indexLifecycle));
         _searchService = searchService ?? throw new ArgumentNullException(nameof(searchService));
+        _searchDiagnostics = searchDiagnostics ?? throw new ArgumentNullException(nameof(searchDiagnostics));
         _thumbnailService = thumbnailService ?? throw new ArgumentNullException(nameof(thumbnailService));
-        _folderBrowser = folderBrowser ?? throw new ArgumentNullException(nameof(folderBrowser));
+        _folderNavigation = folderNavigation ?? throw new ArgumentNullException(nameof(folderNavigation));
+        _connectivityMonitor = connectivityMonitor ?? throw new ArgumentNullException(nameof(connectivityMonitor));
         _fileOperations = fileOperations ?? throw new ArgumentNullException(nameof(fileOperations));
-        _hotkeyService = hotkeyService ?? throw new ArgumentNullException(nameof(hotkeyService));
+        _shellService = shellService ?? throw new ArgumentNullException(nameof(shellService));
         _applicationLog = applicationLog ?? throw new ArgumentNullException(nameof(applicationLog));
 
+        DataContext = _viewModel;
         InitializeComponent();
 
         _applicationLog.MessageWritten += HandleApplicationLogMessage;
@@ -366,6 +146,11 @@ public partial class MainWindow : Window {
         _indexLifecycle.Error += HandleIndexError;
         _indexLifecycle.FileChanged += HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged += HandleReconciliationProgress;
+        _shellService.ToggleRequested += HandleShellToggleRequested;
+        _shellService.ShowRequested += HandleShellShowRequested;
+        _shellService.SettingsRequested += HandleShellSettingsRequested;
+        _shellService.ExitRequested += HandleShellExitRequested;
+        SourceInitialized += HandleSourceInitialized;
         
         // Wire up events
         SearchBox.TextChanged += SearchBox_TextChanged;
@@ -383,19 +168,8 @@ public partial class MainWindow : Window {
         ViewModeToggle.Checked += (_, __) => EnableGridView();
         ViewModeToggle.Unchecked += (_, __) => DisableGridView();
         
-        DesktopIcons.ItemsSource = _desktopIcons;
-        ResultsList.ItemsSource = _searchResults;
-        
         Log("=== OmniSpot Başlatıldı ===");
         Log("OmniSpot: Hafif Basit Masaüstü ve Tarayıcı");
-        
-        // İnternet bağlantısı kontrolü başlat
-        CheckInternetConnection();
-        StartInternetMonitoring();
-        
-        // Global hotkey ve system tray ayarla
-        SetupGlobalHotkey();
-        SetupSystemTray();
         
         // Pencere kapatma olayını yakala
         Closing += MainWindow_Closing;
@@ -404,7 +178,20 @@ public partial class MainWindow : Window {
         ApplyDefaultSettings();
         
         // Start async indexing after window loads
-        Loaded += async (_, __) => await InitializeAsync();
+        Loaded += MainWindow_Loaded;
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e) {
+        Loaded -= MainWindow_Loaded;
+
+        try {
+            await InitializeConnectivityAsync();
+            if (!_isPreparedForShutdown) {
+                await InitializeAsync();
+            }
+        } catch (OperationCanceledException)
+            when (_lifetimeCancellation.IsCancellationRequested) {
+        }
     }
     
     /// <summary>
@@ -425,86 +212,31 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Global hotkey servisini başlatır
-    /// </summary>
-    private void SetupGlobalHotkey() {
-        _hotkeyService.HotkeyPressed += OnHotkeyPressed;
-        
-        // Pencere yüklendikten sonra hotkey'i kaydet
-        SourceInitialized += (s, e) => {
-            _hotkeyService.Initialize(this);
-            var modifiers = (GlobalHotkeyService.ModifierKeys)_appSettings.HotkeyModifiers;
-            var key = _appSettings.HotkeyKey;
-            
-            if (_hotkeyService.RegisterHotkey(modifiers, key)) {
-                Log($"✅ Global kısayol kaydedildi: {_hotkeyService.GetHotkeyString()}");
-            } else {
-                Log($"⚠️ Global kısayol kaydedilemedi: {_hotkeyService.GetHotkeyString()}");
-            }
-        };
+    private void HandleSourceInitialized(object? sender, EventArgs e) {
+        _shellService.Initialize(this, _appSettings);
     }
-    
-    /// <summary>
-    /// System tray ikonunu ayarlar
-    /// </summary>
-    private void SetupSystemTray() {
-        _notifyIcon = new System.Windows.Forms.NotifyIcon();
-        _notifyIcon.Text = "OmniSpot";
-        
-        // Varsayılan ikon (uygulama ikonu)
-        try {
-            var iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot.ico");
-            if (System.IO.File.Exists(iconPath)) {
-                _notifyIcon.Icon = new System.Drawing.Icon(iconPath);
-            } else {
-                // Varsayılan sistem ikonu
-                _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-            }
-        } catch {
-            _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-        }
-        
-        // Çift tıklama ile pencereyi aç
-        _notifyIcon.DoubleClick += (s, e) => ShowAndActivate();
-        
-        // Sağ tık menüsü
-        var contextMenu = new System.Windows.Forms.ContextMenuStrip();
-        
-        var showItem = new System.Windows.Forms.ToolStripMenuItem("Göster");
-        showItem.Click += (s, e) => ShowAndActivate();
-        contextMenu.Items.Add(showItem);
-        
-        var settingsItem = new System.Windows.Forms.ToolStripMenuItem("Ayarlar");
-        settingsItem.Click += (s, e) => OpenSettings();
-        contextMenu.Items.Add(settingsItem);
-        
-        contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        
-        var exitItem = new System.Windows.Forms.ToolStripMenuItem("Çıkış");
-        exitItem.Click += (s, e) => ForceExit();
-        contextMenu.Items.Add(exitItem);
-        
-        _notifyIcon.ContextMenuStrip = contextMenu;
-        _notifyIcon.Visible = true;
-        
-        Log("📌 System tray ikonu hazır");
-    }
-    
-    /// <summary>
-    /// Hotkey tetiklendiğinde çağrılır
-    /// </summary>
-    private void OnHotkeyPressed(object? sender, EventArgs e) {
+
+    private void HandleShellToggleRequested() {
         Dispatcher.Invoke(() => {
             if (WindowState == WindowState.Minimized || !IsVisible) {
                 ShowAndActivate();
             } else {
-                // Pencere açıksa minimize et
                 MinimizeToTray();
             }
         });
     }
-    
+
+    private void HandleShellShowRequested() {
+        Dispatcher.Invoke(ShowAndActivate);
+    }
+
+    private void HandleShellSettingsRequested() {
+        Dispatcher.Invoke(OpenSettings);
+    }
+
+    private void HandleShellExitRequested() {
+        Dispatcher.Invoke(ForceExit);
+    }
     /// <summary>
     /// Pencereyi gösterir ve aktif yapar
     /// </summary>
@@ -544,23 +276,21 @@ public partial class MainWindow : Window {
     /// </summary>
     private void OpenSettings() {
         // Önce mevcut hotkey'i kaldır (ayarlar değişebilir)
-        _hotkeyService.UnregisterHotkey();
+        _shellService.SuspendHotkey();
         
-        var settingsWindow = new SettingsWindow(_appSettings, Log);
+        var settingsWindow = new SettingsWindow(
+            _appSettings,
+            _settingsApplication,
+            _indexMaintenance,
+            Log);
         settingsWindow.Owner = this;
         settingsWindow.SettingsChanged += OnSettingsChanged;
+        settingsWindow.IndexRebuildRequested += OnIndexRebuildRequested;
         settingsWindow.ShowDialog();
         
         // Hotkey'i yeniden kaydet (değişmiş olabilir)
-        if (_hotkeyService != null) {
-            var modifiers = (GlobalHotkeyService.ModifierKeys)_appSettings.HotkeyModifiers;
-            var key = _appSettings.HotkeyKey;
-            
-            if (_hotkeyService.RegisterHotkey(modifiers, key)) {
-                Log($"✅ Global kısayol güncellendi: {_hotkeyService.GetHotkeyString()}");
-            } else {
-                Log($"⚠️ Global kısayol kaydedilemedi: {_hotkeyService.GetHotkeyString()}");
-            }
+        if (!_isPreparedForShutdown) {
+            _shellService.ApplyHotkey(_appSettings);
         }
     }
     
@@ -570,6 +300,10 @@ public partial class MainWindow : Window {
     private void OnSettingsChanged(object? sender, AppSettings newSettings) {
         _appSettings = newSettings;
         Log("⚙️ Ayarlar güncellendi");
+    }
+
+    private void OnIndexRebuildRequested(object? sender, EventArgs e) {
+        ForceExit();
     }
     
     /// <summary>
@@ -600,75 +334,50 @@ public partial class MainWindow : Window {
         _indexLifecycle.Error -= HandleIndexError;
         _indexLifecycle.FileChanged -= HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged -= HandleReconciliationProgress;
-        _hotkeyService.HotkeyPressed -= OnHotkeyPressed;
+        _connectivityMonitor.ConnectivityChanged -= HandleConnectivityChanged;
+        _shellService.ToggleRequested -= HandleShellToggleRequested;
+        _shellService.ShowRequested -= HandleShellShowRequested;
+        _shellService.SettingsRequested -= HandleShellSettingsRequested;
+        _shellService.ExitRequested -= HandleShellExitRequested;
+        SourceInitialized -= HandleSourceInitialized;
         
-        if (_notifyIcon != null) {
-            _notifyIcon.Visible = false;
-            _notifyIcon.Dispose();
-            _notifyIcon = null;
+        lock (_fileChangeTimerLock) {
+            _fileChangeDebounceTimer?.Dispose();
+            _fileChangeDebounceTimer = null;
         }
-        
-        _internetCheckTimer?.Dispose();
-        _internetCheckTimer = null;
-        _fileChangeDebounceTimer?.Dispose();
-        _fileChangeDebounceTimer = null;
-        
         Closing -= MainWindow_Closing;
     }
     
-    /// <summary>
-    /// İnternet bağlantısını kontrol eder
-    /// </summary>
-    private bool CheckInternetConnection() {
-        try {
-            // Hızlı kontrol: Network interface'ler aktif mi?
-            if (!NetworkInterface.GetIsNetworkAvailable()) {
-                _hasInternetConnection = false;
-                UpdateAIButtonState();
-                return false;
-            }
-            
-            // DNS ping ile gerçek bağlantı kontrolü
-            using var ping = new Ping();
-            var reply = ping.Send("8.8.8.8", 1000); // Google DNS, 1 saniye timeout
-            _hasInternetConnection = (reply.Status == IPStatus.Success);
-        } catch {
-            _hasInternetConnection = false;
-        }
-        
-        UpdateAIButtonState();
-        return _hasInternetConnection;
+    private async Task InitializeConnectivityAsync() {
+        var isConnected = await _connectivityMonitor.CheckNowAsync(
+            _lifetimeCancellation.Token);
+        UpdateAIButtonState(isConnected);
+        _connectivityMonitor.ConnectivityChanged += HandleConnectivityChanged;
+        _connectivityMonitor.Start();
     }
-    
-    /// <summary>
-    /// İnternet durumunu periyodik olarak kontrol eder
-    /// </summary>
-    private void StartInternetMonitoring() {
-        _internetCheckTimer = new System.Threading.Timer(_ => {
-            Dispatcher.Invoke(() => {
-                var wasConnected = _hasInternetConnection;
-                CheckInternetConnection();
-                
-                // Durum değiştiyse log yaz
-                if (wasConnected != _hasInternetConnection) {
-                    if (_hasInternetConnection) {
-                        Log("🌐 İnternet bağlantısı sağlandı");
-                    } else {
-                        Log("⚠️ İnternet bağlantısı kesildi");
-                    }
-                }
-            });
-        }, null, INTERNET_CHECK_INTERVAL_MS, INTERNET_CHECK_INTERVAL_MS);
+
+    private void HandleConnectivityChanged(bool isConnected) {
+        if (_isPreparedForShutdown ||
+            Dispatcher.HasShutdownStarted ||
+            Dispatcher.HasShutdownFinished) return;
+
+        Dispatcher.BeginInvoke(new Action(() => {
+            if (_isPreparedForShutdown) return;
+            UpdateAIButtonState(isConnected);
+            Log(isConnected
+                ? "🌐 İnternet bağlantısı sağlandı"
+                : "⚠️ İnternet bağlantısı kesildi");
+        }));
     }
     
     /// <summary>
     /// AI butonunun durumunu günceller
     /// </summary>
-    private void UpdateAIButtonState() {
-        NaturalLanguageToggle.IsEnabled = _hasInternetConnection;
+    private void UpdateAIButtonState(bool isConnected) {
+        NaturalLanguageToggle.IsEnabled = isConnected;
         
         // Eğer internet yoksa ve AI modu aktifse, kapat
-        if (!_hasInternetConnection && _isNaturalLanguageMode) {
+        if (!isConnected && _isNaturalLanguageMode) {
             NaturalLanguageToggle.IsChecked = false;
             _isNaturalLanguageMode = false;
             SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
@@ -849,169 +558,204 @@ public partial class MainWindow : Window {
     /// </summary>
     private void HandleFileSystemChange(FileChangeEvent evt)
     {
-        // Çift işleme engeli
-        if (_isProcessingFileChange) return;
-        
-        // Dispose old timer
-        _fileChangeDebounceTimer?.Dispose();
-        
+        if (_isPreparedForShutdown ||
+            Dispatcher.HasShutdownStarted ||
+            Dispatcher.HasShutdownFinished) return;
+
         // Log the change (sadece bir kere)
         Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
-        
-        // Değişikliğin path'ini ve parent'ını sakla
-        var changedPath = evt.FullPath;
-        var changedParent = System.IO.Path.GetDirectoryName(changedPath);
-        
-        // Debounce: UI güncellemesini beklet
-        _fileChangeDebounceTimer = new System.Threading.Timer(_ =>
-        {
-            if (_isProcessingFileChange) return;
-            _isProcessingFileChange = true;
-            
-            Dispatcher.InvokeAsync(() =>
-            {
-                try
-                {
-                    // Sadece ilgili görünümü güncelle
-                    SmartRefreshCurrentView(changedPath, changedParent, evt.ChangeType);
-                    
-                    // Aktif arama varsa sonuçları da güncelle (sadece arama görünürse)
-                    if (!string.IsNullOrWhiteSpace(SearchBox.Text) && 
-                        ResultsContainer.Visibility == Visibility.Visible)
-                    {
-                        _ = RefreshSearchResultsAsync();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log($"⚠️ UI güncelleme hatası: {ex.Message}");
-                }
-                finally
-                {
-                    _isProcessingFileChange = false;
-                }
-            });
-        }, null, FILE_CHANGE_DEBOUNCE_MS, Timeout.Infinite);
+
+        _fileChangeRefresh.Request();
+        SchedulePendingFileChange();
     }
-    
-    /// <summary>
-    /// Değişikliğin türüne ve konumuna göre akıllıca görünümü günceller.
-    /// Ana sayfaya dönmeden sadece ilgili öğeyi günceller.
-    /// </summary>
-    private void SmartRefreshCurrentView(string changedPath, string? changedParent, SmartFileLauncher.Core.Models.FileChangeType changeType)
+
+    private void SchedulePendingFileChange()
     {
-        // Eğer bir klasör içindeysek, o klasördeki değişiklikleri kontrol et
-        if (_currentFolderPath != null)
+        if (_isPreparedForShutdown ||
+            Dispatcher.HasShutdownStarted ||
+            Dispatcher.HasShutdownFinished) return;
+
+        lock (_fileChangeTimerLock)
         {
-            // Değişiklik mevcut klasörde mi?
-            if (changedParent != null && 
-                string.Equals(changedParent.TrimEnd('\\', '/'), _currentFolderPath.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            if (_isPreparedForShutdown) return;
+
+            _fileChangeDebounceTimer?.Dispose();
+            _fileChangeDebounceTimer = new System.Threading.Timer(_ =>
             {
-                // Değişiklik bu klasörde, güncelle
-                RefreshCurrentFolderIcons();
-            }
-            // Değişiklik farklı bir yerdeyse, UI'yı güncelleme (sessizce geç)
-            return;
+                if (_isPreparedForShutdown ||
+                    Dispatcher.HasShutdownStarted ||
+                    !_fileChangeRefresh.TryBegin()) return;
+
+                _ = DispatchFileChangeAsync();
+            }, null, FILE_CHANGE_DEBOUNCE_MS, Timeout.Infinite);
         }
-        
-        // Ana sayfadayız (_currentFolderPath == null)
-        // Sadece root children'daki değişiklikleri güncelle
-        var indexedRoots = _indexLifecycle.GetIndexedRoots();
-        if (indexedRoots.Count > 0)
+    }
+
+    private async Task DispatchFileChangeAsync()
+    {
+        try
         {
-            var rootPaths = indexedRoots.Select(c => System.IO.Path.GetDirectoryName(c.FullPath)).Distinct();
-            var isInRoot = rootPaths.Any(rp => 
-                rp != null && changedParent != null &&
-                string.Equals(rp.TrimEnd('\\', '/'), changedParent.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
-            
-            if (isInRoot || indexedRoots.Any(c =>
-                string.Equals(c.FullPath, changedPath, StringComparison.OrdinalIgnoreCase)))
+            await Dispatcher.InvokeAsync(ProcessFileChangeAsync)
+                .Task
+                .Unwrap();
+        }
+        catch (OperationCanceledException)
+            when (_isPreparedForShutdown ||
+                  Dispatcher.HasShutdownStarted)
+        {
+        }
+        catch (InvalidOperationException)
+            when (_isPreparedForShutdown ||
+                  Dispatcher.HasShutdownStarted)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log($"⚠️ UI güncelleme kuyruğu hatası: {ex.Message}");
+        }
+        finally
+        {
+            if (_fileChangeRefresh.Complete())
+            {
+                SchedulePendingFileChange();
+            }
+        }
+    }
+
+    private async Task ProcessFileChangeAsync()
+    {
+        try
+        {
+            if (_currentFolderPath == null)
             {
                 RefreshDesktopIconsSmart();
             }
+            else
+            {
+                await RefreshCurrentFolderIconsAsync();
+            }
+
+            if (!string.IsNullOrWhiteSpace(SearchBox.Text) &&
+                ResultsContainer.Visibility == Visibility.Visible)
+            {
+                await RefreshSearchResultsAsync();
+            }
+        }
+        catch (OperationCanceledException)
+            when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log($"⚠️ UI güncelleme hatası: {ex.Message}");
         }
     }
     
     /// <summary>
     /// Mevcut klasördeki ikonları akıllıca günceller (klasör içindeyken).
     /// </summary>
-    private void RefreshCurrentFolderIcons()
+    private async Task RefreshCurrentFolderIconsAsync()
     {
-        if (_currentFolderPath == null || !System.IO.Directory.Exists(_currentFolderPath)) return;
-        
+        var folderPath = _currentFolderPath;
+        if (string.IsNullOrEmpty(folderPath))
+        {
+            return;
+        }
+
         try
         {
-            var dirInfo = new System.IO.DirectoryInfo(_currentFolderPath);
-            var currentItems = new Dictionary<string, (string Name, bool IsDir)>();
-            
-            // Mevcut klasördeki öğeleri al
-            foreach (var dir in dirInfo.GetDirectories())
+            var page = await _folderNavigation.OpenAsync(
+                folderPath,
+                MAX_FOLDER_ITEMS,
+                ensureSynchronized: false,
+                _lifetimeCancellation.Token);
+            if (!string.Equals(
+                    folderPath,
+                    _currentFolderPath,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                if ((dir.Attributes & System.IO.FileAttributes.Hidden) == 0 &&
-                    (dir.Attributes & System.IO.FileAttributes.System) == 0)
+                return;
+            }
+
+            var existing = _desktopIcons.ToDictionary(
+                item => item.FullPath,
+                item => item,
+                StringComparer.OrdinalIgnoreCase);
+            var desired = new List<DesktopIconViewModel>(page.Entries.Count);
+
+            foreach (var entry in page.Entries)
+            {
+                var isNew = false;
+                if (!existing.TryGetValue(entry.FullPath, out var viewModel))
                 {
-                    currentItems[dir.FullName] = (dir.Name, true);
+                    viewModel = new DesktopIconViewModel();
+                    isNew = true;
                 }
-            }
-            foreach (var file in dirInfo.GetFiles())
-            {
-                if ((file.Attributes & System.IO.FileAttributes.Hidden) == 0)
+
+                viewModel.Name = entry.Name;
+                viewModel.FullPath = entry.FullPath;
+                viewModel.Icon = entry.IsDirectory
+                    ? "📁"
+                    : GetFileIcon(entry.Name);
+                viewModel.IsDirectory = entry.IsDirectory;
+                if (entry.IsDirectory)
                 {
-                    currentItems[file.FullName] = (file.Name, false);
+                    viewModel.SetFolderColors(entry.Name);
                 }
-            }
-            
-            // Silinen öğeleri kaldır
-            var toRemove = _desktopIcons.Where(d => !currentItems.ContainsKey(d.FullPath)).ToList();
-            foreach (var item in toRemove)
-            {
-                _desktopIcons.Remove(item);
-            }
-            
-            // Yeni öğeleri ekle
-            var existingPaths = _desktopIcons.Select(d => d.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in currentItems.OrderBy(k => k.Value.Name))
-            {
-                if (!existingPaths.Contains(kvp.Key))
+                if (isNew)
                 {
-                    var viewModel = new DesktopIconViewModel
-                    {
-                        Name = kvp.Value.Name,
-                        FullPath = kvp.Key,
-                        Icon = kvp.Value.IsDir ? "📁" : GetFileIcon(kvp.Value.Name),
-                        IsDirectory = kvp.Value.IsDir
-                    };
-                    
-                    if (kvp.Value.IsDir)
-                    {
-                        viewModel.SetFolderColors(kvp.Value.Name);
-                    }
-                    
-                    // Sıralı ekleme: Önce klasörler, sonra dosyalar (her grup kendi içinde alfabetik)
-                    var insertIndex = _desktopIcons.TakeWhile(d => 
-                    {
-                        // Eğer her ikisi de klasör veya her ikisi de dosya ise alfabetik sırala
-                        if (d.IsDirectory == kvp.Value.IsDir)
-                        {
-                            return string.Compare(d.Name, kvp.Value.Name, StringComparison.OrdinalIgnoreCase) < 0;
-                        }
-                        // Klasörler her zaman dosyalardan önce
-                        return d.IsDirectory;
-                    }).Count();
-                    _desktopIcons.Insert(insertIndex, viewModel);
-                    
                     _ = LoadThumbnailAsync(viewModel);
                 }
+
+                desired.Add(viewModel);
             }
-            
-            Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe");
+
+            for (var index = 0; index < desired.Count; index++)
+            {
+                var currentIndex = _desktopIcons.IndexOf(desired[index]);
+                if (currentIndex < 0)
+                {
+                    _desktopIcons.Insert(index, desired[index]);
+                }
+                else if (currentIndex != index)
+                {
+                    _desktopIcons.Move(currentIndex, index);
+                }
+            }
+
+            while (_desktopIcons.Count > desired.Count)
+            {
+                _desktopIcons.RemoveAt(_desktopIcons.Count - 1);
+            }
+
+            if (desired.Count == 0)
+            {
+                var folderName = Path.GetFileName(folderPath);
+                if (string.IsNullOrEmpty(folderName))
+                {
+                    folderName = folderPath;
+                }
+
+                EmptyFolderTitle.Text = $"'{folderName}' klasörü boş";
+                EmptyFolderPanel.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                EmptyFolderPanel.Visibility = Visibility.Collapsed;
+            }
+            Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe" +
+                (page.IsTruncated
+                    ? $" (limit: {MAX_FOLDER_ITEMS})"
+                    : string.Empty));
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
             Log($"⚠️ Klasör güncelleme hatası: {ex.Message}");
         }
     }
-    
     /// <summary>
     /// Ana sayfa (desktop) ikonlarını akıllıca günceller.
     /// </summary>
@@ -1087,7 +831,7 @@ public partial class MainWindow : Window {
                 new SearchRequest(
                     query,
                     NaturalLanguageMode: false,
-                    HasInternetConnection: _hasInternetConnection,
+                    HasInternetConnection: _connectivityMonitor.IsConnected,
                     MaxResults: 50),
                 cancellationToken);
             var results = outcome.Results;
@@ -1103,8 +847,7 @@ public partial class MainWindow : Window {
                 foreach (var result in results)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var ext = System.IO.Path.GetExtension(result.Name).ToLowerInvariant();
-                    var isDirectory = string.IsNullOrEmpty(ext) && System.IO.Directory.Exists(result.FullPath);
+                    var isDirectory = result.IsDirectory;
                     
                     var viewModel = new SearchResultViewModel
                     {
@@ -1273,8 +1016,7 @@ public partial class MainWindow : Window {
             ResultsContainer.Visibility = Visibility.Visible;
 
             Log($"🔍 Arama sorgusu: '{query}'");
-            var tokenizer = new BasicTokenizer();
-            var tokens = tokenizer.Tokenize(query).ToList();
+            var tokens = _searchDiagnostics.Tokenize(query);
             Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
             ShowSearchingIndicator(query);
 
@@ -1435,12 +1177,16 @@ public partial class MainWindow : Window {
     /// <summary>
     /// Tekrar Dene butonuna tıklandığında
     /// </summary>
-    private void RetryButton_Click(object sender, RoutedEventArgs e) {
+    private async void RetryButton_Click(object sender, RoutedEventArgs e) {
         if (!string.IsNullOrWhiteSpace(_lastSearchQuery)) {
             Log($"🔄 Yeniden deneniyor: '{_lastSearchQuery}'");
-            
-            // İnternet kontrolü
-            CheckInternetConnection();
+            try {
+                await _connectivityMonitor.CheckNowAsync(
+                    _lifetimeCancellation.Token);
+            } catch (OperationCanceledException)
+                when (_lifetimeCancellation.IsCancellationRequested) {
+                return;
+            }
             
             // Aramayı yeniden başlat
             ErrorPanel.Visibility = Visibility.Collapsed;
@@ -1469,7 +1215,7 @@ public partial class MainWindow : Window {
                 new SearchRequest(
                     query,
                     _isNaturalLanguageMode,
-                    _hasInternetConnection),
+                    _connectivityMonitor.IsConnected),
                 cancellationToken);
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -1569,12 +1315,12 @@ public partial class MainWindow : Window {
         }
 
         Log("⚠️ Hiç sonuç bulunamadı!");
-        var tokenizer = new BasicTokenizer();
-        foreach (var token in tokenizer.Tokenize(_lastSearchQuery)) {
-            var matches = _indexLifecycle.GetTokenMatches(token);
-            Log($"   Token '{token}' → indekste {matches.Count} eşleşme");
-            if (matches.SampleNames.Count > 0) {
-                Log($"      Örnek: {string.Join(", ", matches.SampleNames)}");
+        foreach (var diagnostic in _searchDiagnostics.Inspect(
+                     _lastSearchQuery,
+                     _lifetimeCancellation.Token)) {
+            Log($"   Token '{diagnostic.Token}' → indekste {diagnostic.MatchCount} eşleşme");
+            if (diagnostic.SampleNames.Count > 0) {
+                Log($"      Örnek: {string.Join(", ", diagnostic.SampleNames)}");
             }
         }
     }
@@ -1603,7 +1349,7 @@ public partial class MainWindow : Window {
 
         foreach (var result in results) {
             cancellationToken.ThrowIfCancellationRequested();
-            var isDirectory = Directory.Exists(result.FullPath);
+            var isDirectory = result.IsDirectory;
             var viewModel = new SearchResultViewModel {
                 Name = result.Name,
                 FullPath = result.FullPath,
@@ -1911,19 +1657,14 @@ public partial class MainWindow : Window {
             ShowFolderLoadingIndicator(folderPath);
             
             try {
-                if (_indexLifecycle.ReconciliationStatus.IsRunning) {
-                    await _indexLifecycle.EnsureSyncedAsync(
-                        folderPath,
-                        _lifetimeCancellation.Token);
-                }
-                
-                // Breadcrumb için klasör yolunu sakla
-                _currentFolderPath = folderPath;
-                
                 // Klasör içeriğini ASYNC yükle (büyük klasörler için optimize edildi)
-                if (!await LoadFolderContentsAsync(folderPath)) {
+                if (!await LoadFolderContentsAsync(
+                        folderPath,
+                        ensureSynchronized: true)) {
                     return;
                 }
+
+                _currentFolderPath = folderPath;
                 
                 // UI'ı güncelle
                 SearchBox.Clear();
@@ -1961,7 +1702,9 @@ public partial class MainWindow : Window {
     /// <summary>
     /// Klasör içeriğini ASYNC yükler - büyük klasörler için optimize edildi
     /// </summary>
-    private async Task<bool> LoadFolderContentsAsync(string folderPath) {
+    private async Task<bool> LoadFolderContentsAsync(
+        string folderPath,
+        bool ensureSynchronized = false) {
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
             _lifetimeCancellation.Token);
         var previous = Interlocked.Exchange(
@@ -1973,18 +1716,19 @@ public partial class MainWindow : Window {
             previous?.Dispose();
         }
 
-        _desktopIcons.Clear();
-        EmptyFolderPanel.Visibility = Visibility.Collapsed;
-
         try {
-            var page = await _folderBrowser.LoadAsync(
+            var page = await _folderNavigation.OpenAsync(
                 folderPath,
                 MAX_FOLDER_ITEMS,
+                ensureSynchronized,
                 cancellation.Token);
             cancellation.Token.ThrowIfCancellationRequested();
             if (!ReferenceEquals(_folderLoadCancellation, cancellation)) {
                 return false;
             }
+
+            _desktopIcons.Clear();
+            EmptyFolderPanel.Visibility = Visibility.Collapsed;
 
             var items = page.Entries.Select(entry => {
                 var viewModel = new DesktopIconViewModel {
@@ -2118,40 +1862,21 @@ public partial class MainWindow : Window {
     /// </summary>
     private void GoToParentFolder() {
         if (string.IsNullOrEmpty(_currentFolderPath)) {
-            // Ana ekrana dön
             GoToHome();
             return;
         }
-        
-        // Eğer mevcut klasör indekslenen bir kök dizin ise, ana ekrana dön
-        bool isRootPath = _indexedRootPaths.Any(root => 
-            string.Equals(root.TrimEnd('\\', '/'), _currentFolderPath.TrimEnd('\\', '/'), 
-                          StringComparison.OrdinalIgnoreCase));
-        
-        if (isRootPath) {
+
+        var parent = _folderNavigation.GetParentWithinRoots(
+            _currentFolderPath,
+            _indexedRootPaths);
+        if (string.IsNullOrEmpty(parent) ||
+            _fileOperations.GetItemKind(parent) != FileItemKind.Directory) {
             GoToHome();
             return;
         }
-        
-        var parent = System.IO.Directory.GetParent(_currentFolderPath);
-        if (parent != null && parent.Exists) {
-            // Parent dizini, indekslenen kök dizinlerden birinin altında mı kontrol et
-            bool parentIsInIndexedPath = _indexedRootPaths.Any(root =>
-                parent.FullName.StartsWith(root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(root.TrimEnd('\\', '/'), parent.FullName.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
-            
-            if (parentIsInIndexedPath) {
-                _ = OpenFolderInApp(parent.FullName);
-            } else {
-                // Parent indekslenen alanın dışında, ana ekrana dön
-                GoToHome();
-            }
-        } else {
-            // Ana ekrana dön
-            GoToHome();
-        }
+
+        _ = OpenFolderInApp(parent);
     }
-    
     /// <summary>
     /// Ana ekrana (Desktop) dön
     /// </summary>
@@ -2187,13 +1912,6 @@ public partial class MainWindow : Window {
     }
     
     #region File Operations & Context Menu
-    
-    private string? _selectedItemPath = null;
-    private string? _clipboardPath = null;
-    private bool _isCutOperation = false;
-    private string? _hoveredItemPath = null; // Hover edilen öğenin path'i
-    private DesktopIconViewModel? _hoveredItem = null; // Hover edilen öğenin ViewModel'i
-    private DesktopIconViewModel? _cutItem = null; // Kesilen öğenin ViewModel'i
     
     /// <summary>
     /// Dosya/klasör üzerine mouse geldiğinde (hover)
@@ -2316,7 +2034,8 @@ public partial class MainWindow : Window {
         if (string.IsNullOrEmpty(path)) return;
 
         try {
-            var directory = Directory.Exists(path)
+            var directory = _fileOperations.GetItemKind(path) ==
+                            FileItemKind.Directory
                 ? path
                 : Path.GetDirectoryName(path);
 
