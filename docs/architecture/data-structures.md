@@ -122,7 +122,7 @@ FileSystemWatcher event'lerini thread-safe şekilde buffer'lamak için kullanıl
 ---
 
 ## 8. Dictionary (Hash Map)
-**Konum:** Proje genelinde (`IndexManager`, `FileSystemScanner`)
+**Konum:** Proje genelinde (`IndexManager`)
 
 ### Tanım
 Anahtar-Değer (Key-Value) çiftlerini saklar.
