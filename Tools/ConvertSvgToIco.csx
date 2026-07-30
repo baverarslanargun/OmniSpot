@@ -1,5 +1,5 @@
 // SVG to ICO Converter Script
-// Run with: dotnet script ConvertSvgToIco.csx
+// Run from the repository root: dotnet script Tools/ConvertSvgToIco.csx
 // Install dotnet-script: dotnet tool install -g dotnet-script
 
 #r "nuget: Svg, 3.4.6"
@@ -10,8 +10,9 @@ using System.Drawing.Imaging;
 using System.Drawing.Drawing2D;
 using Svg;
 
-var svgPath = @"c:\OmniSpot\omnispot.svg";
-var icoPath = @"c:\OmniSpot\SmartFileLauncher.UI\Resources\app.ico";
+var repositoryRoot = Directory.GetCurrentDirectory();
+var svgPath = Path.Combine(repositoryRoot, "assets", "branding", "omnispot.svg");
+var icoPath = Path.Combine(repositoryRoot, "SmartFileLauncher.UI", "Resources", "app.ico");
 
 Console.WriteLine("Loading SVG...");
 var svgDocument = SvgDocument.Open(svgPath);

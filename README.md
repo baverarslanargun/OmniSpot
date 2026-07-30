@@ -1,5 +1,9 @@
 # OmniSpot V1.0 - Akıllı Dosya Tarayıcı
 
+<p align="center">
+  <img src="assets/branding/omnispot.svg" alt="OmniSpot logosu" width="180">
+</p>
+
 Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile her yerden erişin!
 
 ![OmniSpot](https://img.shields.io/badge/version-1.0.0-blue) ![.NET](https://img.shields.io/badge/.NET-8.0-purple) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
@@ -31,7 +35,7 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile her yerden erişin!
 ## 📦 Kurulum
 
 ### Yöntem 1: Hazır Kurulum (Önerilen)
-1. [Releases](https://github.com/yourusername/omnispot/releases) sayfasından `OmniSpot-1.0.0-Setup.exe` indirin
+1. [Releases](https://github.com/baverarslanargun/OmniSpot/releases) sayfasından `OmniSpot-1.0.0-Setup.exe` indirin
 2. Kurulum sihirbazını takip edin
 3. Ctrl+Space ile başlatın!
 
@@ -60,7 +64,7 @@ dotnet build
 dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj -c Release -o .\publish
 ```
 
-Detaylı derleme talimatları için [BUILD.md](BUILD.md) dosyasına bakın.
+Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 
 ### Güvenlik Notları
 
@@ -84,16 +88,15 @@ Detaylı derleme talimatları için [BUILD.md](BUILD.md) dosyasına bakın.
 ### Proje Yapısı
 
 ```
-SmartFileLauncher/
-├── SmartFileLauncher.Core/          # Çekirdek mantık ve veri yapıları
-│   ├── Models/                      # FileSystemNode, SearchResult, Metadata
-│   ├── DataStructures/              # InvertedIndex
-│   ├── Search/                      # SearchEngine, Tokenizer, Scoring
-│   └── Services/                    # FileSystemScanner
-└── SmartFileLauncher.UI/            # WPF uygulaması
-    ├── Views/                       # MainWindow
-    ├── ViewModels/                  # MVVM (gelecek için hazır)
-    └── README_ARCHITECTURE.md       # Mimari detaylar
+OmniSpot/
+├── SmartFileLauncher.Core/   # Çekirdek mantık ve indeksleme
+├── SmartFileLauncher.UI/     # WPF masaüstü uygulaması
+├── tests/                    # Otomatik testler
+├── docs/                     # Rehberler ve teknik belgeler
+├── scripts/                  # Geliştirme yardımcıları
+├── assets/                   # Marka ve görsel dosyaları
+├── installer/                # Kurulum paketi
+└── SmartFileLauncher.sln
 ```
 
 ### Teknik Detaylar
@@ -101,7 +104,7 @@ SmartFileLauncher/
 - **Framework**: .NET 8, WPF
 - **Dil**: C# 12
 - **Platform**: Windows 10/11
-- **Bağımlılıklar**: Yok (sadece standart .NET)
+- **Bağımlılıklar**: NuGet paketleri çözüm restore edilirken yüklenir
 
 ### Performans
 
@@ -119,6 +122,9 @@ Eğitim amaçlı proje.
 
 ## 📚 Dokümantasyon
 
-Projenin teknik detayları, mimarisi ve kullanılan veri yapıları hakkında detaylı bilgi için:
-- [Teknik Referans ve Mimari](TECHNICAL_REFERENCE.md)
-- [Veri Yapıları Analizi](DATA_STRUCTURES.md)
+Tüm belgeler için [dokümantasyon indeksine](docs/README.md) bakın.
+
+- [Derleme ve yayınlama](docs/guides/build.md)
+- [Teknik referans](docs/architecture/technical-reference.md)
+- [Veri yapıları](docs/architecture/data-structures.md)
+- [Güvenlik](SECURITY.md)

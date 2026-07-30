@@ -214,7 +214,7 @@ for (int i = 0; i < checkCount; i++)
 ## 🧪 Test Scenario
 
 ### Setup
-1. Run `test_large_folder.ps1` to create 10,000 test files
+1. Run `.\scripts\test-large-folder.ps1` from the repository root to create 10,000 test files
 2. Start OmniSpot
 3. Wait for delta sync to start (~47% visible)
 
