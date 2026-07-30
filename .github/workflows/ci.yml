@@ -24,7 +24,12 @@ jobs:
         run: dotnet restore SmartFileLauncher.sln
 
       - name: Build
-        run: dotnet build SmartFileLauncher.sln --configuration Release --no-restore
+        run: >-
+          dotnet build SmartFileLauncher.sln
+          --configuration Release
+          --no-restore
+          -warnaserror
+          -warnnotaserror:NU1701
 
       - name: Test
         run: >-
