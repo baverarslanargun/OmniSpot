@@ -634,7 +634,10 @@
                               MaxHeight="500"
                               ContextMenu="{StaticResource EmptyAreaContextMenu}"
                               MouseRightButtonDown="EmptyArea_RightClick">
-                    <ItemsControl x:Name="DesktopIcons" Margin="20,12,20,20" HorizontalAlignment="Center">
+                    <ItemsControl x:Name="DesktopIcons"
+                                  ItemsSource="{Binding DesktopIcons}"
+                                  Margin="20,12,20,20"
+                                  HorizontalAlignment="Center">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"/>
@@ -1062,6 +1065,7 @@
                         
                         <!-- List View - Modern Design -->
                         <ListView x:Name="ResultsList"
+                                  ItemsSource="{Binding SearchResults}"
                                   Grid.Row="1"
                                   Background="Transparent" 
                                   BorderThickness="0" 
