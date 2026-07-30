@@ -27,6 +27,17 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj `
 Bu komut `publish\OmniSpot.exe` dosyasını oluşturur (~70MB).
 .NET runtime gerektirmez, tek başına çalışır.
 
+## ⚠️ Uyarı Politikası
+
+Repo kökündeki `Directory.Build.props` yeni derleyici ve NuGet uyarılarını hata
+olarak ele alır. Eski Windows API Code Pack bağımlılığından gelen `NU1701`, paket
+değişimi tamamlanana kadar kayıtlı geçici istisnadır. CI build'i MSBuild
+uyarılarını da reddeder.
+
+NuGet audit servisine erişilemeyen çevrimdışı bir yerel doğrulamada restore
+geçici olarak `-p:NuGetAudit=false` ile çalıştırılabilir. Bu seçenek CI'da
+kullanılmamalıdır; normal akışta paket güvenlik denetimi açık kalır.
+
 ## 📦 Kurulum Dosyası Oluşturma
 
 ### Gereksinimler

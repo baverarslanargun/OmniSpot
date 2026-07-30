@@ -1,0 +1,7 @@
+<Project>
+  <PropertyGroup>
+    <!-- Yeni uyarılar build'i durdurur; yalnız kayıtlı uyumluluk borcu geçici olarak korunur. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>$(WarningsNotAsErrors);NU1701</WarningsNotAsErrors>
+  </PropertyGroup>
+</Project>
