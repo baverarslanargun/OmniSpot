@@ -172,7 +172,8 @@ public class AdvancedSearchEngine {
             pq.Enqueue(new SearchResult { 
                 Name = node.Name, 
                 FullPath = node.FullPath, 
-                Score = score 
+                Score = score,
+                IsDirectory = node.IsDirectory
             }, -score);
         }
         

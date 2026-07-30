@@ -32,6 +32,28 @@ public sealed class SearchBehaviorTests
 
         var result = Assert.Single(results);
         Assert.Equal(exact.FullPath, result.FullPath);
+        Assert.False(result.IsDirectory);
+    }
+
+    [Fact]
+    public void StandardSearchMarksDirectoryResults()
+    {
+        var index = new InvertedIndex();
+        var tokenizer = new BasicTokenizer();
+        var directory = new FileSystemNode(
+            "Reports",
+            @"C:\Workspace\Reports",
+            true);
+
+        AddToIndex(index, tokenizer, directory);
+        var engine = new SearchEngine(
+            index,
+            tokenizer,
+            new BasicScoringStrategy());
+
+        var result = Assert.Single(engine.Search("Reports"));
+
+        Assert.True(result.IsDirectory);
     }
 
     [Fact]
@@ -107,6 +129,32 @@ public sealed class SearchBehaviorTests
 
         Assert.NotEmpty(results);
         Assert.All(results, result => Assert.Equal(matchingPdf.FullPath, result.FullPath));
+    }
+
+    [Fact]
+    public void AdvancedSearchMarksDirectoryResults()
+    {
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var reports = new FileSystemNode(
+            "Reports",
+            @"C:\Root\Reports",
+            true);
+        root.AddChild(reports);
+        var engine = new AdvancedSearchEngine(
+            new InvertedIndex(),
+            new BasicTokenizer(),
+            new BasicScoringStrategy(),
+            root);
+        var query = new StructuredQuery
+        {
+            FilterOnlyMode = true,
+            TargetType = new TargetType { File = 0, Folder = 1 }
+        };
+
+        var result = Assert.Single(engine.Search(query));
+
+        Assert.Equal(reports.FullPath, result.FullPath);
+        Assert.True(result.IsDirectory);
     }
 
     [Fact]

@@ -3,6 +3,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using SmartFileLauncher.UI.Composition;
+using SmartFileLauncher.UI.Services;
 using SmartFileLauncher.UI.Views;
 
 namespace SmartFileLauncher.UI;
@@ -16,6 +17,11 @@ public partial class App : System.Windows.Application
 	protected override void OnStartup(StartupEventArgs e)
 	{
 		base.OnStartup(e);
+		var indexRebuildFailed = e.Args.Any(argument =>
+			string.Equals(
+				argument,
+				IndexMaintenanceService.RebuildFailedArgument,
+				StringComparison.OrdinalIgnoreCase));
 		AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
 		DispatcherUnhandledException += App_DispatcherUnhandledException;
 
@@ -23,6 +29,16 @@ public partial class App : System.Windows.Application
 		_mainWindow = _compositionRoot.CreateMainWindow();
 		MainWindow = _mainWindow;
 		_mainWindow.Show();
+
+		if (indexRebuildFailed)
+		{
+			System.Windows.MessageBox.Show(
+				_mainWindow,
+				"İndeks dosyaları silinemedi. OmniSpot mevcut indeksle açıldı. Dosyaların başka bir süreç tarafından kullanılmadığını kontrol edip yeniden deneyin.",
+				"İndeks Yeniden Oluşturulamadı",
+				MessageBoxButton.OK,
+				MessageBoxImage.Warning);
+		}
 	}
 
 	protected override void OnExit(ExitEventArgs e)

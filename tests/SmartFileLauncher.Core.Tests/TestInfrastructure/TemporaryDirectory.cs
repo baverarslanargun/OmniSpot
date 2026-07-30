@@ -32,7 +32,7 @@ internal sealed class TemporaryDirectory : IDisposable
     {
         if (!Directory.Exists(Path)) return;
 
-        const int maxAttempts = 5;
+        const int maxAttempts = 7;
         for (var attempt = 0; attempt < maxAttempts; attempt++)
         {
             try

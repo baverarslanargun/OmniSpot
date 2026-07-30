@@ -1,4 +1,4 @@
-namespace SmartFileLauncher.UI.Services;
+namespace SmartFileLauncher.Core.Application.Files;
 
 public enum FileItemKind
 {
