@@ -18,15 +18,10 @@ Bu sınıf, uygulamanın "Bulanık Arama" (Fuzzy Search) yeteneğini sağlayan k
 
 ## 2. Servisler (Services)
 
-### FileSystemScanner.cs
-*   **İşlev:** Diski tarayıp bellekteki veri yapılarını (Ağaç ve İndeks) inşa eder.
-*   **Veri Yapıları:** N-ary Tree (Ağaç), Dictionary (Metadata), Inverted Index (Ters Dizin).
-*   **Algoritma:** DFS (Depth-First Search) - Klasörleri derinlemesine (recursive) tarar.
-
 ### IndexManager.cs
-*   **İşlev:** İndeksleme sürecini yönetir, veritabanı ve bellek arasındaki senkronizasyonu sağlar.
+*   **İşlev:** Tüm standart köklerde ilk taramayı, kalıcı indeks yüklemeyi, veritabanı/bellek senkronizasyonunu ve canlı dosya izlemeyi yönetir.
 *   **Veri Yapıları:** HashSet (Senkronize dosyalar için $O(1)$), Dictionary.
-*   **Algoritma:** Delta Sync - Disk ve DB arasındaki farkı bulur.
+*   **Algoritma:** Recursive bootstrap taraması ve Delta Sync - Disk ve DB arasındaki farkı bulur.
 
 ### IndexDatabase.cs
 *   **İşlev:** Verilerin kalıcı olarak saklanmasını (Persistence) sağlar.

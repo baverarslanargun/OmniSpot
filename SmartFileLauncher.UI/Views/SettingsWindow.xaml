@@ -204,21 +204,20 @@
                     </StackPanel>
                 </Border>
                 
-                <!-- Cache Section -->
+                <!-- Search Index Section -->
                 <Border Background="White" 
                         CornerRadius="12" 
                         Padding="16">
                     <StackPanel>
-                        <TextBlock Text="💾 Önbellek (Cache)" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="🔎 Arama İndeksi" Style="{StaticResource SectionHeader}"/>
+
+                        <TextBlock Text="Dosya adları ve arama bilgileri hızlı erişim için yerel indekste saklanır."
+                                   FontSize="12"
+                                   Foreground="#86868B"
+                                   TextWrapping="Wrap"
+                                   Margin="0,0,0,12"/>
                         
-                        <CheckBox x:Name="UseCacheCheckbox"
-                                  Content="SQLite önbellek kullan (hızlı başlangıç)"
-                                  FontSize="13"
-                                  Foreground="#1D1D1F"
-                                  IsChecked="True"
-                                  Margin="0,0,0,12"/>
-                        
-                        <TextBlock Text="Önbellek durumu:"
+                        <TextBlock Text="İndeks durumu:"
                                    FontSize="12"
                                    Foreground="#86868B"
                                    Margin="0,0,0,4"/>
@@ -233,17 +232,17 @@
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0">
-                                    <TextBlock x:Name="CacheStatusText"
-                                               Text="✅ Önbellek mevcut"
+                                    <TextBlock x:Name="IndexStatusText"
+                                               Text="✅ İndeks mevcut"
                                                FontSize="13"
                                                FontWeight="Medium"
                                                Foreground="#1D1D1F"/>
-                                    <TextBlock x:Name="CacheSizeText"
+                                    <TextBlock x:Name="IndexSizeText"
                                                Text="Boyut: 0 KB"
                                                FontSize="11"
                                                Foreground="#86868B"
                                                Margin="0,2,0,0"/>
-                                    <TextBlock x:Name="CachePathText"
+                                    <TextBlock x:Name="IndexPathText"
                                                Text="Konum: %APPDATA%\OmniSpot\index.db"
                                                FontSize="10"
                                                Foreground="#AAAAAA"
@@ -254,20 +253,20 @@
                         </Border>
                         
                         <StackPanel Orientation="Horizontal">
-                            <Button x:Name="ClearCacheButton"
-                                    Content="🗑️ Önbelleği Temizle"
+                            <Button x:Name="RebuildIndexButton"
+                                    Content="🔄 İndeksi Yeniden Oluştur"
                                     Style="{StaticResource SecondaryButton}"
-                                    Click="ClearCache_Click"
+                                    Click="RebuildIndex_Click"
                                     Padding="12,8"/>
-                            <Button x:Name="OpenCacheFolderButton"
+                            <Button x:Name="OpenIndexFolderButton"
                                     Content="📂 Klasörü Aç"
                                     Style="{StaticResource SecondaryButton}"
-                                    Click="OpenCacheFolder_Click"
+                                    Click="OpenIndexFolder_Click"
                                     Padding="12,8"
                                     Margin="8,0,0,0"/>
                         </StackPanel>
                         
-                        <TextBlock Text="💡 Önbellek temizlendiğinde sonraki açılışta dosyalar yeniden taranır."
+                        <TextBlock Text="💡 Eksik veya eski sonuçlarda indeksi yeniden oluşturabilirsiniz. Uygulama yeniden başlatılır ve standart klasörler tekrar taranır."
                                    FontSize="11"
                                    Foreground="#86868B"
                                    TextWrapping="Wrap"

@@ -9,7 +9,7 @@ Bu rehber aktif Groq + rule-based fallback akışının manuel doğrulamasını 
 - Güncel bir build
 - Groq başarı senaryosu için geçerli bir API anahtarı ve ağ erişimi
 
-Varsayılan cache-backed akış Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini indeksler. Cache kapalı eski fallback yalnız Desktop'ı taradığı için bu rehber test verisini Desktop altında oluşturur.
+OmniSpot Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini tek kalıcı indeks üzerinden tarar ve canlı izler. Bu rehber, test verisini kolayca ayırmak ve temizlemek için Desktop altında oluşturur.
 
 ## Test verisini hazırla
 

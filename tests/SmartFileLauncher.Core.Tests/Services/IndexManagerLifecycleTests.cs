@@ -8,6 +8,59 @@ namespace SmartFileLauncher.Core.Tests.Services;
 public sealed class IndexManagerLifecycleTests
 {
     [Fact]
+    public async Task MultiRootCacheReload_PreservesFilesAndWatcherCoverage()
+    {
+        using var workspace = new TemporaryDirectory();
+        var firstRoot = workspace.CreateDirectory("first-root");
+        var secondRoot = workspace.CreateDirectory("second-root");
+        var firstFile = workspace.CreateFile(Path.Combine("first-root", "alpha-document.txt"));
+        var secondFile = workspace.CreateFile(Path.Combine("second-root", "beta-document.txt"));
+        var databasePath = Path.Combine(workspace.Path, "index.db");
+        var roots = new[] { firstRoot, secondRoot };
+
+        var firstDatabase = new IndexDatabase(databasePath);
+        var firstWatcher = new FileWatcherService(debounceMs: 1);
+        var firstManager = new IndexManager(firstDatabase, firstWatcher);
+
+        try
+        {
+            await firstManager.InitializeAsync(roots);
+
+            Assert.NotNull(firstManager.GetNode(firstFile));
+            Assert.NotNull(firstManager.GetNode(secondFile));
+            Assert.Equal(2, firstWatcher.WatchedPathCount);
+        }
+        finally
+        {
+            firstManager.Dispose();
+        }
+
+        var reloadedDatabase = new IndexDatabase(databasePath);
+        var reloadedWatcher = new FileWatcherService(debounceMs: 1);
+        var reloadedManager = new IndexManager(reloadedDatabase, reloadedWatcher);
+
+        try
+        {
+            await reloadedManager.InitializeAsync(roots);
+
+            Assert.NotNull(reloadedManager.GetNode(firstFile));
+            Assert.NotNull(reloadedManager.GetNode(secondFile));
+            Assert.Equal(2, reloadedWatcher.WatchedPathCount);
+
+            var rootNode = Assert.IsType<SmartFileLauncher.Core.Models.FileSystemNode>(
+                reloadedManager.RootNode);
+            Assert.Contains(rootNode.Children, child =>
+                string.Equals(child.FullPath, firstRoot, StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(rootNode.Children, child =>
+                string.Equals(child.FullPath, secondRoot, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            reloadedManager.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task InitializeTwiceFromTheSameCache_ReplacesRatherThanDuplicatesMemoryState()
     {
         using var workspace = new TemporaryDirectory();
