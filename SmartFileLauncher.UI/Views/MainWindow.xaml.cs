@@ -300,14 +300,12 @@ public class SearchResultViewModel : System.ComponentModel.INotifyPropertyChange
 }
 
 public partial class MainWindow : Window {
-    private readonly FileSystemScanner _scanner;
-    private IndexManager? _indexManager; // Yeni: Akıllı cache sistemi
+    private IndexManager? _indexManager;
     private SearchEngine? _searchEngine;
     private AdvancedSearchEngine? _advancedSearchEngine;
     private IntentParser? _intentParser;
     private IThumbnailService? _thumbnailService;
     private InvertedIndex? _index;
-    private IReadOnlyDictionary<string, FileMetadata>? _meta;
     private FileSystemNode? _root;
     private string _desktopPath = ""; // Desktop path for icon loading
     private string? _currentFolderPath = null; // Currently browsed folder (null = home/desktop)
@@ -318,7 +316,6 @@ public partial class MainWindow : Window {
     private bool _isNaturalLanguageMode = false;
     private bool _isGridViewMode = false; // Grid görünümü için
     private bool _hasInternetConnection = true; // İnternet bağlantısı durumu
-    private bool _useCachedIndex = true; // SQLite cache kullan
     private System.Threading.Timer? _internetCheckTimer;
     private System.Threading.Timer? _fileChangeDebounceTimer; // Dosya değişikliği debounce
     private const int FILE_CHANGE_DEBOUNCE_MS = 1000; // 1 saniye debounce (daha az kasma için artırıldı)
@@ -340,10 +337,6 @@ public partial class MainWindow : Window {
         
         // Ayarları yükle
         _appSettings = AppSettings.Load();
-        
-        // Initialize scanner
-        var tokenizer = new BasicTokenizer();
-        _scanner = new FileSystemScanner(tokenizer);
         
         // Initialize thumbnail service
         _thumbnailService = new ThumbnailService(Log);
@@ -392,9 +385,6 @@ public partial class MainWindow : Window {
     /// Varsayılan ayarları uygular
     /// </summary>
     private void ApplyDefaultSettings() {
-        // Cache ayarını uygula
-        _useCachedIndex = _appSettings.UseCachedIndex;
-        
         if (_appSettings.NaturalLanguageModeEnabled) {
             NaturalLanguageToggle.IsChecked = true;
         }
@@ -778,13 +768,7 @@ public partial class MainWindow : Window {
             // Kök dizinleri sakla (navigasyon için)
             _indexedRootPaths = pathsToIndex;
             
-            if (_useCachedIndex) {
-                // Yeni: IndexManager ile akıllı cache
-                await InitializeWithCacheAsync(pathsToIndex, desktop);
-            } else {
-                // Eski: Sıfırdan tarama
-                await InitializeWithFullScanAsync();
-            }
+            await InitializeIndexAsync(pathsToIndex, desktop);
             
         } catch (Exception ex) {
             Log($"❌ HATA: {ex.Message}");
@@ -799,9 +783,9 @@ public partial class MainWindow : Window {
     }
     
     /// <summary>
-    /// Yeni: IndexManager ile akıllı cache kullanarak başlat
+    /// Tüm kök dizinleri kalıcı indeks ve canlı dosya izleme ile başlatır.
     /// </summary>
-    private async Task InitializeWithCacheAsync(List<string> pathsToIndex, string desktopPath) {
+    private async Task InitializeIndexAsync(List<string> pathsToIndex, string desktopPath) {
         var sw = Stopwatch.StartNew();
         
         // IndexManager oluştur
@@ -827,12 +811,11 @@ public partial class MainWindow : Window {
         
         Log($"📦 Database: {_indexManager.DatabasePath}");
         
-        // Initialize with all paths (cache varsa yükler, yoksa tarar)
+        // Kayıtlı indeks varsa yükle, yoksa tüm kökleri tara.
         await _indexManager.InitializeAsync(pathsToIndex);
         
         // IndexManager'dan veri yapılarını al
         _index = _indexManager.InvertedIndex;
-        _meta = null;
         _root = _indexManager.RootNode;
         
         // Desktop path'i sakla (icon yükleme için)
@@ -884,51 +867,6 @@ public partial class MainWindow : Window {
             }
             
             // Hide loading, show content
-            LoadingOverlay.Visibility = Visibility.Collapsed;
-            DesktopIconsScroll.Visibility = Visibility.Visible;
-            SearchBox.Focus();
-        });
-    }
-    
-    /// <summary>
-    /// Eski: Sıfırdan tam tarama (fallback)
-    /// </summary>
-    private async Task InitializeWithFullScanAsync() {
-        Log("Desktop taraması başlatılıyor (cache devre dışı)...");
-        LoadingStatus.Text = "Desktop taranıyor...";
-        
-        await Task.Run(() => {
-            _root = _scanner.ScanDesktop(out var index, out var meta);
-            _index = index;
-            _meta = meta;
-        });
-        
-        await Dispatcher.InvokeAsync(() => {
-            var fileCount = _root!.Children.Count;
-            LoadingStatus.Text = $"{fileCount} öğe bulundu";
-            Log($"✅ Tarama tamamlandı: {fileCount} öğe bulundu");
-            Log($"📂 Taranan yol: {_root.FullPath}");
-            
-            var rootNode = _root ?? throw new InvalidOperationException("Tarama kök düğüm üretmedi.");
-            _searchEngine = new SearchEngine(_index!, new BasicTokenizer(), new BasicScoringStrategy());
-            _advancedSearchEngine = new AdvancedSearchEngine(
-                _index!,
-                new BasicTokenizer(),
-                new BasicScoringStrategy(),
-                rootNode);
-            
-            try {
-                _intentParser = new IntentParser(Log);
-                Log("✅ Rule-based intent parser hazır");
-            } catch (Exception ex) {
-                Log($"⚠️ Intent parser yüklenemedi: {ex.Message}");
-            }
-            
-            LoadDesktopIcons();
-            _isIndexed = true;
-            
-            Log("✅ İndeksleme tamamlandı, arama motoru hazır");
-            
             LoadingOverlay.Visibility = Visibility.Collapsed;
             DesktopIconsScroll.Visibility = Visibility.Visible;
             SearchBox.Focus();
@@ -2104,11 +2042,7 @@ public partial class MainWindow : Window {
             } else {
                 // Dosyayı sistem ile aç
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                if (_indexManager != null) {
-                    _indexManager.IncrementOpenCount(path);
-                } else if (_meta != null && _meta.TryGetValue(path, out var meta)) {
-                    meta.OpenCount++;
-                }
+                _indexManager?.IncrementOpenCount(path);
             }
         } catch (Exception ex) {
             System.Windows.MessageBox.Show($"Açılamadı: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
