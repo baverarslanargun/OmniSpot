@@ -2,19 +2,34 @@ using System;
 using System.IO;
 using System.Text;
 using System.Windows;
+using SmartFileLauncher.UI.Composition;
+using SmartFileLauncher.UI.Views;
 
 namespace SmartFileLauncher.UI;
 
 public partial class App : System.Windows.Application 
 {
-	private static string _logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot_crash.log");
+	private static readonly string _logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot_crash.log");
+	private ApplicationCompositionRoot? _compositionRoot;
+	private MainWindow? _mainWindow;
 
 	protected override void OnStartup(StartupEventArgs e)
 	{
 		base.OnStartup(e);
-		// No settings loading needed - rule-based parser only
 		AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
 		DispatcherUnhandledException += App_DispatcherUnhandledException;
+
+		_compositionRoot = new ApplicationCompositionRoot();
+		_mainWindow = _compositionRoot.CreateMainWindow();
+		MainWindow = _mainWindow;
+		_mainWindow.Show();
+	}
+
+	protected override void OnExit(ExitEventArgs e)
+	{
+		_mainWindow?.PrepareForShutdown();
+		_compositionRoot?.Dispose();
+		base.OnExit(e);
 	}
 
 	private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
