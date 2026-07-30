@@ -7,339 +7,150 @@ using System.Windows.Controls;
 using System.Collections.ObjectModel;
 using System.Threading.Tasks;
 using System.Text.Json;
-using System.Windows.Media;
-using System.Net.NetworkInformation;
 using System.IO;
+using SmartFileLauncher.Core.Application.Connectivity;
+using SmartFileLauncher.Core.Application.Files;
+using SmartFileLauncher.Core.Application.Indexing;
+using SmartFileLauncher.Core.Application.Refresh;
+using SmartFileLauncher.Core.Application.Search;
+using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
-using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.UI.Services;
-using SmartFileLauncher.UI.Models;
+using SmartFileLauncher.UI.ViewModels;
 
 namespace SmartFileLauncher.UI.Views;
 
-public class DesktopIconViewModel : System.ComponentModel.INotifyPropertyChanged {
-    private string _name = "";
-    private string _fullPath = "";
-    private string _icon = "📄";
-    private bool _isDirectory = false;
-    private bool _isCut = false;
-    private double _opacity = 1.0;
-    
-    // Thread-safe frozen brushes (cached and reused)
-    private static readonly Dictionary<string, System.Windows.Media.Brush> _brushCache = new();
-    private static readonly object _brushCacheLock = new();
-    
-    private static System.Windows.Media.Brush GetOrCreateFrozenBrush(byte r, byte g, byte b)
-    {
-        var key = $"{r},{g},{b}";
-        lock (_brushCacheLock)
-        {
-            if (_brushCache.TryGetValue(key, out var cached))
-                return cached;
-            
-            var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
-            brush.Freeze(); // Makes it thread-safe
-            _brushCache[key] = brush;
-            return brush;
-        }
-    }
-    
-    public string Name { 
-        get => _name; 
-        set { 
-            if (_name != value) { 
-                _name = value; 
-                OnPropertyChanged(nameof(Name)); 
-            } 
-        } 
-    }
-    
-    public string FullPath { 
-        get => _fullPath; 
-        set { 
-            if (_fullPath != value) { 
-                _fullPath = value; 
-                OnPropertyChanged(nameof(FullPath)); 
-            } 
-        } 
-    }
-    
-    public string Icon { 
-        get => _icon; 
-        set { 
-            if (_icon != value) { 
-                _icon = value; 
-                OnPropertyChanged(nameof(Icon)); 
-            } 
-        } 
-    }
-    
-    public bool IsDirectory { 
-        get => _isDirectory; 
-        set { 
-            if (_isDirectory != value) { 
-                _isDirectory = value; 
-                OnPropertyChanged(nameof(IsDirectory)); 
-            } 
-        } 
-    }
-    
-    /// <summary>
-    /// Kes işlemi yapıldığında true olur - silik görünüm için
-    /// </summary>
-    public bool IsCut { 
-        get => _isCut; 
-        set { 
-            if (_isCut != value) { 
-                _isCut = value; 
-                Opacity = value ? 0.5 : 1.0; // Kesilen öğe %50 şeffaf
-                OnPropertyChanged(nameof(IsCut)); 
-            } 
-        } 
-    }
-    
-    /// <summary>
-    /// Öğenin opaklığı (0-1 arası, kes işleminde 0.5)
-    /// </summary>
-    public double Opacity { 
-        get => _opacity; 
-        set { 
-            if (_opacity != value) { 
-                _opacity = value; 
-                OnPropertyChanged(nameof(Opacity)); 
-            } 
-        } 
-    }
-    
-    // Folder colors based on folder type (using frozen brushes for thread safety)
-    private System.Windows.Media.Brush _folderColor = GetOrCreateFrozenBrush(99, 102, 241);
-    private System.Windows.Media.Brush _folderColorLight = GetOrCreateFrozenBrush(129, 140, 248);
-    
-    public System.Windows.Media.Brush FolderColor { 
-        get => _folderColor; 
-        set { 
-            if (_folderColor != value) { 
-                _folderColor = value; 
-                OnPropertyChanged(nameof(FolderColor)); 
-            } 
-        } 
-    }
-    
-    public System.Windows.Media.Brush FolderColorLight { 
-        get => _folderColorLight; 
-        set { 
-            if (_folderColorLight != value) { 
-                _folderColorLight = value; 
-                OnPropertyChanged(nameof(FolderColorLight)); 
-            } 
-        } 
-    }
-    
-    private ImageSource? _thumbnail;
-    public ImageSource? Thumbnail
-    {
-        get => _thumbnail;
-        set
-        {
-            if (_thumbnail != value)
-            {
-                _thumbnail = value;
-                OnPropertyChanged(nameof(Thumbnail));
-            }
-        }
-    }
-    
-    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-    
-    private void OnPropertyChanged(string propertyName) {
-        PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(propertyName));
-    }
-    
-    /// <summary>
-    /// Klasör adına göre renk belirler (thread-safe frozen brushes kullanır)
-    /// </summary>
-    public void SetFolderColors(string folderName)
-    {
-        var name = folderName.ToLowerInvariant();
-        
-        if (name.Contains("document") || name.Contains("belgeler") || name == "documents")
-        {
-            // Blue
-            FolderColor = GetOrCreateFrozenBrush(59, 130, 246);
-            FolderColorLight = GetOrCreateFrozenBrush(96, 165, 250);
-        }
-        else if (name.Contains("download") || name.Contains("indirilenler") || name == "downloads")
-        {
-            // Green
-            FolderColor = GetOrCreateFrozenBrush(16, 185, 129);
-            FolderColorLight = GetOrCreateFrozenBrush(52, 211, 153);
-        }
-        else if (name.Contains("desktop") || name.Contains("masaüstü") || name == "masaüstü")
-        {
-            // Purple
-            FolderColor = GetOrCreateFrozenBrush(139, 92, 246);
-            FolderColorLight = GetOrCreateFrozenBrush(167, 139, 250);
-        }
-        else if (name.Contains("music") || name.Contains("müzik") || name == "music")
-        {
-            // Pink
-            FolderColor = GetOrCreateFrozenBrush(236, 72, 153);
-            FolderColorLight = GetOrCreateFrozenBrush(244, 114, 182);
-        }
-        else if (name.Contains("picture") || name.Contains("resim") || name == "pictures")
-        {
-            // Orange/Amber
-            FolderColor = GetOrCreateFrozenBrush(245, 158, 11);
-            FolderColorLight = GetOrCreateFrozenBrush(251, 191, 36);
-        }
-        else if (name.Contains("video") || name.Contains("videolar") || name == "videos")
-        {
-            // Red
-            FolderColor = GetOrCreateFrozenBrush(239, 68, 68);
-            FolderColorLight = GetOrCreateFrozenBrush(248, 113, 113);
-        }
-        else
-        {
-            // Default Indigo
-            FolderColor = GetOrCreateFrozenBrush(99, 102, 241);
-            FolderColorLight = GetOrCreateFrozenBrush(129, 140, 248);
-        }
-    }
-}
-
-public class SearchResultViewModel : System.ComponentModel.INotifyPropertyChanged {
-    public string Name { get; set; } = "";
-    public string FullPath { get; set; } = "";
-    public double Score { get; set; }
-    public string Icon { get; set; } = "📄";
-    public bool IsDirectory { get; set; } = false;
-    
-    // Thread-safe frozen brush helper (reuses DesktopIconViewModel's cache)
-    private static System.Windows.Media.Brush GetFrozenBrush(byte r, byte g, byte b)
-    {
-        var brush = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(r, g, b));
-        brush.Freeze(); // Makes it thread-safe
-        return brush;
-    }
-    
-    // Folder colors based on folder type (using frozen brushes)
-    private static readonly System.Windows.Media.Brush DefaultFolderColor = GetFrozenBrush(99, 102, 241);
-    private static readonly System.Windows.Media.Brush DefaultFolderColorLight = GetFrozenBrush(129, 140, 248);
-    
-    public System.Windows.Media.Brush FolderColor { get; set; } = DefaultFolderColor;
-    public System.Windows.Media.Brush FolderColorLight { get; set; } = DefaultFolderColorLight;
-    
-    private ImageSource? _thumbnail;
-    public ImageSource? Thumbnail
-    {
-        get => _thumbnail;
-        set
-        {
-            if (_thumbnail != value)
-            {
-                _thumbnail = value;
-                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Thumbnail)));
-            }
-        }
-    }
-    
-    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
-    
-    /// <summary>
-    /// Klasör adına göre renk belirler (thread-safe frozen brushes kullanır)
-    /// </summary>
-    public void SetFolderColors(string folderName)
-    {
-        var name = folderName.ToLowerInvariant();
-        
-        if (name.Contains("document") || name.Contains("belgeler") || name == "documents")
-        {
-            // Blue
-            FolderColor = GetFrozenBrush(59, 130, 246);
-            FolderColorLight = GetFrozenBrush(96, 165, 250);
-        }
-        else if (name.Contains("download") || name.Contains("indirilenler") || name == "downloads")
-        {
-            // Green
-            FolderColor = GetFrozenBrush(16, 185, 129);
-            FolderColorLight = GetFrozenBrush(52, 211, 153);
-        }
-        else if (name.Contains("desktop") || name.Contains("masaüstü") || name == "masaüstü")
-        {
-            // Purple
-            FolderColor = GetFrozenBrush(139, 92, 246);
-            FolderColorLight = GetFrozenBrush(167, 139, 250);
-        }
-        else if (name.Contains("music") || name.Contains("müzik") || name == "music")
-        {
-            // Pink
-            FolderColor = GetFrozenBrush(236, 72, 153);
-            FolderColorLight = GetFrozenBrush(244, 114, 182);
-        }
-        else if (name.Contains("picture") || name.Contains("resim") || name == "pictures")
-        {
-            // Orange/Amber
-            FolderColor = GetFrozenBrush(245, 158, 11);
-            FolderColorLight = GetFrozenBrush(251, 191, 36);
-        }
-        else if (name.Contains("video") || name.Contains("videolar") || name == "videos")
-        {
-            // Red
-            FolderColor = GetFrozenBrush(239, 68, 68);
-            FolderColorLight = GetFrozenBrush(248, 113, 113);
-        }
-        else
-        {
-            // Default Indigo
-            FolderColor = DefaultFolderColor;
-            FolderColorLight = DefaultFolderColorLight;
-        }
-    }
-}
 
 public partial class MainWindow : Window {
-    private IndexManager? _indexManager;
-    private SearchEngine? _searchEngine;
-    private AdvancedSearchEngine? _advancedSearchEngine;
-    private IntentParser? _intentParser;
-    private IThumbnailService? _thumbnailService;
-    private InvertedIndex? _index;
-    private FileSystemNode? _root;
-    private string _desktopPath = ""; // Desktop path for icon loading
-    private string? _currentFolderPath = null; // Currently browsed folder (null = home/desktop)
-    private List<string> _indexedRootPaths = new(); // İndekslenen kök dizinler
-    private readonly ObservableCollection<DesktopIconViewModel> _desktopIcons = new();
-    private readonly ObservableCollection<SearchResultViewModel> _searchResults = new();
-    private bool _isIndexed = false;
-    private bool _isNaturalLanguageMode = false;
-    private bool _isGridViewMode = false; // Grid görünümü için
-    private bool _hasInternetConnection = true; // İnternet bağlantısı durumu
-    private System.Threading.Timer? _internetCheckTimer;
+    private readonly MainWindowViewModel _viewModel;
+    private readonly ISettingsApplicationService _settingsApplication;
+    private readonly IIndexMaintenanceService _indexMaintenance;
+    private readonly IIndexLifecycleService _indexLifecycle;
+    private readonly ISearchApplicationService _searchService;
+    private readonly ISearchDiagnosticsService _searchDiagnostics;
+    private readonly IThumbnailService _thumbnailService;
+    private readonly IFolderNavigationService _folderNavigation;
+    private readonly IConnectivityMonitor _connectivityMonitor;
+    private readonly IFileOperationService _fileOperations;
+    private readonly IApplicationShellService _shellService;
+    private readonly ApplicationLog _applicationLog;
+    private string _desktopPath {
+        get => _viewModel.DesktopPath;
+        set => _viewModel.DesktopPath = value;
+    }
+    private string? _currentFolderPath {
+        get => _viewModel.CurrentFolderPath;
+        set => _viewModel.CurrentFolderPath = value;
+    }
+    private List<string> _indexedRootPaths {
+        get => _viewModel.IndexedRootPaths;
+        set => _viewModel.IndexedRootPaths = value;
+    }
+    private ObservableCollection<DesktopIconViewModel> _desktopIcons =>
+        _viewModel.DesktopIcons;
+    private ObservableCollection<SearchResultViewModel> _searchResults =>
+        _viewModel.SearchResults;
+    private bool _isIndexed {
+        get => _viewModel.IsIndexed;
+        set => _viewModel.IsIndexed = value;
+    }
+    private bool _isNaturalLanguageMode {
+        get => _viewModel.IsNaturalLanguageMode;
+        set => _viewModel.IsNaturalLanguageMode = value;
+    }
+    private bool _isGridViewMode {
+        get => _viewModel.IsGridViewMode;
+        set => _viewModel.IsGridViewMode = value;
+    }
     private System.Threading.Timer? _fileChangeDebounceTimer; // Dosya değişikliği debounce
+    private readonly object _fileChangeTimerLock = new();
+    private readonly RefreshCoalescer _fileChangeRefresh = new();
     private const int FILE_CHANGE_DEBOUNCE_MS = 1000; // 1 saniye debounce (daha az kasma için artırıldı)
-    private bool _isProcessingFileChange = false; // Çift işleme engeli
     private CancellationTokenSource? _currentSearchCancellation;
+    private CancellationTokenSource? _folderLoadCancellation;
+    private readonly CancellationTokenSource _lifetimeCancellation = new();
     private long _searchVersion;
-    private string _lastSearchQuery = ""; // Son arama sorgusu (retry için)
+    private volatile bool _isPreparedForShutdown;
+    private string _lastSearchQuery {
+        get => _viewModel.LastSearchQuery;
+        set => _viewModel.LastSearchQuery = value;
+    }
+    private string? _selectedItemPath {
+        get => _viewModel.SelectedItemPath;
+        set => _viewModel.SelectedItemPath = value;
+    }
+    private string? _clipboardPath {
+        get => _viewModel.ClipboardPath;
+        set => _viewModel.ClipboardPath = value;
+    }
+    private bool _isCutOperation {
+        get => _viewModel.IsCutOperation;
+        set => _viewModel.IsCutOperation = value;
+    }
+    private string? _hoveredItemPath {
+        get => _viewModel.HoveredItemPath;
+        set => _viewModel.HoveredItemPath = value;
+    }
+    private DesktopIconViewModel? _hoveredItem {
+        get => _viewModel.HoveredItem;
+        set => _viewModel.HoveredItem = value;
+    }
+    private DesktopIconViewModel? _cutItem {
+        get => _viewModel.CutItem;
+        set => _viewModel.CutItem = value;
+    }
     private const int DEBOUNCE_DELAY_MS = 1200; // 1.2 seconds delay after last keystroke (increased from 400ms)
     private const int THUMBNAIL_SIZE = 128; // Thumbnail boyutu
-    private const int INTERNET_CHECK_INTERVAL_MS = 10000; // 10 saniyede bir kontrol
     
-    // Global Hotkey ve Ayarlar
-    private GlobalHotkeyService? _hotkeyService;
-    private AppSettings _appSettings = null!;
-    private System.Windows.Forms.NotifyIcon? _notifyIcon;
+    private AppSettings _appSettings;
     
-    public MainWindow() {
+    public MainWindow(
+        MainWindowViewModel viewModel,
+        AppSettings appSettings,
+        ISettingsApplicationService settingsApplication,
+        IIndexMaintenanceService indexMaintenance,
+        IIndexLifecycleService indexLifecycle,
+        ISearchApplicationService searchService,
+        ISearchDiagnosticsService searchDiagnostics,
+        IThumbnailService thumbnailService,
+        IFolderNavigationService folderNavigation,
+        IConnectivityMonitor connectivityMonitor,
+        IFileOperationService fileOperations,
+        IApplicationShellService shellService,
+        ApplicationLog applicationLog) {
+        _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
+        _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
+        _settingsApplication = settingsApplication ?? throw new ArgumentNullException(nameof(settingsApplication));
+        _indexMaintenance = indexMaintenance ?? throw new ArgumentNullException(nameof(indexMaintenance));
+        _indexLifecycle = indexLifecycle ?? throw new ArgumentNullException(nameof(indexLifecycle));
+        _searchService = searchService ?? throw new ArgumentNullException(nameof(searchService));
+        _searchDiagnostics = searchDiagnostics ?? throw new ArgumentNullException(nameof(searchDiagnostics));
+        _thumbnailService = thumbnailService ?? throw new ArgumentNullException(nameof(thumbnailService));
+        _folderNavigation = folderNavigation ?? throw new ArgumentNullException(nameof(folderNavigation));
+        _connectivityMonitor = connectivityMonitor ?? throw new ArgumentNullException(nameof(connectivityMonitor));
+        _fileOperations = fileOperations ?? throw new ArgumentNullException(nameof(fileOperations));
+        _shellService = shellService ?? throw new ArgumentNullException(nameof(shellService));
+        _applicationLog = applicationLog ?? throw new ArgumentNullException(nameof(applicationLog));
+
+        DataContext = _viewModel;
         InitializeComponent();
-        
-        // Ayarları yükle
-        _appSettings = AppSettings.Load();
-        
-        // Initialize thumbnail service
-        _thumbnailService = new ThumbnailService(Log);
+
+        _applicationLog.MessageWritten += HandleApplicationLogMessage;
+        foreach (var message in _applicationLog.GetSnapshot()) {
+            AppendLogMessage(message);
+        }
+
+        _indexLifecycle.ProgressChanged += HandleIndexProgress;
+        _indexLifecycle.Error += HandleIndexError;
+        _indexLifecycle.FileChanged += HandleFileSystemChange;
+        _indexLifecycle.ReconciliationProgressChanged += HandleReconciliationProgress;
+        _shellService.ToggleRequested += HandleShellToggleRequested;
+        _shellService.ShowRequested += HandleShellShowRequested;
+        _shellService.SettingsRequested += HandleShellSettingsRequested;
+        _shellService.ExitRequested += HandleShellExitRequested;
+        SourceInitialized += HandleSourceInitialized;
         
         // Wire up events
         SearchBox.TextChanged += SearchBox_TextChanged;
@@ -357,19 +168,8 @@ public partial class MainWindow : Window {
         ViewModeToggle.Checked += (_, __) => EnableGridView();
         ViewModeToggle.Unchecked += (_, __) => DisableGridView();
         
-        DesktopIcons.ItemsSource = _desktopIcons;
-        ResultsList.ItemsSource = _searchResults;
-        
         Log("=== OmniSpot Başlatıldı ===");
         Log("OmniSpot: Hafif Basit Masaüstü ve Tarayıcı");
-        
-        // İnternet bağlantısı kontrolü başlat
-        CheckInternetConnection();
-        StartInternetMonitoring();
-        
-        // Global hotkey ve system tray ayarla
-        SetupGlobalHotkey();
-        SetupSystemTray();
         
         // Pencere kapatma olayını yakala
         Closing += MainWindow_Closing;
@@ -378,7 +178,20 @@ public partial class MainWindow : Window {
         ApplyDefaultSettings();
         
         // Start async indexing after window loads
-        Loaded += async (_, __) => await InitializeAsync();
+        Loaded += MainWindow_Loaded;
+    }
+
+    private async void MainWindow_Loaded(object sender, RoutedEventArgs e) {
+        Loaded -= MainWindow_Loaded;
+
+        try {
+            await InitializeConnectivityAsync();
+            if (!_isPreparedForShutdown) {
+                await InitializeAsync();
+            }
+        } catch (OperationCanceledException)
+            when (_lifetimeCancellation.IsCancellationRequested) {
+        }
     }
     
     /// <summary>
@@ -399,87 +212,31 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Global hotkey servisini başlatır
-    /// </summary>
-    private void SetupGlobalHotkey() {
-        _hotkeyService = new GlobalHotkeyService();
-        _hotkeyService.HotkeyPressed += OnHotkeyPressed;
-        
-        // Pencere yüklendikten sonra hotkey'i kaydet
-        SourceInitialized += (s, e) => {
-            _hotkeyService.Initialize(this);
-            var modifiers = (GlobalHotkeyService.ModifierKeys)_appSettings.HotkeyModifiers;
-            var key = _appSettings.HotkeyKey;
-            
-            if (_hotkeyService.RegisterHotkey(modifiers, key)) {
-                Log($"✅ Global kısayol kaydedildi: {_hotkeyService.GetHotkeyString()}");
-            } else {
-                Log($"⚠️ Global kısayol kaydedilemedi: {_hotkeyService.GetHotkeyString()}");
-            }
-        };
+    private void HandleSourceInitialized(object? sender, EventArgs e) {
+        _shellService.Initialize(this, _appSettings);
     }
-    
-    /// <summary>
-    /// System tray ikonunu ayarlar
-    /// </summary>
-    private void SetupSystemTray() {
-        _notifyIcon = new System.Windows.Forms.NotifyIcon();
-        _notifyIcon.Text = "OmniSpot";
-        
-        // Varsayılan ikon (uygulama ikonu)
-        try {
-            var iconPath = System.IO.Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot.ico");
-            if (System.IO.File.Exists(iconPath)) {
-                _notifyIcon.Icon = new System.Drawing.Icon(iconPath);
-            } else {
-                // Varsayılan sistem ikonu
-                _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-            }
-        } catch {
-            _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-        }
-        
-        // Çift tıklama ile pencereyi aç
-        _notifyIcon.DoubleClick += (s, e) => ShowAndActivate();
-        
-        // Sağ tık menüsü
-        var contextMenu = new System.Windows.Forms.ContextMenuStrip();
-        
-        var showItem = new System.Windows.Forms.ToolStripMenuItem("Göster");
-        showItem.Click += (s, e) => ShowAndActivate();
-        contextMenu.Items.Add(showItem);
-        
-        var settingsItem = new System.Windows.Forms.ToolStripMenuItem("Ayarlar");
-        settingsItem.Click += (s, e) => OpenSettings();
-        contextMenu.Items.Add(settingsItem);
-        
-        contextMenu.Items.Add(new System.Windows.Forms.ToolStripSeparator());
-        
-        var exitItem = new System.Windows.Forms.ToolStripMenuItem("Çıkış");
-        exitItem.Click += (s, e) => ForceExit();
-        contextMenu.Items.Add(exitItem);
-        
-        _notifyIcon.ContextMenuStrip = contextMenu;
-        _notifyIcon.Visible = true;
-        
-        Log("📌 System tray ikonu hazır");
-    }
-    
-    /// <summary>
-    /// Hotkey tetiklendiğinde çağrılır
-    /// </summary>
-    private void OnHotkeyPressed(object? sender, EventArgs e) {
+
+    private void HandleShellToggleRequested() {
         Dispatcher.Invoke(() => {
             if (WindowState == WindowState.Minimized || !IsVisible) {
                 ShowAndActivate();
             } else {
-                // Pencere açıksa minimize et
                 MinimizeToTray();
             }
         });
     }
-    
+
+    private void HandleShellShowRequested() {
+        Dispatcher.Invoke(ShowAndActivate);
+    }
+
+    private void HandleShellSettingsRequested() {
+        Dispatcher.Invoke(OpenSettings);
+    }
+
+    private void HandleShellExitRequested() {
+        Dispatcher.Invoke(ForceExit);
+    }
     /// <summary>
     /// Pencereyi gösterir ve aktif yapar
     /// </summary>
@@ -519,23 +276,21 @@ public partial class MainWindow : Window {
     /// </summary>
     private void OpenSettings() {
         // Önce mevcut hotkey'i kaldır (ayarlar değişebilir)
-        _hotkeyService?.UnregisterHotkey();
+        _shellService.SuspendHotkey();
         
-        var settingsWindow = new SettingsWindow(_appSettings, Log);
+        var settingsWindow = new SettingsWindow(
+            _appSettings,
+            _settingsApplication,
+            _indexMaintenance,
+            Log);
         settingsWindow.Owner = this;
         settingsWindow.SettingsChanged += OnSettingsChanged;
+        settingsWindow.IndexRebuildRequested += OnIndexRebuildRequested;
         settingsWindow.ShowDialog();
         
         // Hotkey'i yeniden kaydet (değişmiş olabilir)
-        if (_hotkeyService != null) {
-            var modifiers = (GlobalHotkeyService.ModifierKeys)_appSettings.HotkeyModifiers;
-            var key = _appSettings.HotkeyKey;
-            
-            if (_hotkeyService.RegisterHotkey(modifiers, key)) {
-                Log($"✅ Global kısayol güncellendi: {_hotkeyService.GetHotkeyString()}");
-            } else {
-                Log($"⚠️ Global kısayol kaydedilemedi: {_hotkeyService.GetHotkeyString()}");
-            }
+        if (!_isPreparedForShutdown) {
+            _shellService.ApplyHotkey(_appSettings);
         }
     }
     
@@ -546,88 +301,83 @@ public partial class MainWindow : Window {
         _appSettings = newSettings;
         Log("⚙️ Ayarlar güncellendi");
     }
+
+    private void OnIndexRebuildRequested(object? sender, EventArgs e) {
+        ForceExit();
+    }
     
     /// <summary>
     /// Uygulamadan tamamen çıkış yapar
     /// </summary>
     private void ForceExit() {
-        // Stop query producers before disposing the index snapshot provider.
-        CancelCurrentSearch();
-
-        // IndexManager'ı kapat (cache'i kaydet)
-        _indexManager?.Dispose();
-        
-        // Hotkey'i kaldır
-        _hotkeyService?.Dispose();
-        
-        // System tray ikonunu kaldır
-        if (_notifyIcon != null) {
-            _notifyIcon.Visible = false;
-            _notifyIcon.Dispose();
-        }
-        
-        // Timer'ları temizle
-        _internetCheckTimer?.Dispose();
-        
-        // Kapatma olayını bypass et
-        Closing -= MainWindow_Closing;
-        
+        PrepareForShutdown();
         System.Windows.Application.Current.Shutdown();
     }
-    
-    /// <summary>
-    /// İnternet bağlantısını kontrol eder
-    /// </summary>
-    private bool CheckInternetConnection() {
+
+    internal void PrepareForShutdown() {
+        if (_isPreparedForShutdown) return;
+        _isPreparedForShutdown = true;
+
+        _lifetimeCancellation.Cancel();
+        CancelCurrentSearch();
+        var folderCancellation = Interlocked.Exchange(
+            ref _folderLoadCancellation,
+            null);
         try {
-            // Hızlı kontrol: Network interface'ler aktif mi?
-            if (!NetworkInterface.GetIsNetworkAvailable()) {
-                _hasInternetConnection = false;
-                UpdateAIButtonState();
-                return false;
-            }
-            
-            // DNS ping ile gerçek bağlantı kontrolü
-            using var ping = new Ping();
-            var reply = ping.Send("8.8.8.8", 1000); // Google DNS, 1 saniye timeout
-            _hasInternetConnection = (reply.Status == IPStatus.Success);
-        } catch {
-            _hasInternetConnection = false;
+            folderCancellation?.Cancel();
+        } finally {
+            folderCancellation?.Dispose();
         }
+
+        _applicationLog.MessageWritten -= HandleApplicationLogMessage;
+        _indexLifecycle.ProgressChanged -= HandleIndexProgress;
+        _indexLifecycle.Error -= HandleIndexError;
+        _indexLifecycle.FileChanged -= HandleFileSystemChange;
+        _indexLifecycle.ReconciliationProgressChanged -= HandleReconciliationProgress;
+        _connectivityMonitor.ConnectivityChanged -= HandleConnectivityChanged;
+        _shellService.ToggleRequested -= HandleShellToggleRequested;
+        _shellService.ShowRequested -= HandleShellShowRequested;
+        _shellService.SettingsRequested -= HandleShellSettingsRequested;
+        _shellService.ExitRequested -= HandleShellExitRequested;
+        SourceInitialized -= HandleSourceInitialized;
         
-        UpdateAIButtonState();
-        return _hasInternetConnection;
+        lock (_fileChangeTimerLock) {
+            _fileChangeDebounceTimer?.Dispose();
+            _fileChangeDebounceTimer = null;
+        }
+        Closing -= MainWindow_Closing;
     }
     
-    /// <summary>
-    /// İnternet durumunu periyodik olarak kontrol eder
-    /// </summary>
-    private void StartInternetMonitoring() {
-        _internetCheckTimer = new System.Threading.Timer(_ => {
-            Dispatcher.Invoke(() => {
-                var wasConnected = _hasInternetConnection;
-                CheckInternetConnection();
-                
-                // Durum değiştiyse log yaz
-                if (wasConnected != _hasInternetConnection) {
-                    if (_hasInternetConnection) {
-                        Log("🌐 İnternet bağlantısı sağlandı");
-                    } else {
-                        Log("⚠️ İnternet bağlantısı kesildi");
-                    }
-                }
-            });
-        }, null, INTERNET_CHECK_INTERVAL_MS, INTERNET_CHECK_INTERVAL_MS);
+    private async Task InitializeConnectivityAsync() {
+        var isConnected = await _connectivityMonitor.CheckNowAsync(
+            _lifetimeCancellation.Token);
+        UpdateAIButtonState(isConnected);
+        _connectivityMonitor.ConnectivityChanged += HandleConnectivityChanged;
+        _connectivityMonitor.Start();
+    }
+
+    private void HandleConnectivityChanged(bool isConnected) {
+        if (_isPreparedForShutdown ||
+            Dispatcher.HasShutdownStarted ||
+            Dispatcher.HasShutdownFinished) return;
+
+        Dispatcher.BeginInvoke(new Action(() => {
+            if (_isPreparedForShutdown) return;
+            UpdateAIButtonState(isConnected);
+            Log(isConnected
+                ? "🌐 İnternet bağlantısı sağlandı"
+                : "⚠️ İnternet bağlantısı kesildi");
+        }));
     }
     
     /// <summary>
     /// AI butonunun durumunu günceller
     /// </summary>
-    private void UpdateAIButtonState() {
-        NaturalLanguageToggle.IsEnabled = _hasInternetConnection;
+    private void UpdateAIButtonState(bool isConnected) {
+        NaturalLanguageToggle.IsEnabled = isConnected;
         
         // Eğer internet yoksa ve AI modu aktifse, kapat
-        if (!_hasInternetConnection && _isNaturalLanguageMode) {
+        if (!isConnected && _isNaturalLanguageMode) {
             NaturalLanguageToggle.IsChecked = false;
             _isNaturalLanguageMode = false;
             SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
@@ -645,19 +395,57 @@ public partial class MainWindow : Window {
     private int _consoleLineCount = 0;
     
     private void Log(string message) {
+        _applicationLog.Write(message);
+    }
+
+    private void HandleApplicationLogMessage(string message) {
+        if (_isPreparedForShutdown) return;
+
+        if (Dispatcher.CheckAccess()) {
+            AppendLogMessage(message);
+            return;
+        }
+
+        Dispatcher.BeginInvoke(new Action(() => AppendLogMessage(message)));
+    }
+
+    private void AppendLogMessage(string message) {
         var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
         var logLine = $"[{timestamp}] {message}\n";
-        Dispatcher.Invoke(() => {
-            _consoleLineCount++;
-            
-            // Auto-clear when too many lines to prevent memory issues
-            if (_consoleLineCount > MaxConsoleLines) {
-                ConsoleOutput.Text = $"[{timestamp}] 🧹 Konsol otomatik temizlendi ({MaxConsoleLines} satır aşıldı)\n";
-                _consoleLineCount = 1;
+        _consoleLineCount++;
+
+        if (_consoleLineCount > MaxConsoleLines) {
+            ConsoleOutput.Text = $"[{timestamp}] 🧹 Konsol otomatik temizlendi ({MaxConsoleLines} satır aşıldı)\n";
+            _consoleLineCount = 1;
+        }
+
+        ConsoleOutput.Text += logLine;
+    }
+
+    private void HandleIndexProgress(IndexProgress progress) {
+        if (_isPreparedForShutdown) return;
+
+        Dispatcher.BeginInvoke(new Action(() => {
+            LoadingStatus.Text = progress.Status;
+            if (progress.Percentage > 0 && progress.Percentage < 100) {
+                LoadingProgress.IsIndeterminate = false;
+                LoadingProgress.Value = progress.Percentage;
             }
-            
-            ConsoleOutput.Text += logLine;
-        });
+        }));
+    }
+
+    private void HandleIndexError(string error) {
+        Log($"⚠️ {error}");
+    }
+
+    private void HandleReconciliationProgress(
+        int processed,
+        int total,
+        int percentage) {
+        if (_isPreparedForShutdown) return;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+            UpdateDeltaSyncProgress(processed, total, percentage)));
     }
     
     private void ToggleConsole() {
@@ -701,356 +489,283 @@ public partial class MainWindow : Window {
     private async Task InitializeAsync() {
         try {
             Log("=== İndeksleme Başlıyor ===");
-            
-            // Kullanıcı profil yolunu al
-            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-            
-            // Taranacak dizinleri belirle
-            var pathsToIndex = new List<string>();
-            
-            // Desktop (OneDrive desteği ile)
-            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-            if (string.IsNullOrEmpty(desktop) || !System.IO.Directory.Exists(desktop)) {
-                string oneDriveDesktop = System.IO.Path.Combine(userProfile, "OneDrive", "Masaüstü");
-                if (System.IO.Directory.Exists(oneDriveDesktop)) {
-                    desktop = oneDriveDesktop;
-                } else {
-                    oneDriveDesktop = System.IO.Path.Combine(userProfile, "OneDrive", "Desktop");
-                    if (System.IO.Directory.Exists(oneDriveDesktop)) {
-                        desktop = oneDriveDesktop;
-                    } else {
-                        desktop = System.IO.Path.Combine(userProfile, "Desktop");
-                    }
-                }
+            Log($"📦 Database: {_indexLifecycle.DatabasePath}");
+
+            var stopwatch = Stopwatch.StartNew();
+            var startup = await _indexLifecycle.InitializeAsync(
+                _lifetimeCancellation.Token);
+            stopwatch.Stop();
+
+            _desktopPath = startup.DesktopPath;
+            _indexedRootPaths = startup.RootPaths.ToList();
+
+            foreach (var rootPath in startup.RootPaths) {
+                Log($"📂 İndeks kökü: {rootPath}");
             }
-            if (System.IO.Directory.Exists(desktop)) {
-                pathsToIndex.Add(desktop);
-                Log($"📂 Desktop: {desktop}");
-            }
-            
-            // Documents
-            string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-            if (!string.IsNullOrEmpty(documents) && System.IO.Directory.Exists(documents)) {
-                pathsToIndex.Add(documents);
-                Log($"📂 Documents: {documents}");
-            }
-            
-            // Downloads
-            string downloads = System.IO.Path.Combine(userProfile, "Downloads");
-            if (System.IO.Directory.Exists(downloads)) {
-                pathsToIndex.Add(downloads);
-                Log($"📂 Downloads: {downloads}");
-            }
-            
-            // Pictures
-            string pictures = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
-            if (!string.IsNullOrEmpty(pictures) && System.IO.Directory.Exists(pictures)) {
-                pathsToIndex.Add(pictures);
-                Log($"📂 Pictures: {pictures}");
-            }
-            
-            // Music
-            string music = Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
-            if (!string.IsNullOrEmpty(music) && System.IO.Directory.Exists(music)) {
-                pathsToIndex.Add(music);
-                Log($"📂 Music: {music}");
-            }
-            
-            // Videos
-            string videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
-            if (!string.IsNullOrEmpty(videos) && System.IO.Directory.Exists(videos)) {
-                pathsToIndex.Add(videos);
-                Log($"📂 Videos: {videos}");
-            }
-            
-            Log($"📊 Toplam {pathsToIndex.Count} dizin taranacak");
-            
-            // Kök dizinleri sakla (navigasyon için)
-            _indexedRootPaths = pathsToIndex;
-            
-            await InitializeIndexAsync(pathsToIndex, desktop);
-            
+            Log($"📊 Toplam {startup.RootPaths.Count} dizin tarandı");
+
+            await Dispatcher.InvokeAsync(() =>
+                CompleteIndexInitialization(startup, stopwatch.ElapsedMilliseconds));
+        } catch (OperationCanceledException) when (_isPreparedForShutdown) {
         } catch (Exception ex) {
             Log($"❌ HATA: {ex.Message}");
             Log($"Stack trace: {ex.StackTrace}");
             await Dispatcher.InvokeAsync(() => {
                 LoadingStatus.Text = $"Hata: {ex.Message}";
                 LoadingProgress.IsIndeterminate = false;
-                System.Windows.MessageBox.Show($"İndeksleme başarısız: {ex.Message}\n\nDetaylar için konsolu kontrol edin.", "Hata", 
-                    MessageBoxButton.OK, MessageBoxImage.Error);
+                System.Windows.MessageBox.Show(
+                    $"İndeksleme başarısız: {ex.Message}{Environment.NewLine}{Environment.NewLine}Detaylar için konsolu kontrol edin.",
+                    "Hata",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
             });
         }
     }
-    
-    /// <summary>
-    /// Tüm kök dizinleri kalıcı indeks ve canlı dosya izleme ile başlatır.
-    /// </summary>
-    private async Task InitializeIndexAsync(List<string> pathsToIndex, string desktopPath) {
-        var sw = Stopwatch.StartNew();
-        
-        // IndexManager oluştur
-        _indexManager = new IndexManager(new BasicTokenizer());
-        _indexManager.OnProgress += progress => {
-            Dispatcher.Invoke(() => {
-                LoadingStatus.Text = progress.Status;
-                if (progress.Percentage > 0 && progress.Percentage < 100) {
-                    LoadingProgress.IsIndeterminate = false;
-                    LoadingProgress.Value = progress.Percentage;
-                }
-            });
-        };
-        _indexManager.OnError += error => Log($"⚠️ {error}");
-        _indexManager.OnFileChange += HandleFileSystemChange;
-        
-        // Delta sync progress handler
-        _indexManager.OnDeltaSyncProgress += (processed, total, percentage) => {
-            Dispatcher.BeginInvoke(() => {
-                UpdateDeltaSyncProgress(processed, total, percentage);
-            });
-        };
-        
-        Log($"📦 Database: {_indexManager.DatabasePath}");
-        
-        // Kayıtlı indeks varsa yükle, yoksa tüm kökleri tara.
-        await _indexManager.InitializeAsync(pathsToIndex);
-        
-        // IndexManager'dan veri yapılarını al
-        _index = _indexManager.InvertedIndex;
-        _root = _indexManager.RootNode;
-        
-        // Desktop path'i sakla (icon yükleme için)
-        _desktopPath = desktopPath;
-        
-        sw.Stop();
-        
-        // UI güncelle
-        await Dispatcher.InvokeAsync(() => {
-            var stats = _indexManager.GetStats();
-            LoadingStatus.Text = $"{stats.FileCount} dosya, {stats.DirectoryCount} klasör indekslendi";
-            Log($"✅ İndeksleme tamamlandı ({sw.ElapsedMilliseconds}ms)");
-            Log($"   📄 Dosya sayısı: {stats.FileCount}");
-            Log($"   📁 Klasör sayısı: {stats.DirectoryCount}");
-            Log($"   🔤 Token sayısı: {stats.TokenCount}");
-            if (stats.LastScanTime.HasValue) {
-                Log($"   🕐 Son tarama: {stats.LastScanTime.Value:g}");
-            }
-            
-            // Search engine'leri oluştur
-            _searchEngine = new SearchEngine(
-                _indexManager.CreateSearchSnapshot,
-                new BasicTokenizer(),
-                new BasicScoringStrategy());
-            _advancedSearchEngine = new AdvancedSearchEngine(
-                _indexManager.CreateSearchSnapshot,
-                new BasicTokenizer(),
-                new BasicScoringStrategy());
-            
-            // Intent parser
-            try {
-                _intentParser = new IntentParser(Log);
-                Log("✅ Rule-based intent parser hazır");
-            } catch (Exception ex) {
-                Log($"⚠️ Intent parser yüklenemedi: {ex.Message}");
-            }
-            
-            LoadDesktopIcons();
-            _isIndexed = true;
-            
-            Log("✅ Arama motoru hazır");
-            
-            // Show delta sync progress if running
-            if (_indexManager.IsDeltaSyncRunning) {
-                Log("� Arka planda delta sync devam ediyor...");
-                DeltaSyncPanel.Visibility = Visibility.Visible;
-            } else {
-                Log("�💡 FileSystemWatcher aktif - değişiklikler otomatik izleniyor");
-            }
-            
-            // Hide loading, show content
-            LoadingOverlay.Visibility = Visibility.Collapsed;
-            DesktopIconsScroll.Visibility = Visibility.Visible;
-            SearchBox.Focus();
-        });
+
+    private void CompleteIndexInitialization(
+        IndexStartupResult startup,
+        long elapsedMilliseconds) {
+        var stats = startup.Stats;
+        LoadingStatus.Text = $"{stats.FileCount} dosya, {stats.DirectoryCount} klasör indekslendi";
+        Log($"✅ İndeksleme tamamlandı ({elapsedMilliseconds}ms)");
+        Log($"   📄 Dosya sayısı: {stats.FileCount}");
+        Log($"   📁 Klasör sayısı: {stats.DirectoryCount}");
+        Log($"   🔤 Token sayısı: {stats.TokenCount}");
+        if (stats.LastScanTime.HasValue) {
+            Log($"   🕐 Son tarama: {stats.LastScanTime.Value:g}");
+        }
+
+        Log("✅ Rule-based intent parser hazır");
+        LoadDesktopIcons();
+        _isIndexed = true;
+        Log("✅ Arama motoru hazır");
+
+        if (_indexLifecycle.ReconciliationStatus.IsRunning) {
+            Log("Arka planda indeks uzlaştırması devam ediyor...");
+            DeltaSyncPanel.Visibility = Visibility.Visible;
+        } else {
+            Log("FileSystemWatcher aktif - değişiklikler otomatik izleniyor");
+        }
+
+        LoadingOverlay.Visibility = Visibility.Collapsed;
+        DesktopIconsScroll.Visibility = Visibility.Visible;
+        SearchBox.Focus();
     }
-    
+
     /// <summary>
     /// Dosya sistemi değişikliklerini işler ve UI'yi günceller.
     /// Debounce kullanarak çok sık güncelleme yapılmasını engeller.
     /// </summary>
     private void HandleFileSystemChange(FileChangeEvent evt)
     {
-        // Çift işleme engeli
-        if (_isProcessingFileChange) return;
-        
-        // Dispose old timer
-        _fileChangeDebounceTimer?.Dispose();
-        
+        if (_isPreparedForShutdown ||
+            Dispatcher.HasShutdownStarted ||
+            Dispatcher.HasShutdownFinished) return;
+
         // Log the change (sadece bir kere)
         Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
-        
-        // Değişikliğin path'ini ve parent'ını sakla
-        var changedPath = evt.FullPath;
-        var changedParent = System.IO.Path.GetDirectoryName(changedPath);
-        
-        // Debounce: UI güncellemesini beklet
-        _fileChangeDebounceTimer = new System.Threading.Timer(_ =>
-        {
-            if (_isProcessingFileChange) return;
-            _isProcessingFileChange = true;
-            
-            Dispatcher.InvokeAsync(() =>
-            {
-                try
-                {
-                    // Sadece ilgili görünümü güncelle
-                    SmartRefreshCurrentView(changedPath, changedParent, evt.ChangeType);
-                    
-                    // Aktif arama varsa sonuçları da güncelle (sadece arama görünürse)
-                    if (!string.IsNullOrWhiteSpace(SearchBox.Text) && 
-                        ResultsContainer.Visibility == Visibility.Visible)
-                    {
-                        _ = RefreshSearchResultsAsync();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log($"⚠️ UI güncelleme hatası: {ex.Message}");
-                }
-                finally
-                {
-                    _isProcessingFileChange = false;
-                }
-            });
-        }, null, FILE_CHANGE_DEBOUNCE_MS, Timeout.Infinite);
+
+        _fileChangeRefresh.Request();
+        SchedulePendingFileChange();
     }
-    
-    /// <summary>
-    /// Değişikliğin türüne ve konumuna göre akıllıca görünümü günceller.
-    /// Ana sayfaya dönmeden sadece ilgili öğeyi günceller.
-    /// </summary>
-    private void SmartRefreshCurrentView(string changedPath, string? changedParent, SmartFileLauncher.Core.Models.FileChangeType changeType)
+
+    private void SchedulePendingFileChange()
     {
-        // Eğer bir klasör içindeysek, o klasördeki değişiklikleri kontrol et
-        if (_currentFolderPath != null)
+        if (_isPreparedForShutdown ||
+            Dispatcher.HasShutdownStarted ||
+            Dispatcher.HasShutdownFinished) return;
+
+        lock (_fileChangeTimerLock)
         {
-            // Değişiklik mevcut klasörde mi?
-            if (changedParent != null && 
-                string.Equals(changedParent.TrimEnd('\\', '/'), _currentFolderPath.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            if (_isPreparedForShutdown) return;
+
+            _fileChangeDebounceTimer?.Dispose();
+            _fileChangeDebounceTimer = new System.Threading.Timer(_ =>
             {
-                // Değişiklik bu klasörde, güncelle
-                RefreshCurrentFolderIcons();
-            }
-            // Değişiklik farklı bir yerdeyse, UI'yı güncelleme (sessizce geç)
-            return;
+                if (_isPreparedForShutdown ||
+                    Dispatcher.HasShutdownStarted ||
+                    !_fileChangeRefresh.TryBegin()) return;
+
+                _ = DispatchFileChangeAsync();
+            }, null, FILE_CHANGE_DEBOUNCE_MS, Timeout.Infinite);
         }
-        
-        // Ana sayfadayız (_currentFolderPath == null)
-        // Sadece root children'daki değişiklikleri güncelle
-        if (_root != null)
+    }
+
+    private async Task DispatchFileChangeAsync()
+    {
+        try
         {
-            var rootPaths = _root.Children.Select(c => System.IO.Path.GetDirectoryName(c.FullPath)).Distinct();
-            var isInRoot = rootPaths.Any(rp => 
-                rp != null && changedParent != null &&
-                string.Equals(rp.TrimEnd('\\', '/'), changedParent.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
-            
-            if (isInRoot || _root.Children.Any(c => 
-                string.Equals(c.FullPath, changedPath, StringComparison.OrdinalIgnoreCase)))
+            await Dispatcher.InvokeAsync(ProcessFileChangeAsync)
+                .Task
+                .Unwrap();
+        }
+        catch (OperationCanceledException)
+            when (_isPreparedForShutdown ||
+                  Dispatcher.HasShutdownStarted)
+        {
+        }
+        catch (InvalidOperationException)
+            when (_isPreparedForShutdown ||
+                  Dispatcher.HasShutdownStarted)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log($"⚠️ UI güncelleme kuyruğu hatası: {ex.Message}");
+        }
+        finally
+        {
+            if (_fileChangeRefresh.Complete())
+            {
+                SchedulePendingFileChange();
+            }
+        }
+    }
+
+    private async Task ProcessFileChangeAsync()
+    {
+        try
+        {
+            if (_currentFolderPath == null)
             {
                 RefreshDesktopIconsSmart();
             }
+            else
+            {
+                await RefreshCurrentFolderIconsAsync();
+            }
+
+            if (!string.IsNullOrWhiteSpace(SearchBox.Text) &&
+                ResultsContainer.Visibility == Visibility.Visible)
+            {
+                await RefreshSearchResultsAsync();
+            }
+        }
+        catch (OperationCanceledException)
+            when (_lifetimeCancellation.IsCancellationRequested)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log($"⚠️ UI güncelleme hatası: {ex.Message}");
         }
     }
     
     /// <summary>
     /// Mevcut klasördeki ikonları akıllıca günceller (klasör içindeyken).
     /// </summary>
-    private void RefreshCurrentFolderIcons()
+    private async Task RefreshCurrentFolderIconsAsync()
     {
-        if (_currentFolderPath == null || !System.IO.Directory.Exists(_currentFolderPath)) return;
-        
+        var folderPath = _currentFolderPath;
+        if (string.IsNullOrEmpty(folderPath))
+        {
+            return;
+        }
+
         try
         {
-            var dirInfo = new System.IO.DirectoryInfo(_currentFolderPath);
-            var currentItems = new Dictionary<string, (string Name, bool IsDir)>();
-            
-            // Mevcut klasördeki öğeleri al
-            foreach (var dir in dirInfo.GetDirectories())
+            var page = await _folderNavigation.OpenAsync(
+                folderPath,
+                MAX_FOLDER_ITEMS,
+                ensureSynchronized: false,
+                _lifetimeCancellation.Token);
+            if (!string.Equals(
+                    folderPath,
+                    _currentFolderPath,
+                    StringComparison.OrdinalIgnoreCase))
             {
-                if ((dir.Attributes & System.IO.FileAttributes.Hidden) == 0 &&
-                    (dir.Attributes & System.IO.FileAttributes.System) == 0)
+                return;
+            }
+
+            var existing = _desktopIcons.ToDictionary(
+                item => item.FullPath,
+                item => item,
+                StringComparer.OrdinalIgnoreCase);
+            var desired = new List<DesktopIconViewModel>(page.Entries.Count);
+
+            foreach (var entry in page.Entries)
+            {
+                var isNew = false;
+                if (!existing.TryGetValue(entry.FullPath, out var viewModel))
                 {
-                    currentItems[dir.FullName] = (dir.Name, true);
+                    viewModel = new DesktopIconViewModel();
+                    isNew = true;
                 }
-            }
-            foreach (var file in dirInfo.GetFiles())
-            {
-                if ((file.Attributes & System.IO.FileAttributes.Hidden) == 0)
+
+                viewModel.Name = entry.Name;
+                viewModel.FullPath = entry.FullPath;
+                viewModel.Icon = entry.IsDirectory
+                    ? "📁"
+                    : GetFileIcon(entry.Name);
+                viewModel.IsDirectory = entry.IsDirectory;
+                if (entry.IsDirectory)
                 {
-                    currentItems[file.FullName] = (file.Name, false);
+                    viewModel.SetFolderColors(entry.Name);
                 }
-            }
-            
-            // Silinen öğeleri kaldır
-            var toRemove = _desktopIcons.Where(d => !currentItems.ContainsKey(d.FullPath)).ToList();
-            foreach (var item in toRemove)
-            {
-                _desktopIcons.Remove(item);
-            }
-            
-            // Yeni öğeleri ekle
-            var existingPaths = _desktopIcons.Select(d => d.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in currentItems.OrderBy(k => k.Value.Name))
-            {
-                if (!existingPaths.Contains(kvp.Key))
+                if (isNew)
                 {
-                    var viewModel = new DesktopIconViewModel
-                    {
-                        Name = kvp.Value.Name,
-                        FullPath = kvp.Key,
-                        Icon = kvp.Value.IsDir ? "📁" : GetFileIcon(kvp.Value.Name),
-                        IsDirectory = kvp.Value.IsDir
-                    };
-                    
-                    if (kvp.Value.IsDir)
-                    {
-                        viewModel.SetFolderColors(kvp.Value.Name);
-                    }
-                    
-                    // Sıralı ekleme: Önce klasörler, sonra dosyalar (her grup kendi içinde alfabetik)
-                    var insertIndex = _desktopIcons.TakeWhile(d => 
-                    {
-                        // Eğer her ikisi de klasör veya her ikisi de dosya ise alfabetik sırala
-                        if (d.IsDirectory == kvp.Value.IsDir)
-                        {
-                            return string.Compare(d.Name, kvp.Value.Name, StringComparison.OrdinalIgnoreCase) < 0;
-                        }
-                        // Klasörler her zaman dosyalardan önce
-                        return d.IsDirectory;
-                    }).Count();
-                    _desktopIcons.Insert(insertIndex, viewModel);
-                    
                     _ = LoadThumbnailAsync(viewModel);
                 }
+
+                desired.Add(viewModel);
             }
-            
-            Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe");
+
+            for (var index = 0; index < desired.Count; index++)
+            {
+                var currentIndex = _desktopIcons.IndexOf(desired[index]);
+                if (currentIndex < 0)
+                {
+                    _desktopIcons.Insert(index, desired[index]);
+                }
+                else if (currentIndex != index)
+                {
+                    _desktopIcons.Move(currentIndex, index);
+                }
+            }
+
+            while (_desktopIcons.Count > desired.Count)
+            {
+                _desktopIcons.RemoveAt(_desktopIcons.Count - 1);
+            }
+
+            if (desired.Count == 0)
+            {
+                var folderName = Path.GetFileName(folderPath);
+                if (string.IsNullOrEmpty(folderName))
+                {
+                    folderName = folderPath;
+                }
+
+                EmptyFolderTitle.Text = $"'{folderName}' klasörü boş";
+                EmptyFolderPanel.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                EmptyFolderPanel.Visibility = Visibility.Collapsed;
+            }
+            Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe" +
+                (page.IsTruncated
+                    ? $" (limit: {MAX_FOLDER_ITEMS})"
+                    : string.Empty));
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (Exception ex)
         {
             Log($"⚠️ Klasör güncelleme hatası: {ex.Message}");
         }
     }
-    
     /// <summary>
     /// Ana sayfa (desktop) ikonlarını akıllıca günceller.
     /// </summary>
     private void RefreshDesktopIconsSmart()
     {
-        if (_root == null || _thumbnailService == null) return;
+        var indexedRoots = _indexLifecycle.GetIndexedRoots();
         
         // Mevcut öğelerin path'lerini al
         var existingPaths = _desktopIcons.ToDictionary(d => d.FullPath, d => d, StringComparer.OrdinalIgnoreCase);
-        var currentPaths = _root.Children.Select(c => c.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentPaths = indexedRoots.Select(c => c.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         
         // Silinen öğeleri kaldır
         var toRemove = _desktopIcons.Where(d => !currentPaths.Contains(d.FullPath)).ToList();
@@ -1060,7 +775,7 @@ public partial class MainWindow : Window {
         }
         
         // Yeni öğeleri ekle
-        foreach (var child in _root.Children.OrderBy(n => n.Name))
+        foreach (var child in indexedRoots.OrderBy(n => n.Name))
         {
             if (!existingPaths.ContainsKey(child.FullPath))
             {
@@ -1104,7 +819,7 @@ public partial class MainWindow : Window {
     /// </summary>
     private async Task RefreshSearchResultsAsync()
     {
-        if (string.IsNullOrWhiteSpace(_lastSearchQuery) || _searchEngine == null) return;
+        if (string.IsNullOrWhiteSpace(_lastSearchQuery)) return;
         
         try
         {
@@ -1112,9 +827,14 @@ public partial class MainWindow : Window {
             var version = Volatile.Read(ref _searchVersion);
             var cancellationToken =
                 _currentSearchCancellation?.Token ?? CancellationToken.None;
-            var results = await Task.Run(
-                () => _searchEngine.Search(query, 50, cancellationToken),
+            var outcome = await _searchService.SearchAsync(
+                new SearchRequest(
+                    query,
+                    NaturalLanguageMode: false,
+                    HasInternetConnection: _connectivityMonitor.IsConnected,
+                    MaxResults: 50),
                 cancellationToken);
+            var results = outcome.Results;
 
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(version)) return;
@@ -1127,8 +847,7 @@ public partial class MainWindow : Window {
                 foreach (var result in results)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    var ext = System.IO.Path.GetExtension(result.Name).ToLowerInvariant();
-                    var isDirectory = string.IsNullOrEmpty(ext) && System.IO.Directory.Exists(result.FullPath);
+                    var isDirectory = result.IsDirectory;
                     
                     var viewModel = new SearchResultViewModel
                     {
@@ -1163,12 +882,12 @@ public partial class MainWindow : Window {
     
     private void LoadDesktopIcons() {
         _desktopIcons.Clear();
-        if (_root == null || _thumbnailService == null) return;
+        var indexedRoots = _indexLifecycle.GetIndexedRoots();
         
-        Log($"📸 Thumbnail yükleme başladı... ({_root.Children.Count} öğe)");
+        Log($"📸 Thumbnail yükleme başladı... ({indexedRoots.Count} öğe)");
         
         // Önce klasörler, sonra dosyalar - her grup alfabetik sıralı
-        var sortedChildren = _root.Children
+        var sortedChildren = indexedRoots
             .OrderBy(n => !n.IsDirectory)  // false (klasör) önce, true (dosya) sonra
             .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase);
         
@@ -1198,7 +917,7 @@ public partial class MainWindow : Window {
     {
         try
         {
-            var thumbnail = await _thumbnailService!.GetThumbnailAsync(
+            var thumbnail = await _thumbnailService.GetThumbnailAsync(
                 viewModel.FullPath,
                 THUMBNAIL_SIZE,
                 CancellationToken.None
@@ -1223,7 +942,7 @@ public partial class MainWindow : Window {
     {
         try
         {
-            var thumbnail = await _thumbnailService!.GetThumbnailAsync(
+            var thumbnail = await _thumbnailService.GetThumbnailAsync(
                 viewModel.FullPath,
                 THUMBNAIL_SIZE,
                 CancellationToken.None
@@ -1297,8 +1016,7 @@ public partial class MainWindow : Window {
             ResultsContainer.Visibility = Visibility.Visible;
 
             Log($"🔍 Arama sorgusu: '{query}'");
-            var tokenizer = new BasicTokenizer();
-            var tokens = tokenizer.Tokenize(query).ToList();
+            var tokens = _searchDiagnostics.Tokenize(query);
             Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
             ShowSearchingIndicator(query);
 
@@ -1459,12 +1177,16 @@ public partial class MainWindow : Window {
     /// <summary>
     /// Tekrar Dene butonuna tıklandığında
     /// </summary>
-    private void RetryButton_Click(object sender, RoutedEventArgs e) {
+    private async void RetryButton_Click(object sender, RoutedEventArgs e) {
         if (!string.IsNullOrWhiteSpace(_lastSearchQuery)) {
             Log($"🔄 Yeniden deneniyor: '{_lastSearchQuery}'");
-            
-            // İnternet kontrolü
-            CheckInternetConnection();
+            try {
+                await _connectivityMonitor.CheckNowAsync(
+                    _lifetimeCancellation.Token);
+            } catch (OperationCanceledException)
+                when (_lifetimeCancellation.IsCancellationRequested) {
+                return;
+            }
             
             // Aramayı yeniden başlat
             ErrorPanel.Visibility = Visibility.Collapsed;
@@ -1477,264 +1199,50 @@ public partial class MainWindow : Window {
         string query,
         long searchVersion,
         CancellationToken cancellationToken = default) {
-        if (_searchEngine == null) {
-            Log("HATA: SearchEngine null!");
-            ShowError("Arama motoru başlatılamadı", "Uygulama düzgün yüklenmemiş olabilir. Lütfen uygulamayı yeniden başlatın.");
-            return;
-        }
-
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsCurrentSearch(searchVersion)) return;
-        
-        // Check if delta sync is still running
-        if (_indexManager != null && _indexManager.IsDeltaSyncRunning) {
-            var progress = _indexManager.DeltaSyncProgress;
-            var processed = _indexManager.DeltaSyncProcessed;
-            var total = _indexManager.DeltaSyncTotal;
-            ShowDeltaSyncWarning($"%{progress} tamamlandı ({processed:N0}/{total:N0} dosya kontrol edildi)");
+
+        var reconciliation = _indexLifecycle.ReconciliationStatus;
+        if (reconciliation.IsRunning) {
+            ShowDeltaSyncWarning(
+                $"%{reconciliation.Progress} tamamlandı ({reconciliation.Processed:N0}/{reconciliation.Total:N0} dosya kontrol edildi)");
         } else {
             DeltaSyncWarningBanner.Visibility = Visibility.Collapsed;
         }
-        
-        List<SearchResult> resultList;
-        
+
         try {
-            // Check cancellation before starting
-            cancellationToken.ThrowIfCancellationRequested();
-            
-            // Fallback durumunu takip et
-            bool usedFallback = false;
-            string? fallbackReason = null;
-            string? warningMessage = null;
-            
-            if (_isNaturalLanguageMode && _intentParser != null && _advancedSearchEngine != null) {
-                // Natural language mode - use intent parser
-                Log("🤖 Doğal dil işleniyor...");
-                
-                // İnternet kontrolü
-                if (!_hasInternetConnection) {
-                    Log("⚠️ İnternet bağlantısı yok, rule-based aramaya geçiliyor");
-                    usedFallback = true;
-                    fallbackReason = "İnternet bağlantısı yok";
-                    // Standart aramaya geç
-                    resultList = (await Task.Run(
-                        () => _searchEngine.Search(query, 100, cancellationToken),
-                        cancellationToken)).ToList();
-                } else {
-                    // Run AI parsing (Groq) with timeout protection
-                    StructuredQuery? structuredQuery = null;
-                    try {
-                        structuredQuery = await _intentParser.ParseWithGroqAsync(query, cancellationToken);
-                        
-                        // Fallback durumunu kontrol et
-                        if (structuredQuery.UsedFallback) {
-                            usedFallback = true;
-                            fallbackReason = structuredQuery.FallbackReason;
-                        }
-                        
-                        // Kısmi hata uyarısını kontrol et (örn: Keyword API başarısız ama Intent başarılı)
-                        if (!string.IsNullOrEmpty(structuredQuery.WarningMessage)) {
-                            warningMessage = structuredQuery.WarningMessage;
-                        }
-                    } catch (OperationCanceledException) {
-                        throw; // Re-throw cancellation
-                    } catch (Exception ex) {
-                        Log($"⚠️ Groq API hatası, rule-based'e geçiliyor: {ex.Message}");
-                        usedFallback = true;
-                        fallbackReason = ex.Message;
-                        // Fallback to rule-based parsing
-                        structuredQuery = _intentParser.ParseIntent(query);
-                        structuredQuery.UsedFallback = true;
-                        structuredQuery.FallbackReason = fallbackReason;
-                    }
-                    
-                    // Check if cancelled after LLM inference
-                    cancellationToken.ThrowIfCancellationRequested();
-                    
-                    if (structuredQuery == null) {
-                        Log("⚠️ StructuredQuery null, varsayılan kullanılıyor");
-                        usedFallback = true;
-                        fallbackReason = "Parser sonucu boş";
-                        structuredQuery = new StructuredQuery {
-                            Intent = "search_files",
-                            Keywords = new List<string> { query },
-                            FileTypes = new List<string>(),
-                            PredictedExtensions = new List<string>(),
-                            IncludeFolderContents = true,
-                            UsedFallback = true,
-                            FallbackReason = fallbackReason
-                        };
-                    }
-                    
-                    // Log parsed intent
-                    if (usedFallback) {
-                        Log($"📋 Rule-based arama (fallback):");
-                    } else {
-                        Log($"📋 AI destekli arama:");
-                    }
-                    Log($"   Intent: {structuredQuery.Intent}");
-                    
-                    // Show filter-only mode status
-                    if (structuredQuery.FilterOnlyMode) {
-                        Log($"   🔍 Mode: FILTER-ONLY (sadece filtrelerle arama)");
-                    } else {
-                        Log($"   Keywords: [{string.Join(", ", structuredQuery.Keywords)}]");
-                    }
-                    
-                    Log($"   File Types: [{string.Join(", ", structuredQuery.FileTypes)}]");
-                    
-                    // AI-powered extension prediction
-                    if (structuredQuery.PredictedExtensions.Any()) {
-                        Log($"   🎯 AI Tahmin Edilen Uzantılar: [{string.Join(", ", structuredQuery.PredictedExtensions)}]");
-                    }
-                    
-                    if (structuredQuery.DateFilter != null) {
-                        var df = structuredQuery.DateFilter;
-                        var parts = new List<string>();
-                        if (df.CreatedAfter != null) parts.Add($"Created > {df.CreatedAfter}");
-                        if (df.CreatedBefore != null) parts.Add($"Created < {df.CreatedBefore}");
-                        if (df.ModifiedAfter != null) parts.Add($"Modified > {df.ModifiedAfter}");
-                        if (df.ModifiedBefore != null) parts.Add($"Modified < {df.ModifiedBefore}");
-                        
-                        if (parts.Any()) {
-                            Log($"   📅 Date Filter: {string.Join(", ", parts)}");
-                        }
-                    }
-                    if (structuredQuery.SizeFilter != null) {
-                        Log($"   Size Filter: {structuredQuery.SizeFilter.MinMb}MB - {structuredQuery.SizeFilter.MaxMb}MB");
-                    }
-                    if (structuredQuery.FolderHints.Any()) {
-                        Log($"   Folder Hints: [{string.Join(", ", structuredQuery.FolderHints.Select(h => h.Name))}]");
-                    }
-                    Log($"   Include Folders: {structuredQuery.IncludeFolderContents}");
+            var outcome = await _searchService.SearchAsync(
+                new SearchRequest(
+                    query,
+                    _isNaturalLanguageMode,
+                    _connectivityMonitor.IsConnected),
+                cancellationToken);
 
-                    // Execute the CPU-bound search outside the UI thread.
-                    resultList = (await Task.Run(
-                        () => _advancedSearchEngine.Search(
-                            structuredQuery,
-                            100,
-                            cancellationToken),
-                        cancellationToken)).ToList();
-
-                    // Handle Auto-Open Action
-                    cancellationToken.ThrowIfCancellationRequested();
-                    if (!IsCurrentSearch(searchVersion)) return;
-                    if (structuredQuery.OpenAction != null && structuredQuery.OpenAction.ShouldOpen && resultList.Any()) {
-                        var bestMatch = resultList.First();
-                        
-                        if (structuredQuery.OpenAction.OpenMode == "single_best") {
-                            // Directly open the best match, but still show results
-                            Log($"🚀 Auto-opening best match: {bestMatch.Name}");
-                            OpenFile(bestMatch.FullPath);
-                            
-                            // Continue to show results - don't return early
-                        } else {
-                            // "show_list" mode - just highlight the best match
-                            Log($"🎯 Best match highlighted: {bestMatch.Name}");
-                        }
-                    }
-                }
-            } else {
-                // Standard keyword search also runs outside the UI thread.
-                resultList = (await Task.Run(
-                    () => _searchEngine.Search(query, 100, cancellationToken),
-                    cancellationToken)).ToList();
-            }
-
-            // Check cancellation before updating UI
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(searchVersion)) return;
-            Log($"✅ Sonuç sayısı: {resultList.Count}");
-            
-            // Fallback veya Warning uyarısını göster (AI modu aktifse)
-            if (_isNaturalLanguageMode && usedFallback && !string.IsNullOrEmpty(fallbackReason)) {
-                ShowFallbackWarning(fallbackReason);
-            } else if (_isNaturalLanguageMode && !string.IsNullOrEmpty(warningMessage)) {
-                // Kısmi hata durumu - Keyword API başarısız ama Intent başarılı
-                ShowFallbackWarning(warningMessage);
+
+            LogSearchOutcome(outcome);
+
+            if (!string.IsNullOrEmpty(outcome.AutoOpenPath)) {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsCurrentSearch(searchVersion)) return;
+
+                Log($"🚀 En iyi eşleşme açılıyor: {Path.GetFileName(outcome.AutoOpenPath)}");
+                OpenFile(outcome.AutoOpenPath);
+            }
+
+            if (_isNaturalLanguageMode &&
+                outcome.UsedFallback &&
+                !string.IsNullOrEmpty(outcome.FallbackReason)) {
+                ShowFallbackWarning(outcome.FallbackReason);
+            } else if (_isNaturalLanguageMode &&
+                       !string.IsNullOrEmpty(outcome.WarningMessage)) {
+                ShowFallbackWarning(outcome.WarningMessage);
             } else {
                 FallbackWarningBanner.Visibility = Visibility.Collapsed;
             }
-            
-            if (resultList.Any()) {
-                var topResults = resultList.Take(5).Select(r => $"   • {r.Name} (skor: {r.Score:F0})");
-                Log($"🏆 İlk {Math.Min(5, resultList.Count)} sonuç:");
-                foreach (var r in topResults) {
-                    Log(r);
-                }
-            } else {
-                Log("⚠️ Hiç sonuç bulunamadı!");
-                
-                // Debug: Check if index has data
-                if (_index != null) {
-                    Log("🔍 İndeks durumu kontrol ediliyor...");
-                    var tokenizer = new BasicTokenizer();
-                    var queryTokens = tokenizer.Tokenize(query).ToList();
-                    foreach (var token in queryTokens) {
-                        var indexResults = _index.Get(token);
-                        Log($"   Token '{token}' → indekste {indexResults.Count} eşleşme");
-                        if (indexResults.Count > 0) {
-                            var samples = indexResults.Take(3).Select(n => n.Name);
-                            Log($"      Örnek: {string.Join(", ", samples)}");
-                        }
-                    }
-                }
-            }
-            
-            // Aranıyor göstergesini gizle
-            SearchingPanel.Visibility = Visibility.Collapsed;
-            ErrorPanel.Visibility = Visibility.Collapsed;
-            
-            // SearchResult -> SearchResultViewModel dönüşümü ve thumbnail yükleme
-            _searchResults.Clear();
-            
-            if (resultList.Count == 0)
-            {
-                // Sonuç yok - NoResultsPanel göster
-                NoResultsPanel.Visibility = Visibility.Visible;
-                ResultsList.Visibility = Visibility.Collapsed;
-                ResultsGridScroll.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                // Sonuçlar var - liste/grid göster
-                NoResultsPanel.Visibility = Visibility.Collapsed;
-                if (_isGridViewMode)
-                {
-                    ResultsList.Visibility = Visibility.Collapsed;
-                    ResultsGridScroll.Visibility = Visibility.Visible;
-                }
-                else
-                {
-                    ResultsList.Visibility = Visibility.Visible;
-                    ResultsGridScroll.Visibility = Visibility.Collapsed;
-                }
-                
-                foreach (var result in resultList)
-                {
-                    var isDirectory = System.IO.Directory.Exists(result.FullPath);
-                    
-                    var viewModel = new SearchResultViewModel
-                    {
-                        Name = result.Name,
-                        FullPath = result.FullPath,
-                        Score = result.Score,
-                        Icon = isDirectory ? "📁" : GetFileIcon(result.Name),
-                        IsDirectory = isDirectory
-                    };
-                    
-                    // Klasör renklerini ayarla
-                    if (isDirectory) {
-                        viewModel.SetFolderColors(result.Name);
-                    }
-                    
-                    _searchResults.Add(viewModel);
-                    
-                    // Async thumbnail yükleme
-                    _ = LoadSearchResultThumbnailAsync(viewModel);
-                }
-            }
-            
+
+            RenderSearchResults(outcome.Results, cancellationToken);
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
@@ -1745,13 +1253,124 @@ public partial class MainWindow : Window {
             ShowError("Arama sırasında bir hata oluştu", ex.Message);
         }
     }
-    
+
+    private void LogSearchOutcome(SearchOutcome outcome) {
+        if (outcome.Mode == SearchExecutionMode.OfflineFallback) {
+            Log("⚠️ İnternet bağlantısı yok, standart aramaya geçildi");
+        } else if (outcome.Mode == SearchExecutionMode.RuleBasedFallback) {
+            Log($"⚠️ Groq API kullanılamadı, rule-based aramaya geçildi: {outcome.FallbackReason}");
+        } else if (outcome.Mode == SearchExecutionMode.Advanced) {
+            Log("🤖 Doğal dil sorgusu işlendi");
+        }
+
+        var structuredQuery = outcome.StructuredQuery;
+        if (structuredQuery != null) {
+            Log(outcome.UsedFallback
+                ? "📋 Rule-based arama (fallback):"
+                : "📋 AI destekli arama:");
+            Log($"   Intent: {structuredQuery.Intent}");
+
+            if (structuredQuery.FilterOnlyMode) {
+                Log("   🔍 Mode: FILTER-ONLY (sadece filtrelerle arama)");
+            } else {
+                Log($"   Keywords: [{string.Join(", ", structuredQuery.Keywords)}]");
+            }
+
+            Log($"   File Types: [{string.Join(", ", structuredQuery.FileTypes)}]");
+            if (structuredQuery.PredictedExtensions.Any()) {
+                Log($"   🎯 AI Tahmin Edilen Uzantılar: [{string.Join(", ", structuredQuery.PredictedExtensions)}]");
+            }
+
+            if (structuredQuery.DateFilter != null) {
+                var dateFilter = structuredQuery.DateFilter;
+                var parts = new List<string>();
+                if (dateFilter.CreatedAfter != null) parts.Add($"Created > {dateFilter.CreatedAfter}");
+                if (dateFilter.CreatedBefore != null) parts.Add($"Created < {dateFilter.CreatedBefore}");
+                if (dateFilter.ModifiedAfter != null) parts.Add($"Modified > {dateFilter.ModifiedAfter}");
+                if (dateFilter.ModifiedBefore != null) parts.Add($"Modified < {dateFilter.ModifiedBefore}");
+                if (parts.Count > 0) {
+                    Log($"   📅 Date Filter: {string.Join(", ", parts)}");
+                }
+            }
+
+            if (structuredQuery.SizeFilter != null) {
+                Log($"   Size Filter: {structuredQuery.SizeFilter.MinMb}MB - {structuredQuery.SizeFilter.MaxMb}MB");
+            }
+            if (structuredQuery.FolderHints.Any()) {
+                Log($"   Folder Hints: [{string.Join(", ", structuredQuery.FolderHints.Select(hint => hint.Name))}]");
+            }
+            Log($"   Include Folders: {structuredQuery.IncludeFolderContents}");
+        }
+
+        Log($"✅ Sonuç sayısı: {outcome.Results.Count}");
+        if (outcome.Results.Count > 0) {
+            var topResults = outcome.Results
+                .Take(5)
+                .Select(result => $"   • {result.Name} (skor: {result.Score:F0})");
+            Log($"🏆 İlk {Math.Min(5, outcome.Results.Count)} sonuç:");
+            foreach (var result in topResults) {
+                Log(result);
+            }
+            return;
+        }
+
+        Log("⚠️ Hiç sonuç bulunamadı!");
+        foreach (var diagnostic in _searchDiagnostics.Inspect(
+                     _lastSearchQuery,
+                     _lifetimeCancellation.Token)) {
+            Log($"   Token '{diagnostic.Token}' → indekste {diagnostic.MatchCount} eşleşme");
+            if (diagnostic.SampleNames.Count > 0) {
+                Log($"      Örnek: {string.Join(", ", diagnostic.SampleNames)}");
+            }
+        }
+    }
+
+    private void RenderSearchResults(
+        IReadOnlyList<SearchResult> results,
+        CancellationToken cancellationToken) {
+        SearchingPanel.Visibility = Visibility.Collapsed;
+        ErrorPanel.Visibility = Visibility.Collapsed;
+        _searchResults.Clear();
+
+        if (results.Count == 0) {
+            NoResultsPanel.Visibility = Visibility.Visible;
+            ResultsList.Visibility = Visibility.Collapsed;
+            ResultsGridScroll.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        NoResultsPanel.Visibility = Visibility.Collapsed;
+        ResultsList.Visibility = _isGridViewMode
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+        ResultsGridScroll.Visibility = _isGridViewMode
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        foreach (var result in results) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var isDirectory = result.IsDirectory;
+            var viewModel = new SearchResultViewModel {
+                Name = result.Name,
+                FullPath = result.FullPath,
+                Score = result.Score,
+                Icon = isDirectory ? "📁" : GetFileIcon(result.Name),
+                IsDirectory = isDirectory
+            };
+
+            if (isDirectory) {
+                viewModel.SetFolderColors(result.Name);
+            }
+
+            _searchResults.Add(viewModel);
+            _ = LoadSearchResultThumbnailAsync(viewModel);
+        }
+    }
+
     private async Task LoadSearchResultThumbnailAsync(SearchResultViewModel viewModel)
     {
         try
         {
-            if (_thumbnailService == null) return;
-            
             var thumbnail = await _thumbnailService.GetThumbnailAsync(
                 viewModel.FullPath,
                 THUMBNAIL_SIZE,
@@ -1863,7 +1482,7 @@ public partial class MainWindow : Window {
         
         // Alt+Enter - Özellikler (hover edilen öğe)
         if (altPressed && e.Key == Key.Enter && !string.IsNullOrEmpty(targetPath)) {
-            Shell32Helper.ShowProperties(targetPath);
+            _fileOperations.ShowProperties(targetPath);
             e.Handled = true;
             return;
         }
@@ -1903,36 +1522,27 @@ public partial class MainWindow : Window {
             ShowFeedback("⚠️ Panoda öğe yok");
             return;
         }
-        
-        var targetFolder = _currentFolderPath ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        var fileName = Path.GetFileName(_clipboardPath);
-        var destPath = Path.Combine(targetFolder, fileName);
-        
-        // Aynı isimde dosya varsa yeni isim oluştur
-        destPath = GetUniqueFilePath(destPath);
-        
+
+        var targetFolder = _currentFolderPath ??
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+
         try {
-            if (Directory.Exists(_clipboardPath)) {
-                if (_isCutOperation) {
-                    Directory.Move(_clipboardPath, destPath);
-                    ShowFeedback($"📁 Taşındı: {Path.GetFileName(destPath)}");
-                } else {
-                    CopyDirectory(_clipboardPath, destPath);
-                    ShowFeedback($"📁 Yapıştırıldı: {Path.GetFileName(destPath)}");
-                }
-            } else if (File.Exists(_clipboardPath)) {
-                if (_isCutOperation) {
-                    File.Move(_clipboardPath, destPath);
-                    ShowFeedback($"📄 Taşındı: {Path.GetFileName(destPath)}");
-                } else {
-                    File.Copy(_clipboardPath, destPath);
-                    ShowFeedback($"📄 Yapıştırıldı: {Path.GetFileName(destPath)}");
-                }
+            var result = _fileOperations.Paste(
+                _clipboardPath,
+                targetFolder,
+                _isCutOperation);
+
+            if (result.SourceKind == FileItemKind.Directory) {
+                ShowFeedback(_isCutOperation
+                    ? $"📁 Taşındı: {Path.GetFileName(result.DestinationPath)}"
+                    : $"📁 Yapıştırıldı: {Path.GetFileName(result.DestinationPath)}");
+            } else if (result.SourceKind == FileItemKind.File) {
+                ShowFeedback(_isCutOperation
+                    ? $"📄 Taşındı: {Path.GetFileName(result.DestinationPath)}"
+                    : $"📄 Yapıştırıldı: {Path.GetFileName(result.DestinationPath)}");
             }
-            
-            // Kesme işleminden sonra temizle
+
             if (_isCutOperation) {
-                // Kesilen öğeyi görünümden kaldır
                 if (_cutItem != null) {
                     _desktopIcons.Remove(_cutItem);
                     _cutItem = null;
@@ -1941,13 +1551,13 @@ public partial class MainWindow : Window {
                 _clipboardPath = null;
                 _isCutOperation = false;
             }
-            
+
             RefreshCurrentFolder();
         } catch (Exception ex) {
             ShowFeedback($"❌ Yapıştırma hatası: {ex.Message}");
         }
     }
-    
+
     /// <summary>
     /// Öğeyi yeniden adlandırır
     /// </summary>
@@ -1958,18 +1568,18 @@ public partial class MainWindow : Window {
         
         if (dialog.ShowDialog() == true) {
             var newName = dialog.NewName;
-            var directory = Path.GetDirectoryName(path);
-            var newPath = Path.Combine(directory ?? "", newName);
             
             try {
-                if (Directory.Exists(path)) {
-                    Directory.Move(path, newPath);
+                var operation = _fileOperations.Rename(path, newName);
+                if (operation.SourceKind == FileItemKind.Directory) {
                     ShowFeedback($"📁 Adlandırıldı: {currentName} → {newName}");
-                } else if (File.Exists(path)) {
-                    File.Move(path, newPath);
+                } else if (operation.SourceKind == FileItemKind.File) {
                     ShowFeedback($"📄 Adlandırıldı: {currentName} → {newName}");
                 }
-                UpdateItemInView(path, newPath, newName);
+                UpdateItemInView(
+                    path,
+                    operation.DestinationPath,
+                    newName);
             } catch (Exception ex) {
                 ShowFeedback($"❌ Adlandırma hatası: {ex.Message}");
             }
@@ -1989,17 +1599,8 @@ public partial class MainWindow : Window {
         
         if (result == MessageBoxResult.Yes) {
             try {
-                if (Directory.Exists(path)) {
-                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteDirectory(
-                        path,
-                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
-                    ShowFeedback($"🗑️ Silindi: {name}");
-                } else if (File.Exists(path)) {
-                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
-                        path,
-                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
-                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                var itemKind = _fileOperations.DeleteToRecycleBin(path);
+                if (itemKind != FileItemKind.Missing) {
                     ShowFeedback($"🗑️ Silindi: {name}");
                 }
                 RemoveItemFromView(path);
@@ -2035,14 +1636,10 @@ public partial class MainWindow : Window {
     
     private void OpenFile(string path) {
         try {
-            // Klasör mü kontrol et
-            if (System.IO.Directory.Exists(path)) {
-                // Klasörü uygulama içinde aç
-                OpenFolderInApp(path);
+            if (_fileOperations.GetItemKind(path) == FileItemKind.Directory) {
+                _ = OpenFolderInApp(path);
             } else {
-                // Dosyayı sistem ile aç
-                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                _indexManager?.IncrementOpenCount(path);
+                _fileOperations.OpenFile(path);
             }
         } catch (Exception ex) {
             System.Windows.MessageBox.Show($"Açılamadı: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -2052,7 +1649,7 @@ public partial class MainWindow : Window {
     /// <summary>
     /// Klasörü uygulama içinde açar ve içeriğini gösterir
     /// </summary>
-    private async void OpenFolderInApp(string folderPath) {
+    private async Task OpenFolderInApp(string folderPath) {
         try {
             Log($"📂 Klasör açılıyor: {folderPath}");
             
@@ -2060,17 +1657,14 @@ public partial class MainWindow : Window {
             ShowFolderLoadingIndicator(folderPath);
             
             try {
-                // Check if delta sync is running and this folder isn't synced yet
-                if (_indexManager != null && _indexManager.IsDeltaSyncRunning) {
-                    // Ensure folder is synced (on-demand sync if needed)
-                    await _indexManager.EnsureSyncedAsync(folderPath);
-                }
-                
-                // Breadcrumb için klasör yolunu sakla
-                _currentFolderPath = folderPath;
-                
                 // Klasör içeriğini ASYNC yükle (büyük klasörler için optimize edildi)
-                await LoadFolderContentsAsync(folderPath);
+                if (!await LoadFolderContentsAsync(
+                        folderPath,
+                        ensureSynchronized: true)) {
+                    return;
+                }
+
+                _currentFolderPath = folderPath;
                 
                 // UI'ı güncelle
                 SearchBox.Clear();
@@ -2108,102 +1702,85 @@ public partial class MainWindow : Window {
     /// <summary>
     /// Klasör içeriğini ASYNC yükler - büyük klasörler için optimize edildi
     /// </summary>
-    private async Task LoadFolderContentsAsync(string folderPath) {
-        // Clear on UI thread first
-        _desktopIcons.Clear();
-        
-        // Hide empty folder message initially
-        EmptyFolderPanel.Visibility = Visibility.Collapsed;
-        
+    private async Task<bool> LoadFolderContentsAsync(
+        string folderPath,
+        bool ensureSynchronized = false) {
+        var cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _lifetimeCancellation.Token);
+        var previous = Interlocked.Exchange(
+            ref _folderLoadCancellation,
+            cancellation);
         try {
-            // Load items in background thread
-            var items = await Task.Run(() => {
-                var result = new List<DesktopIconViewModel>();
-                var dirInfo = new System.IO.DirectoryInfo(folderPath);
-                int count = 0;
-                
-                // Önce klasörleri ekle (EnumerateDirectories - streaming)
-                foreach (var dir in dirInfo.EnumerateDirectories().OrderBy(d => d.Name)) {
-                    try {
-                        // Limit kontrolü
-                        if (count >= MAX_FOLDER_ITEMS) break;
-                        
-                        // Gizli ve sistem klasörlerini atla
-                        if ((dir.Attributes & System.IO.FileAttributes.Hidden) != 0 ||
-                            (dir.Attributes & System.IO.FileAttributes.System) != 0) continue;
-                        
-                        var icon = new DesktopIconViewModel {
-                            Name = dir.Name,
-                            FullPath = dir.FullName,
-                            Icon = "📁",
-                            IsDirectory = true
-                        };
-                        
-                        // Klasör rengini ayarla
-                        icon.SetFolderColors(dir.Name);
-                        
-                        result.Add(icon);
-                        count++;
-                    } catch { }
+            previous?.Cancel();
+        } finally {
+            previous?.Dispose();
+        }
+
+        try {
+            var page = await _folderNavigation.OpenAsync(
+                folderPath,
+                MAX_FOLDER_ITEMS,
+                ensureSynchronized,
+                cancellation.Token);
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!ReferenceEquals(_folderLoadCancellation, cancellation)) {
+                return false;
+            }
+
+            _desktopIcons.Clear();
+            EmptyFolderPanel.Visibility = Visibility.Collapsed;
+
+            var items = page.Entries.Select(entry => {
+                var viewModel = new DesktopIconViewModel {
+                    Name = entry.Name,
+                    FullPath = entry.FullPath,
+                    Icon = entry.IsDirectory ? "📁" : GetFileIcon(entry.Name),
+                    IsDirectory = entry.IsDirectory
+                };
+
+                if (entry.IsDirectory) {
+                    viewModel.SetFolderColors(entry.Name);
                 }
-                
-                // Sonra dosyaları ekle (EnumerateFiles - streaming)
-                foreach (var file in dirInfo.EnumerateFiles().OrderBy(f => f.Name)) {
-                    try {
-                        // Limit kontrolü
-                        if (count >= MAX_FOLDER_ITEMS) break;
-                        
-                        // Gizli dosyaları atla
-                        if ((file.Attributes & System.IO.FileAttributes.Hidden) != 0) continue;
-                        
-                        var icon = new DesktopIconViewModel {
-                            Name = file.Name,
-                            FullPath = file.FullName,
-                            Icon = GetFileIcon(file.Extension),
-                            IsDirectory = false
-                        };
-                        result.Add(icon);
-                        count++;
-                    } catch { }
-                }
-                
-                return result;
-            });
-            
-            // Check if folder is empty
+
+                return viewModel;
+            }).ToList();
+
             if (items.Count == 0) {
-                // Show empty folder message
-                var folderName = System.IO.Path.GetFileName(folderPath);
+                var folderName = Path.GetFileName(folderPath);
                 if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
-                
+
                 EmptyFolderTitle.Text = $"'{folderName}' klasörü boş";
                 EmptyFolderPanel.Visibility = Visibility.Visible;
-                
-                Log($"   📂 Klasör boş");
+                Log("   📂 Klasör boş");
             } else {
-                // Add all items at once (batched update - much faster than individual adds)
                 foreach (var item in items) {
                     _desktopIcons.Add(item);
                 }
-                
-                Log($"   📊 {_desktopIcons.Count} öğe yüklendi" + 
-                    (_desktopIcons.Count >= MAX_FOLDER_ITEMS ? $" (limit: {MAX_FOLDER_ITEMS})" : ""));
-                
-                // Load thumbnails in background batches (don't block UI)
+
+                Log($"   📊 {_desktopIcons.Count} öğe yüklendi" +
+                    (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
                 _ = LoadThumbnailsInBatchesAsync(items);
             }
-            
+
+            return true;
+        } catch (OperationCanceledException) {
+            return false;
         } catch (Exception ex) {
             Log($"❌ Klasör içeriği yüklenemedi: {ex.Message}");
+            return false;
+        } finally {
+            Interlocked.CompareExchange(
+                ref _folderLoadCancellation,
+                null,
+                cancellation);
+            cancellation.Dispose();
         }
     }
-    
+
     /// <summary>
     /// Thumbnail'leri batch'ler halinde yükler (UI'ı bloklamaz)
     /// </summary>
     private async Task LoadThumbnailsInBatchesAsync(List<DesktopIconViewModel> items) {
-        if (_thumbnailService == null) return;
-        
         // Process in batches to avoid overwhelming the system
         for (int i = 0; i < items.Count; i += THUMBNAIL_BATCH_SIZE) {
             var batch = items.Skip(i).Take(THUMBNAIL_BATCH_SIZE).ToList();
@@ -2243,8 +1820,6 @@ public partial class MainWindow : Window {
     /// Klasör için thumbnail yükler
     /// </summary>
     private async Task LoadFolderThumbnailAsync(DesktopIconViewModel icon) {
-        if (_thumbnailService == null) return;
-        
         try {
             var thumbnail = await _thumbnailService.GetThumbnailAsync(icon.FullPath, THUMBNAIL_SIZE);
             if (thumbnail != null) {
@@ -2287,40 +1862,21 @@ public partial class MainWindow : Window {
     /// </summary>
     private void GoToParentFolder() {
         if (string.IsNullOrEmpty(_currentFolderPath)) {
-            // Ana ekrana dön
             GoToHome();
             return;
         }
-        
-        // Eğer mevcut klasör indekslenen bir kök dizin ise, ana ekrana dön
-        bool isRootPath = _indexedRootPaths.Any(root => 
-            string.Equals(root.TrimEnd('\\', '/'), _currentFolderPath.TrimEnd('\\', '/'), 
-                          StringComparison.OrdinalIgnoreCase));
-        
-        if (isRootPath) {
+
+        var parent = _folderNavigation.GetParentWithinRoots(
+            _currentFolderPath,
+            _indexedRootPaths);
+        if (string.IsNullOrEmpty(parent) ||
+            _fileOperations.GetItemKind(parent) != FileItemKind.Directory) {
             GoToHome();
             return;
         }
-        
-        var parent = System.IO.Directory.GetParent(_currentFolderPath);
-        if (parent != null && parent.Exists) {
-            // Parent dizini, indekslenen kök dizinlerden birinin altında mı kontrol et
-            bool parentIsInIndexedPath = _indexedRootPaths.Any(root =>
-                parent.FullName.StartsWith(root.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(root.TrimEnd('\\', '/'), parent.FullName.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase));
-            
-            if (parentIsInIndexedPath) {
-                OpenFolderInApp(parent.FullName);
-            } else {
-                // Parent indekslenen alanın dışında, ana ekrana dön
-                GoToHome();
-            }
-        } else {
-            // Ana ekrana dön
-            GoToHome();
-        }
+
+        _ = OpenFolderInApp(parent);
     }
-    
     /// <summary>
     /// Ana ekrana (Desktop) dön
     /// </summary>
@@ -2356,13 +1912,6 @@ public partial class MainWindow : Window {
     }
     
     #region File Operations & Context Menu
-    
-    private string? _selectedItemPath = null;
-    private string? _clipboardPath = null;
-    private bool _isCutOperation = false;
-    private string? _hoveredItemPath = null; // Hover edilen öğenin path'i
-    private DesktopIconViewModel? _hoveredItem = null; // Hover edilen öğenin ViewModel'i
-    private DesktopIconViewModel? _cutItem = null; // Kesilen öğenin ViewModel'i
     
     /// <summary>
     /// Dosya/klasör üzerine mouse geldiğinde (hover)
@@ -2424,22 +1973,20 @@ public partial class MainWindow : Window {
     private void ContextMenu_OpenWith(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
-        
+
         try {
-            // Windows "Birlikte Aç" dialogunu aç
-            var psi = new ProcessStartInfo {
-                FileName = "rundll32.exe",
-                Arguments = $"shell32.dll,OpenAs_RunDLL {path}",
-                UseShellExecute = true
-            };
-            Process.Start(psi);
+            _fileOperations.OpenWith(path);
             Log($"🔗 Birlikte aç: {path}");
         } catch (Exception ex) {
             Log($"❌ Birlikte aç hatası: {ex.Message}");
-            System.Windows.MessageBox.Show($"Birlikte aç hatası: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
+            System.Windows.MessageBox.Show(
+                $"Birlikte aç hatası: {ex.Message}",
+                "Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
-    
+
     private void ContextMenu_Copy(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
@@ -2485,47 +2032,34 @@ public partial class MainWindow : Window {
     private void ContextMenu_OpenLocation(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
-        
+
         try {
-            var directory = Directory.Exists(path) 
-                ? path 
+            var directory = _fileOperations.GetItemKind(path) ==
+                            FileItemKind.Directory
+                ? path
                 : Path.GetDirectoryName(path);
-            
+
             if (!string.IsNullOrEmpty(directory)) {
-                // Dosya Gezgini'nde aç ve dosyayı seç
-                Process.Start("explorer.exe", $"/select,\"{path}\"");
+                _fileOperations.Reveal(path);
                 Log($"📍 Konum açıldı: {directory}");
             }
         } catch (Exception ex) {
             Log($"❌ Konum açma hatası: {ex.Message}");
         }
     }
-    
+
     private void ContextMenu_Properties(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
-        
+
         try {
-            // Windows özellikler penceresini aç
-            var psi = new ProcessStartInfo {
-                FileName = "explorer.exe",
-                Arguments = $"/select,\"{path}\"",
-                UseShellExecute = true
-            };
-            
-            // Shell'in properties komutunu kullan
-            var info = new System.Diagnostics.ProcessStartInfo("explorer.exe") {
-                Arguments = $"shell:::{{{Guid.NewGuid()}}}"
-            };
-            
-            // Alternatif: verb kullan
-            Shell32Helper.ShowProperties(path);
+            _fileOperations.ShowProperties(path);
             Log($"ℹ️ Özellikler açıldı: {Path.GetFileName(path)}");
         } catch (Exception ex) {
             Log($"❌ Özellikler açma hatası: {ex.Message}");
         }
     }
-    
+
     /// <summary>
     /// Context menu'den path bilgisini alır
     /// </summary>
@@ -2555,47 +2089,51 @@ public partial class MainWindow : Window {
     }
     
     private void ContextMenu_NewFolder(object sender, RoutedEventArgs e) {
-        var targetFolder = _currentFolderPath ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        
-        var dialog = new RenameDialog("Yeni Klasör", isNew: true);
-        dialog.Owner = this;
-        
-        if (dialog.ShowDialog() == true) {
-            var folderPath = Path.Combine(targetFolder, dialog.NewName);
-            folderPath = GetUniqueFilePath(folderPath);
-            
-            try {
-                Directory.CreateDirectory(folderPath);
-                Log($"📁 Yeni klasör oluşturuldu: {dialog.NewName}");
-                RefreshCurrentFolder();
-            } catch (Exception ex) {
-                Log($"❌ Klasör oluşturma hatası: {ex.Message}");
-                System.Windows.MessageBox.Show($"Klasör oluşturma hatası: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+        var targetFolder = _currentFolderPath ??
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        var dialog = new RenameDialog("Yeni Klasör", isNew: true) {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        try {
+            _fileOperations.CreateFolder(targetFolder, dialog.NewName);
+            Log($"📁 Yeni klasör oluşturuldu: {dialog.NewName}");
+            RefreshCurrentFolder();
+        } catch (Exception ex) {
+            Log($"❌ Klasör oluşturma hatası: {ex.Message}");
+            System.Windows.MessageBox.Show(
+                $"Klasör oluşturma hatası: {ex.Message}",
+                "Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
-    
+
     private void ContextMenu_NewTextFile(object sender, RoutedEventArgs e) {
-        var targetFolder = _currentFolderPath ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        
-        var dialog = new RenameDialog("Yeni Metin Belgesi.txt", isNew: true);
-        dialog.Owner = this;
-        
-        if (dialog.ShowDialog() == true) {
-            var filePath = Path.Combine(targetFolder, dialog.NewName);
-            filePath = GetUniqueFilePath(filePath);
-            
-            try {
-                File.WriteAllText(filePath, "");
-                Log($"📄 Yeni dosya oluşturuldu: {dialog.NewName}");
-                RefreshCurrentFolder();
-            } catch (Exception ex) {
-                Log($"❌ Dosya oluşturma hatası: {ex.Message}");
-                System.Windows.MessageBox.Show($"Dosya oluşturma hatası: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Error);
-            }
+        var targetFolder = _currentFolderPath ??
+            Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
+        var dialog = new RenameDialog("Yeni Metin Belgesi.txt", isNew: true) {
+            Owner = this
+        };
+
+        if (dialog.ShowDialog() != true) return;
+
+        try {
+            _fileOperations.CreateTextFile(targetFolder, dialog.NewName);
+            Log($"📄 Yeni dosya oluşturuldu: {dialog.NewName}");
+            RefreshCurrentFolder();
+        } catch (Exception ex) {
+            Log($"❌ Dosya oluşturma hatası: {ex.Message}");
+            System.Windows.MessageBox.Show(
+                $"Dosya oluşturma hatası: {ex.Message}",
+                "Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
-    
+
     private void ContextMenu_Refresh(object sender, RoutedEventArgs e) {
         RefreshCurrentFolder();
     }
@@ -2661,39 +2199,6 @@ public partial class MainWindow : Window {
         if (icon != null) {
             _desktopIcons.Remove(icon);
             Log($"✅ Görünümden kaldırıldı: {Path.GetFileName(path)}");
-        }
-    }
-    
-    private string GetUniqueFilePath(string path) {
-        if (!File.Exists(path) && !Directory.Exists(path)) {
-            return path;
-        }
-        
-        var directory = Path.GetDirectoryName(path) ?? "";
-        var nameWithoutExt = Path.GetFileNameWithoutExtension(path);
-        var extension = Path.GetExtension(path);
-        
-        int counter = 1;
-        string newPath;
-        do {
-            newPath = Path.Combine(directory, $"{nameWithoutExt} ({counter}){extension}");
-            counter++;
-        } while (File.Exists(newPath) || Directory.Exists(newPath));
-        
-        return newPath;
-    }
-    
-    private void CopyDirectory(string sourceDir, string destDir) {
-        Directory.CreateDirectory(destDir);
-        
-        foreach (var file in Directory.GetFiles(sourceDir)) {
-            var destFile = Path.Combine(destDir, Path.GetFileName(file));
-            File.Copy(file, destFile);
-        }
-        
-        foreach (var dir in Directory.GetDirectories(sourceDir)) {
-            var destSubDir = Path.Combine(destDir, Path.GetFileName(dir));
-            CopyDirectory(dir, destSubDir);
         }
     }
     

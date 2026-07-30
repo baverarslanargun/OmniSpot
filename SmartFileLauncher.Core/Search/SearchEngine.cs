@@ -95,7 +95,12 @@ public class SearchEngine {
             var freq = node.Metadata?.OpenCount ?? 0;
             score += freq * 2;
             
-            pq.Enqueue(new SearchResult { Name = node.Name, FullPath = node.FullPath, Score = score }, -score);
+            pq.Enqueue(new SearchResult {
+                Name = node.Name,
+                FullPath = node.FullPath,
+                Score = score,
+                IsDirectory = node.IsDirectory
+            }, -score);
         }
         
         var results = new List<SearchResult>(Math.Min(maxResults, pq.Count));
