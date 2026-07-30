@@ -61,39 +61,34 @@ public class AppSettings
     public int SearchDebounceMs { get; set; } = 1200;
 
     /// <summary>
-    /// Cache (SQLite) kullanılsın mı?
-    /// </summary>
-    public bool UseCachedIndex { get; set; } = true;
-
-    /// <summary>
-    /// Cache dosyasının yolu (salt okunur)
+    /// İndeks dosyasının yolu (salt okunur)
     /// </summary>
     [JsonIgnore]
-    public static string CachePath => Path.Combine(
+    public static string IndexPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "OmniSpot",
         "index.db"
     );
 
     /// <summary>
-    /// Cache dosyası var mı?
+    /// İndeks dosyası var mı?
     /// </summary>
     [JsonIgnore]
-    public bool CacheExists => File.Exists(CachePath);
+    public bool IndexExists => File.Exists(IndexPath);
 
     /// <summary>
-    /// Cache dosya boyutu (KB)
+    /// İndeks dosya boyutu (KB)
     /// </summary>
     [JsonIgnore]
-    public long CacheSizeKB
+    public long IndexSizeKB
     {
         get
         {
             try
             {
-                if (CacheExists)
+                if (IndexExists)
                 {
-                    var fi = new FileInfo(CachePath);
+                    var fi = new FileInfo(IndexPath);
                     return fi.Length / 1024;
                 }
             }
@@ -184,22 +179,21 @@ public class AppSettings
         NaturalLanguageModeEnabled = false;
         GridViewEnabled = false;
         SearchDebounceMs = 1200;
-        UseCachedIndex = true;
     }
 
     /// <summary>
-    /// Cache dosyasını siler
+    /// İndeks dosyasını siler
     /// </summary>
-    public static bool DeleteCache()
+    public static bool DeleteIndex()
     {
         try
         {
-            if (File.Exists(CachePath))
+            if (File.Exists(IndexPath))
             {
-                File.Delete(CachePath);
+                File.Delete(IndexPath);
                 // WAL ve SHM dosyalarını da sil
-                var walPath = CachePath + "-wal";
-                var shmPath = CachePath + "-shm";
+                var walPath = IndexPath + "-wal";
+                var shmPath = IndexPath + "-shm";
                 if (File.Exists(walPath)) File.Delete(walPath);
                 if (File.Exists(shmPath)) File.Delete(shmPath);
                 return true;

@@ -51,128 +51,116 @@ public partial class SettingsWindow : Window
         NaturalLanguageDefaultCheckbox.IsChecked = _settings.NaturalLanguageModeEnabled;
         GridViewDefaultCheckbox.IsChecked = _settings.GridViewEnabled;
         
-        // Cache
-        UseCacheCheckbox.IsChecked = _settings.UseCachedIndex;
-        UpdateCacheStatus();
+        UpdateIndexStatus();
     }
 
     /// <summary>
-    /// Cache durumunu günceller
+    /// İndeks durumunu günceller
     /// </summary>
-    private void UpdateCacheStatus()
+    private void UpdateIndexStatus()
     {
-        if (_settings.CacheExists)
+        if (_settings.IndexExists)
         {
-            CacheStatusText.Text = "✅ Önbellek mevcut";
-            CacheStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+            IndexStatusText.Text = "✅ İndeks mevcut";
+            IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1F));
-            CacheSizeText.Text = $"Boyut: {_settings.CacheSizeKB:N0} KB";
-            ClearCacheButton.IsEnabled = true;
+            IndexSizeText.Text = $"Boyut: {_settings.IndexSizeKB:N0} KB";
+            RebuildIndexButton.IsEnabled = true;
         }
         else
         {
-            CacheStatusText.Text = "❌ Önbellek bulunamadı";
-            CacheStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
+            IndexStatusText.Text = "⏳ İndeks henüz oluşturulmadı";
+            IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x86, 0x86, 0x8B));
-            CacheSizeText.Text = "Boyut: -";
-            ClearCacheButton.IsEnabled = false;
+            IndexSizeText.Text = "Boyut: -";
+            RebuildIndexButton.IsEnabled = false;
         }
         
-        CachePathText.Text = $"Konum: {AppSettings.CachePath}";
+        IndexPathText.Text = $"Konum: {AppSettings.IndexPath}";
     }
 
     /// <summary>
-    /// Cache'i temizler
+    /// İndeksi siler ve temiz bir tarama için uygulamayı yeniden başlatır.
     /// </summary>
-    private void ClearCache_Click(object sender, RoutedEventArgs e)
+    private void RebuildIndex_Click(object sender, RoutedEventArgs e)
     {
         var result = System.Windows.MessageBox.Show(
-            "Önbellek temizlenecek. Sonraki açılışta dosyalar yeniden taranacak.\n\nDevam etmek istiyor musunuz?",
-            "Önbelleği Temizle",
+            "Mevcut arama indeksi silinecek. OmniSpot yeniden başlatılacak ve standart klasörler tekrar taranacak.\n\nDevam etmek istiyor musunuz?",
+            "İndeksi Yeniden Oluştur",
             MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
-        
-        if (result == MessageBoxResult.Yes)
+            MessageBoxImage.Warning);
+
+        if (result != MessageBoxResult.Yes)
         {
-            // Uygulamayı yeniden başlatmak gerektiğini bildir
-            var restartResult = System.Windows.MessageBox.Show(
-                "Önbelleği temizlemek için uygulama yeniden başlatılmalı.\n\n" +
-                "Şimdi yeniden başlatmak ister misiniz?",
-                "Yeniden Başlatma Gerekli",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Information);
-            
-            if (restartResult == MessageBoxResult.Yes)
+            return;
+        }
+
+        try
+        {
+            var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+            if (string.IsNullOrEmpty(exePath))
             {
-                // Cache dosyasını sil ve uygulamayı yeniden başlat
-                try
-                {
-                    var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
-                    if (!string.IsNullOrEmpty(exePath))
-                    {
-                        // Yeniden başlatma için batch dosyası oluştur
-                        var batchPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "omnispot_restart.bat");
-                        var commands = $@"
+                throw new InvalidOperationException("Uygulama yolu bulunamadı.");
+            }
+
+            // SQLite bağlantısı uygulama kapanınca serbest kalacağı için silme ve
+            // yeniden başlatma işlemini kısa ömürlü bir batch dosyası tamamlar.
+            var batchPath = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"omnispot_rebuild_index_{Environment.ProcessId}.bat");
+            var commands = $@"
 @echo off
 timeout /t 2 /nobreak > nul
-del ""{AppSettings.CachePath}"" 2>nul
-del ""{AppSettings.CachePath}-wal"" 2>nul  
-del ""{AppSettings.CachePath}-shm"" 2>nul
+del ""{AppSettings.IndexPath}"" 2>nul
+del ""{AppSettings.IndexPath}-wal"" 2>nul
+del ""{AppSettings.IndexPath}-shm"" 2>nul
 start """" ""{exePath}""
 del ""%~f0""
 ";
-                        System.IO.File.WriteAllText(batchPath, commands);
-                        
-                        var startInfo = new System.Diagnostics.ProcessStartInfo
-                        {
-                            FileName = batchPath,
-                            CreateNoWindow = true,
-                            UseShellExecute = true,
-                            WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
-                        };
-                        System.Diagnostics.Process.Start(startInfo);
-                        
-                        _log?.Invoke("🔄 Uygulama yeniden başlatılıyor...");
-                        
-                        // Önce bu pencereyi kapat, sonra uygulamayı kapat
-                        this.Close();
-                        
-                        // Dispatcher üzerinden shutdown yap (daha güvenli)
-                        Dispatcher.BeginInvoke(new Action(() => 
-                        {
-                            Environment.Exit(0);
-                        }), System.Windows.Threading.DispatcherPriority.Background);
-                        
-                        return;
-                    }
-                }
-                catch (Exception ex)
-                {
-                    System.Windows.MessageBox.Show(
-                        $"Yeniden başlatma hatası: {ex.Message}\n\nLütfen uygulamayı manuel olarak yeniden başlatın.",
-                        "Hata",
-                        MessageBoxButton.OK,
-                        MessageBoxImage.Error);
-                }
-            }
+            System.IO.File.WriteAllText(batchPath, commands);
+
+            var startInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = batchPath,
+                CreateNoWindow = true,
+                UseShellExecute = true,
+                WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden
+            };
+            System.Diagnostics.Process.Start(startInfo);
+
+            _log?.Invoke("🔄 İndeks yeniden oluşturuluyor...");
+            Close();
+
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                Environment.Exit(0);
+            }), System.Windows.Threading.DispatcherPriority.Background);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(
+                $"İndeks yeniden oluşturulamadı: {ex.Message}\n\nLütfen uygulamayı manuel olarak yeniden başlatın.",
+                "Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
         }
     }
 
     /// <summary>
-    /// Cache klasörünü açar
+    /// İndeks klasörünü açar
     /// </summary>
-    private void OpenCacheFolder_Click(object sender, RoutedEventArgs e)
+    private void OpenIndexFolder_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            var folderPath = System.IO.Path.GetDirectoryName(AppSettings.CachePath);
+            var folderPath = System.IO.Path.GetDirectoryName(AppSettings.IndexPath);
             if (!string.IsNullOrEmpty(folderPath) && System.IO.Directory.Exists(folderPath))
             {
                 System.Diagnostics.Process.Start("explorer.exe", folderPath);
             }
             else
             {
-                System.Windows.MessageBox.Show("Önbellek klasörü bulunamadı.", "Uyarı",
+                System.Windows.MessageBox.Show("İndeks klasörü bulunamadı.", "Uyarı",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
             }
         }
@@ -351,7 +339,6 @@ del ""%~f0""
         _settings.MinimizeToTrayOnClose = MinimizeToTrayCheckbox.IsChecked ?? true;
         _settings.NaturalLanguageModeEnabled = NaturalLanguageDefaultCheckbox.IsChecked ?? false;
         _settings.GridViewEnabled = GridViewDefaultCheckbox.IsChecked ?? false;
-        _settings.UseCachedIndex = UseCacheCheckbox.IsChecked ?? true;
         
         // Dosyaya kaydet
         _settings.Save();

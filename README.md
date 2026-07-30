@@ -18,7 +18,7 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile her yerden erişin!
 - ✅ **Dosya İşlemleri**: Kopyala, Kes, Yapıştır, Sil, Yeniden Adlandır
 - ✅ **Thumbnail Önizleme**: Resim ve video önizlemeleri
 - ✅ **Renkli Klasörler**: Klasör türüne göre renk kodlaması
-- ✅ **Çoklu Dizin İndeksi**: Varsayılan cache-backed akışta Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini indeksleyin
+- ✅ **Kalıcı Çoklu Dizin İndeksi**: Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini indeksleyin; sonraki açılışlarda kayıtlı indeksi kullanın
 
 ### Klavye Kısayolları
 | Kısayol | İşlem |
@@ -88,7 +88,6 @@ Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 - [ ] Trie tabanlı autocomplete
 - [ ] Sesli komut desteği (Vosk)
 - [ ] Kullanıcı tanımlı indeks kökleri
-- [ ] Cache açık/kapalı tarama kapsamını eşitleme
 - [ ] Tema desteği
 - [ ] Özelleştirilebilir kısayollar
 - [ ] Dosya içerik araması
