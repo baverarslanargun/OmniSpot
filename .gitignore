@@ -4,6 +4,7 @@
 artifacts/
 publish/
 installer/output/
+TestResults/
 
 # Visual Studio and editor state
 .vs/

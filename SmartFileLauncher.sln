@@ -6,6 +6,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFileLauncher.Core", "S
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFileLauncher.UI", "SmartFileLauncher.UI\SmartFileLauncher.UI.csproj", "{9B8A7352-5E74-4D4C-A1A5-2B0A6A4AF6A2}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFileLauncher.Core.Tests", "tests\SmartFileLauncher.Core.Tests\SmartFileLauncher.Core.Tests.csproj", "{C4C6956C-DA6C-4CFA-A3C5-0B53E420D55A}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -20,5 +22,9 @@ Global
 		{9B8A7352-5E74-4D4C-A1A5-2B0A6A4AF6A2}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9B8A7352-5E74-4D4C-A1A5-2B0A6A4AF6A2}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9B8A7352-5E74-4D4C-A1A5-2B0A6A4AF6A2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C4C6956C-DA6C-4CFA-A3C5-0B53E420D55A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C4C6956C-DA6C-4CFA-A3C5-0B53E420D55A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C4C6956C-DA6C-4CFA-A3C5-0B53E420D55A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C4C6956C-DA6C-4CFA-A3C5-0B53E420D55A}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
