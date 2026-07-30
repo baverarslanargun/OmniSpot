@@ -307,7 +307,7 @@ public partial class MainWindow : Window {
     private IntentParser? _intentParser;
     private IThumbnailService? _thumbnailService;
     private InvertedIndex? _index;
-    private Dictionary<string, FileMetadata>? _meta;
+    private IReadOnlyDictionary<string, FileMetadata>? _meta;
     private FileSystemNode? _root;
     private string _desktopPath = ""; // Desktop path for icon loading
     private string? _currentFolderPath = null; // Currently browsed folder (null = home/desktop)
@@ -319,12 +319,12 @@ public partial class MainWindow : Window {
     private bool _isGridViewMode = false; // Grid görünümü için
     private bool _hasInternetConnection = true; // İnternet bağlantısı durumu
     private bool _useCachedIndex = true; // SQLite cache kullan
-    private System.Threading.Timer? _searchDebounceTimer;
     private System.Threading.Timer? _internetCheckTimer;
     private System.Threading.Timer? _fileChangeDebounceTimer; // Dosya değişikliği debounce
     private const int FILE_CHANGE_DEBOUNCE_MS = 1000; // 1 saniye debounce (daha az kasma için artırıldı)
     private bool _isProcessingFileChange = false; // Çift işleme engeli
     private CancellationTokenSource? _currentSearchCancellation;
+    private long _searchVersion;
     private string _lastSearchQuery = ""; // Son arama sorgusu (retry için)
     private const int DEBOUNCE_DELAY_MS = 1200; // 1.2 seconds delay after last keystroke (increased from 400ms)
     private const int THUMBNAIL_SIZE = 128; // Thumbnail boyutu
@@ -561,6 +561,9 @@ public partial class MainWindow : Window {
     /// Uygulamadan tamamen çıkış yapar
     /// </summary>
     private void ForceExit() {
+        // Stop query producers before disposing the index snapshot provider.
+        CancelCurrentSearch();
+
         // IndexManager'ı kapat (cache'i kaydet)
         _indexManager?.Dispose();
         
@@ -574,9 +577,7 @@ public partial class MainWindow : Window {
         }
         
         // Timer'ları temizle
-        _searchDebounceTimer?.Dispose();
         _internetCheckTimer?.Dispose();
-        _currentSearchCancellation?.Dispose();
         
         // Kapatma olayını bypass et
         Closing -= MainWindow_Closing;
@@ -831,7 +832,7 @@ public partial class MainWindow : Window {
         
         // IndexManager'dan veri yapılarını al
         _index = _indexManager.InvertedIndex;
-        _meta = _indexManager.MetadataMap;
+        _meta = null;
         _root = _indexManager.RootNode;
         
         // Desktop path'i sakla (icon yükleme için)
@@ -852,8 +853,14 @@ public partial class MainWindow : Window {
             }
             
             // Search engine'leri oluştur
-            _searchEngine = new SearchEngine(_index!, new BasicTokenizer(), new BasicScoringStrategy());
-            _advancedSearchEngine = new AdvancedSearchEngine(_index!, new BasicTokenizer(), new BasicScoringStrategy(), _root);
+            _searchEngine = new SearchEngine(
+                _indexManager.CreateSearchSnapshot,
+                new BasicTokenizer(),
+                new BasicScoringStrategy());
+            _advancedSearchEngine = new AdvancedSearchEngine(
+                _indexManager.CreateSearchSnapshot,
+                new BasicTokenizer(),
+                new BasicScoringStrategy());
             
             // Intent parser
             try {
@@ -902,8 +909,13 @@ public partial class MainWindow : Window {
             Log($"✅ Tarama tamamlandı: {fileCount} öğe bulundu");
             Log($"📂 Taranan yol: {_root.FullPath}");
             
+            var rootNode = _root ?? throw new InvalidOperationException("Tarama kök düğüm üretmedi.");
             _searchEngine = new SearchEngine(_index!, new BasicTokenizer(), new BasicScoringStrategy());
-            _advancedSearchEngine = new AdvancedSearchEngine(_index!, new BasicTokenizer(), new BasicScoringStrategy(), _root);
+            _advancedSearchEngine = new AdvancedSearchEngine(
+                _index!,
+                new BasicTokenizer(),
+                new BasicScoringStrategy(),
+                rootNode);
             
             try {
                 _intentParser = new IntentParser(Log);
@@ -1158,14 +1170,25 @@ public partial class MainWindow : Window {
         
         try
         {
-            // Mevcut CancellationToken'ı iptal etme - sadece sonuçları güncelle
-            var results = _searchEngine.Search(_lastSearchQuery);
+            var query = _lastSearchQuery;
+            var version = Volatile.Read(ref _searchVersion);
+            var cancellationToken =
+                _currentSearchCancellation?.Token ?? CancellationToken.None;
+            var results = await Task.Run(
+                () => _searchEngine.Search(query, 50, cancellationToken),
+                cancellationToken);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentSearch(version)) return;
             
             await Dispatcher.InvokeAsync(() =>
             {
+                if (!IsCurrentSearch(version)) return;
+
                 _searchResults.Clear();
-                foreach (var result in results.Take(50))
+                foreach (var result in results)
                 {
+                    cancellationToken.ThrowIfCancellationRequested();
                     var ext = System.IO.Path.GetExtension(result.Name).ToLowerInvariant();
                     var isDirectory = string.IsNullOrEmpty(ext) && System.IO.Directory.Exists(result.FullPath);
                     
@@ -1189,6 +1212,10 @@ public partial class MainWindow : Window {
             });
             
             Log($"🔄 Arama sonuçları güncellendi");
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer query owns the result surface.
         }
         catch (Exception ex)
         {
@@ -1287,78 +1314,82 @@ public partial class MainWindow : Window {
         var query = SearchBox.Text;
         
         if (string.IsNullOrWhiteSpace(query)) {
-            // Cancel any pending search and active search
-            _searchDebounceTimer?.Dispose();
-            _searchDebounceTimer = null;
-            
-            // Cancel and dispose safely
-            try {
-                _currentSearchCancellation?.Cancel();
-            } catch { /* Ignore cancellation errors */ }
-            
-            try {
-                _currentSearchCancellation?.Dispose();
-            } catch { /* Ignore disposal errors */ }
-            _currentSearchCancellation = null;
+            CancelCurrentSearch();
             
             // Show desktop icons, hide search results
             DesktopIconsScroll.Visibility = Visibility.Visible;
             ResultsContainer.Visibility = Visibility.Collapsed;
             _searchResults.Clear();
         } else {
-            // Cancel previous pending search
-            _searchDebounceTimer?.Dispose();
-            _searchDebounceTimer = null;
-            
-            // Capture query for closure
-            var capturedQuery = query;
-            
-            // Debounce search - wait for user to stop typing
-            _searchDebounceTimer = new System.Threading.Timer(_ => {
-                Dispatcher.Invoke(async () => {
-                    // Cancel any ongoing search safely
-                    try {
-                        _currentSearchCancellation?.Cancel();
-                    } catch { /* Ignore cancellation errors */ }
-                    
-                    try {
-                        _currentSearchCancellation?.Dispose();
-                    } catch { /* Ignore disposal errors */ }
-                    
-                    // Create new cancellation token source
-                    _currentSearchCancellation = new CancellationTokenSource();
-                    var token = _currentSearchCancellation.Token;
-                    
-                    // Show search results, hide desktop icons
-                    DesktopIconsScroll.Visibility = Visibility.Collapsed;
-                    ResultsContainer.Visibility = Visibility.Visible;
-                    
-                    Log($"🔍 Arama sorgusu: '{capturedQuery}'");
-                    
-                    // Son sorguyu sakla (retry için)
-                    _lastSearchQuery = capturedQuery;
-                    
-                    // Debug: show tokenization
-                    var tokenizer = new BasicTokenizer();
-                    var tokens = tokenizer.Tokenize(capturedQuery).ToList();
-                    Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
-                    
-                    // Aranıyor göstergesini göster
-                    ShowSearchingIndicator(capturedQuery);
-                    
-                    try {
-                        await RunSearchAsync(capturedQuery, token);
-                    } catch (OperationCanceledException) {
-                        Log("🚫 Arama iptal edildi (yeni sorgu başlatıldı)");
-                        HideAllPanels();
-                    } catch (Exception ex) {
-                        Log($"❌ Arama exception: {ex.Message}");
-                        ShowError("Arama sırasında bir hata oluştu", ex.Message);
-                    }
-                });
-            }, null, DEBOUNCE_DELAY_MS, Timeout.Infinite);
+            BeginSearch(query, debounce: true);
         }
     }
+
+    private void BeginSearch(string query, bool debounce) {
+        var cancellation = new CancellationTokenSource();
+        var previous = Interlocked.Exchange(
+            ref _currentSearchCancellation,
+            cancellation);
+        var version = Interlocked.Increment(ref _searchVersion);
+
+        try {
+            previous?.Cancel();
+        } finally {
+            previous?.Dispose();
+        }
+
+        _lastSearchQuery = query;
+        _ = ExecuteSearchRequestAsync(query, version, cancellation, debounce);
+    }
+
+    private async Task ExecuteSearchRequestAsync(
+        string query,
+        long version,
+        CancellationTokenSource cancellation,
+        bool debounce) {
+        try {
+            if (debounce) {
+                await Task.Delay(DEBOUNCE_DELAY_MS, cancellation.Token);
+            }
+
+            cancellation.Token.ThrowIfCancellationRequested();
+            if (!IsCurrentSearch(version)) return;
+
+            DesktopIconsScroll.Visibility = Visibility.Collapsed;
+            ResultsContainer.Visibility = Visibility.Visible;
+
+            Log($"🔍 Arama sorgusu: '{query}'");
+            var tokenizer = new BasicTokenizer();
+            var tokens = tokenizer.Tokenize(query).ToList();
+            Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
+            ShowSearchingIndicator(query);
+
+            await RunSearchAsync(query, version, cancellation.Token);
+        } catch (OperationCanceledException) {
+            // A newer request owns the UI. The stale request must not mutate it.
+        } catch (Exception ex) {
+            if (!IsCurrentSearch(version)) return;
+
+            Log($"❌ Arama exception: {ex.Message}");
+            ShowError("Arama sırasında bir hata oluştu", ex.Message);
+        }
+    }
+
+    private void CancelCurrentSearch() {
+        Interlocked.Increment(ref _searchVersion);
+        var cancellation = Interlocked.Exchange(
+            ref _currentSearchCancellation,
+            null);
+
+        try {
+            cancellation?.Cancel();
+        } finally {
+            cancellation?.Dispose();
+        }
+    }
+
+    private bool IsCurrentSearch(long version) =>
+        version == Volatile.Read(ref _searchVersion);
     
     /// <summary>
     /// Aranıyor göstergesini gösterir
@@ -1500,32 +1531,22 @@ public partial class MainWindow : Window {
             // Aramayı yeniden başlat
             ErrorPanel.Visibility = Visibility.Collapsed;
             FallbackWarningBanner.Visibility = Visibility.Collapsed;
-            ShowSearchingIndicator(_lastSearchQuery);
-            
-            _currentSearchCancellation?.Cancel();
-            _currentSearchCancellation?.Dispose();
-            _currentSearchCancellation = new CancellationTokenSource();
-            
-            _ = Task.Run(async () => {
-                try {
-                    await Dispatcher.InvokeAsync(async () => {
-                        await RunSearchAsync(_lastSearchQuery, _currentSearchCancellation.Token);
-                    });
-                } catch (Exception ex) {
-                    await Dispatcher.InvokeAsync(() => {
-                        ShowError("Arama sırasında bir hata oluştu", ex.Message);
-                    });
-                }
-            });
+            BeginSearch(_lastSearchQuery, debounce: false);
         }
     }
     
-    private async Task RunSearchAsync(string query, CancellationToken cancellationToken = default) {
+    private async Task RunSearchAsync(
+        string query,
+        long searchVersion,
+        CancellationToken cancellationToken = default) {
         if (_searchEngine == null) {
             Log("HATA: SearchEngine null!");
             ShowError("Arama motoru başlatılamadı", "Uygulama düzgün yüklenmemiş olabilir. Lütfen uygulamayı yeniden başlatın.");
             return;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!IsCurrentSearch(searchVersion)) return;
         
         // Check if delta sync is still running
         if (_indexManager != null && _indexManager.IsDeltaSyncRunning) {
@@ -1558,7 +1579,9 @@ public partial class MainWindow : Window {
                     usedFallback = true;
                     fallbackReason = "İnternet bağlantısı yok";
                     // Standart aramaya geç
-                    resultList = _searchEngine.Search(query, 100).ToList();
+                    resultList = (await Task.Run(
+                        () => _searchEngine.Search(query, 100, cancellationToken),
+                        cancellationToken)).ToList();
                 } else {
                     // Run AI parsing (Groq) with timeout protection
                     StructuredQuery? structuredQuery = null;
@@ -1646,21 +1669,25 @@ public partial class MainWindow : Window {
                         Log($"   Folder Hints: [{string.Join(", ", structuredQuery.FolderHints.Select(h => h.Name))}]");
                     }
                     Log($"   Include Folders: {structuredQuery.IncludeFolderContents}");
-                    
-                    // Execute search and materialize results immediately
-                    resultList = _advancedSearchEngine.Search(structuredQuery, 100).ToList();
+
+                    // Execute the CPU-bound search outside the UI thread.
+                    resultList = (await Task.Run(
+                        () => _advancedSearchEngine.Search(
+                            structuredQuery,
+                            100,
+                            cancellationToken),
+                        cancellationToken)).ToList();
 
                     // Handle Auto-Open Action
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!IsCurrentSearch(searchVersion)) return;
                     if (structuredQuery.OpenAction != null && structuredQuery.OpenAction.ShouldOpen && resultList.Any()) {
                         var bestMatch = resultList.First();
                         
                         if (structuredQuery.OpenAction.OpenMode == "single_best") {
                             // Directly open the best match, but still show results
                             Log($"🚀 Auto-opening best match: {bestMatch.Name}");
-                            
-                            await Dispatcher.InvokeAsync(() => {
-                                OpenFile(bestMatch.FullPath);
-                            });
+                            OpenFile(bestMatch.FullPath);
                             
                             // Continue to show results - don't return early
                         } else {
@@ -1670,12 +1697,15 @@ public partial class MainWindow : Window {
                     }
                 }
             } else {
-                // Standard keyword search - materialize immediately
-                resultList = _searchEngine.Search(query, 100).ToList();
+                // Standard keyword search also runs outside the UI thread.
+                resultList = (await Task.Run(
+                    () => _searchEngine.Search(query, 100, cancellationToken),
+                    cancellationToken)).ToList();
             }
-            
+
             // Check cancellation before updating UI
             cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentSearch(searchVersion)) return;
             Log($"✅ Sonuç sayısı: {resultList.Count}");
             
             // Fallback veya Warning uyarısını göster (AI modu aktifse)
@@ -1768,10 +1798,10 @@ public partial class MainWindow : Window {
             }
             
         } catch (OperationCanceledException) {
-            // Arama iptal edildi - sessizce çık, hata değil
-            Log("🚫 Arama iptal edildi");
-            HideAllPanels();
+            throw;
         } catch (Exception ex) {
+            if (!IsCurrentSearch(searchVersion)) return;
+
             Log($"❌ Arama hatası: {ex.Message}");
             Log($"Stack: {ex.StackTrace}");
             ShowError("Arama sırasında bir hata oluştu", ex.Message);

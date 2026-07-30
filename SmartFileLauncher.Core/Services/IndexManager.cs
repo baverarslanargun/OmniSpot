@@ -37,10 +37,10 @@ public class IndexManager : IDisposable
     private bool _isInitialized;
     
     // Background delta sync tracking
-    private bool _isDeltaSyncRunning = false;
-    private int _deltaSyncProgress = 0;
-    private int _deltaSyncTotal = 0;
-    private int _deltaSyncProcessed = 0;
+    private volatile bool _isDeltaSyncRunning = false;
+    private volatile int _deltaSyncProgress = 0;
+    private volatile int _deltaSyncTotal = 0;
+    private volatile int _deltaSyncProcessed = 0;
     private readonly HashSet<string> _syncedPaths = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _currentlySyncing = new(StringComparer.OrdinalIgnoreCase);
 
@@ -76,7 +76,8 @@ public class IndexManager : IDisposable
         _db = database;
         _watcher = watcher;
         _invertedIndex = new InvertedIndex();
-        _metadataMap = new Dictionary<string, FileMetadata>();
+        _metadataMap = new Dictionary<string, FileMetadata>(
+            StringComparer.OrdinalIgnoreCase);
         _pathToNode = new Dictionary<string, FileSystemNode>(StringComparer.OrdinalIgnoreCase);
 
         _watcher.OnChange += HandleFileChange;
@@ -86,8 +87,23 @@ public class IndexManager : IDisposable
     #region Properties
 
     public InvertedIndex InvertedIndex => _invertedIndex;
-    public Dictionary<string, FileMetadata> MetadataMap => _metadataMap;
-    public FileSystemNode? RootNode => _rootNode;
+    public IReadOnlyDictionary<string, FileMetadata> MetadataMap {
+        get {
+            lock (_lock) {
+                return _metadataMap.ToDictionary(
+                    entry => entry.Key,
+                    entry => CloneMetadata(entry.Value),
+                    StringComparer.OrdinalIgnoreCase);
+            }
+        }
+    }
+    public FileSystemNode? RootNode {
+        get {
+            lock (_lock) {
+                return _rootNode;
+            }
+        }
+    }
     public bool IsInitialized => _isInitialized;
     public string DatabasePath => _db.DatabasePath;
 
@@ -802,64 +818,79 @@ public class IndexManager : IDisposable
                 }
             }
 
-            // Process removals
-            foreach (var path in filesToRemove)
+            lock (_lock)
             {
-                _db.DeleteFile(path);
-                RemoveFromIndex(path);
-                changes++;
-            }
-
-            // Process updates (re-index)
-            foreach (var path in filesToUpdate)
-            {
-                if (_pathToNode.TryGetValue(path, out var node))
+                // Process removals
+                foreach (var path in filesToRemove)
                 {
-                    // Update metadata
-                    var fi = new FileInfo(path);
-                    if (node.Metadata != null)
-                    {
-                        node.Metadata.SizeBytes = fi.Length;
-                        node.Metadata.LastWriteTime = fi.LastWriteTime;
-                    }
-
-                    // Update DB
-                    var existing = _db.GetFileByPath(path);
-                    if (existing != null)
-                    {
-                        existing.LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks;
-                        existing.SizeBytes = fi.Length;
-                        existing.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
-                        _db.InsertFile(existing); // upsert
-                    }
+                    _db.DeleteFile(path);
+                    RemoveFromIndex(path);
+                    changes++;
                 }
-                changes++;
+
+                // Process updates (re-index)
+                foreach (var path in filesToUpdate)
+                {
+                    if (_pathToNode.TryGetValue(path, out var node))
+                    {
+                        // Update metadata
+                        var fi = new FileInfo(path);
+                        if (node.Metadata != null)
+                        {
+                            node.Metadata.SizeBytes = fi.Length;
+                            node.Metadata.LastWriteTime = fi.LastWriteTime;
+                        }
+
+                        // Update DB
+                        var existing = _db.GetFileByPath(path);
+                        if (existing != null)
+                        {
+                            existing.LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks;
+                            existing.SizeBytes = fi.Length;
+                            existing.LastIndexedTimeUtc = DateTime.UtcNow.Ticks;
+                            _db.InsertFile(existing); // upsert
+                        }
+                    }
+                    changes++;
+                }
             }
 
             // Check for new files in all indexed directories
             // Scan all directories that are in _pathToNode for new files
             try
             {
-                var indexedDirs = _pathToNode
-                    .Where(kvp => kvp.Value.IsDirectory)
-                    .Select(kvp => kvp.Key)
-                    .ToList();
+                List<string> indexedDirs;
+                lock (_lock)
+                {
+                    indexedDirs = _pathToNode
+                        .Where(kvp => kvp.Value.IsDirectory)
+                        .Select(kvp => kvp.Key)
+                        .ToList();
+                }
 
                 foreach (var dirPath in indexedDirs)
                 {
                     ct.ThrowIfCancellationRequested();
                     
                     if (!Directory.Exists(dirPath)) continue;
-                    if (!_pathToNode.TryGetValue(dirPath, out var parentNode)) continue;
+                    FileSystemNode? parentNode;
+                    lock (_lock)
+                    {
+                        _pathToNode.TryGetValue(dirPath, out parentNode);
+                    }
+                    if (parentNode == null) continue;
 
                     try
                     {
                         foreach (var file in Directory.GetFiles(dirPath))
                         {
-                            if (!_pathToNode.ContainsKey(file))
+                            lock (_lock)
                             {
-                                AddFileToIndex(file, parentNode);
-                                changes++;
+                                if (!_pathToNode.ContainsKey(file))
+                                {
+                                    AddFileToIndex(file, parentNode);
+                                    changes++;
+                                }
                             }
                         }
                     }
@@ -969,25 +1000,34 @@ public class IndexManager : IDisposable
                 }
                 
                 // Check for new files in all indexed directories
-                var indexedDirs = _pathToNode
-                    .Where(kvp => kvp.Value.IsDirectory)
-                    .Select(kvp => kvp.Key)
-                    .ToList();
-                
+                List<string> indexedDirs;
+                lock (_lock)
+                {
+                    indexedDirs = _pathToNode
+                        .Where(kvp => kvp.Value.IsDirectory)
+                        .Select(kvp => kvp.Key)
+                        .ToList();
+                }
+
                 foreach (var dirPath in indexedDirs)
                 {
                     if (ct.IsCancellationRequested) break;
-                    
+
                     if (!Directory.Exists(dirPath)) continue;
-                    if (!_pathToNode.TryGetValue(dirPath, out var parentNode)) continue;
-                    
+                    FileSystemNode? parentNode;
+                    lock (_lock)
+                    {
+                        _pathToNode.TryGetValue(dirPath, out parentNode);
+                    }
+                    if (parentNode == null) continue;
+
                     try
                     {
                         foreach (var file in Directory.GetFiles(dirPath))
                         {
-                            if (!_pathToNode.ContainsKey(file))
+                            lock (_lock)
                             {
-                                lock (_lock)
+                                if (!_pathToNode.ContainsKey(file))
                                 {
                                     AddFileToIndex(file, parentNode);
                                 }
@@ -1057,7 +1097,10 @@ public class IndexManager : IDisposable
         // If delta sync is complete, we're already synced
         if (IsDeltaSyncComplete)
         {
-            _syncedPaths.Add(path);
+            lock (_lock)
+            {
+                _syncedPaths.Add(path);
+            }
             return true;
         }
         
@@ -1653,8 +1696,7 @@ public class IndexManager : IDisposable
         foreach (var node in nodesToRemove)
         {
             _invertedIndex.RemoveByPath(node.FullPath);
-            node.Parent?.Children.RemoveAll(child =>
-                string.Equals(child.FullPath, node.FullPath, StringComparison.OrdinalIgnoreCase));
+            node.Parent?.RemoveChild(node.FullPath);
             _pathToNode.Remove(node.FullPath);
             _metadataMap.Remove(node.FullPath);
         }
@@ -1687,7 +1729,28 @@ public class IndexManager : IDisposable
     {
         if (string.IsNullOrWhiteSpace(path)) return null;
         var normalizedPath = NormalizeIndexedPath(path);
-        return _pathToNode.TryGetValue(normalizedPath, out var node) ? node : null;
+        lock (_lock)
+        {
+            return _pathToNode.TryGetValue(normalizedPath, out var node) ? node : null;
+        }
+    }
+
+    /// <summary>
+    /// Capture an immutable, internally consistent view for a single search.
+    /// </summary>
+    public SearchSnapshot CreateSearchSnapshot(
+        CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            cancellationToken.ThrowIfCancellationRequested();
+            return SearchSnapshot.Create(
+                _invertedIndex.CreateSnapshot(cancellationToken),
+                _pathToNode.Values,
+                _rootNode,
+                cancellationToken);
+        }
     }
 
     /// <summary>
@@ -1706,6 +1769,15 @@ public class IndexManager : IDisposable
             }
         }
     }
+
+    private static FileMetadata CloneMetadata(FileMetadata metadata) =>
+        new()
+        {
+            SizeBytes = metadata.SizeBytes,
+            CreatedTime = metadata.CreatedTime,
+            LastWriteTime = metadata.LastWriteTime,
+            OpenCount = metadata.OpenCount
+        };
 
     /// <summary>
     /// Get index statistics.
