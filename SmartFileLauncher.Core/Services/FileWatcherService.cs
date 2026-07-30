@@ -7,14 +7,6 @@ using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Services;
 
-/// <summary>
-/// FileSystemWatcher wrapper that buffers events in a ConcurrentQueue.
-/// Provides debouncing to handle rapid successive changes.
-/// 
-/// Data Structures Used:
-/// - ConcurrentQueue: O(1) thread-safe enqueue/dequeue for event buffering
-/// - HashSet: O(1) lookup for excluded paths
-/// </summary>
 public class FileWatcherService : IDisposable
 {
     [ThreadStatic]
@@ -34,14 +26,8 @@ public class FileWatcherService : IDisposable
     private bool _disposed;
     private volatile bool _isWatching;
 
-    /// <summary>
-    /// Fired when a file system change is detected (after debouncing).
-    /// </summary>
     public event Action<FileChangeEvent>? OnChange;
 
-    /// <summary>
-    /// Fired when an error occurs in a watcher.
-    /// </summary>
     public event Action<Exception>? OnError;
 
     public FileWatcherService(int debounceMs = 100)
@@ -53,7 +39,6 @@ public class FileWatcherService : IDisposable
         _cts = new CancellationTokenSource();
         _debounceMs = debounceMs;
 
-        // Default excluded paths
         AddExcludedPath(@"\$Recycle.Bin\");
         AddExcludedPath(@"\System Volume Information\");
         AddExcludedPath(@"\.git\");
@@ -62,21 +47,14 @@ public class FileWatcherService : IDisposable
         AddExcludedPath(@"\obj\");
         AddExcludedPath(@"\__pycache__\");
         
-        // Default excluded extensions (temp files)
         AddExcludedExtension(".tmp");
         AddExcludedExtension(".temp");
         AddExcludedExtension(".partial");
         AddExcludedExtension(".crdownload");
     }
 
-    /// <summary>
-    /// Number of pending events in the queue.
-    /// </summary>
     public int PendingEventCount => _eventQueue.Count;
 
-    /// <summary>
-    /// Whether the service is currently watching.
-    /// </summary>
     public bool IsWatching => _isWatching;
 
     internal int WatchedPathCount
@@ -124,9 +102,6 @@ public class FileWatcherService : IDisposable
 
     #region Watch Control
 
-    /// <summary>
-    /// Starts watching the specified path.
-    /// </summary>
     public void Watch(string path)
     {
         var fullPath = NormalizeDirectoryPath(path);
@@ -181,9 +156,6 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Starts all watchers and begins processing events.
-    /// </summary>
     public void Start()
     {
         lock (_stateLock)
@@ -192,8 +164,6 @@ public class FileWatcherService : IDisposable
 
             if (_isWatching || _isClearing) return;
 
-            // The processor belongs to the service lifetime, not to an individual
-            // Start/Stop cycle. This guarantees one consumer for every watched root.
             if (_processorTask == null || _processorTask.IsCompleted)
             {
                 _processorTask = Task.Run(() => ProcessEventsAsync(_cts.Token));
@@ -224,9 +194,6 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Stops all watchers.
-    /// </summary>
     public void Stop()
     {
         lock (_stateLock)
@@ -251,11 +218,6 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Removes and disposes all configured watchers without stopping the shared
-    /// event processor. Call <see cref="Watch"/> and <see cref="Start"/> to
-    /// configure a new set of roots.
-    /// </summary>
     public void ClearWatches()
     {
         lock (_stateLock)
@@ -317,7 +279,6 @@ public class FileWatcherService : IDisposable
 
     private void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
-        // Can't check IsDirectory for deleted items, assume based on extension
         bool isDir = string.IsNullOrEmpty(Path.GetExtension(e.FullPath));
         EnqueueEvent(FileChangeType.Deleted, e.FullPath, null, isDir);
     }
@@ -329,7 +290,6 @@ public class FileWatcherService : IDisposable
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        // Only track file changes, not directory changes
         if (!IsDirectory(e.FullPath))
         {
             EnqueueEvent(FileChangeType.Modified, e.FullPath, null, false);
@@ -356,13 +316,11 @@ public class FileWatcherService : IDisposable
 
             if (oldExcluded)
             {
-                // The item entered the indexed scope.
                 type = FileChangeType.Created;
                 oldPath = null;
             }
             else if (newExcluded)
             {
-                // The item left the indexed scope; remove its former path.
                 type = FileChangeType.Deleted;
                 path = oldPath;
                 oldPath = null;
@@ -390,14 +348,12 @@ public class FileWatcherService : IDisposable
 
     private bool ShouldExclude(string path)
     {
-        // Check path patterns
         foreach (var pattern in _excludedPaths)
         {
             if (path.Contains(pattern, StringComparison.OrdinalIgnoreCase))
                 return true;
         }
 
-        // Check extensions
         var ext = Path.GetExtension(path);
         if (!string.IsNullOrEmpty(ext) && _excludedExtensions.Contains(ext))
             return true;
@@ -407,8 +363,6 @@ public class FileWatcherService : IDisposable
 
     private async Task ProcessEventsAsync(CancellationToken ct)
     {
-        // Structural events stay in their original global order. Only noisy
-        // Modified events are coalesced by path.
         var pending = new LinkedList<(FileChangeEvent Event, long Generation)>();
         var pendingModified = new Dictionary<string, LinkedListNode<(FileChangeEvent Event, long Generation)>>(StringComparer.OrdinalIgnoreCase);
         var structuralPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -442,7 +396,6 @@ public class FileWatcherService : IDisposable
                     ResetPending(currentGeneration);
                 }
 
-                // Drain the producer queue into the ordered debounce batch.
                 while (_eventQueue.TryDequeue(out var queued))
                 {
                     currentGeneration = Volatile.Read(ref _generation);
@@ -458,8 +411,6 @@ public class FileWatcherService : IDisposable
 
                     if (evt.ChangeType == FileChangeType.Modified)
                     {
-                        // Created/Renamed will read the final metadata, while Deleted
-                        // makes a later modification irrelevant.
                         if (structuralPaths.Contains(evt.FullPath))
                             continue;
 
@@ -488,11 +439,9 @@ public class FileWatcherService : IDisposable
                     }
                 }
 
-                // Check if debounce period has passed
                 var elapsed = (DateTime.UtcNow - lastProcessTime).TotalMilliseconds;
                 if (elapsed >= _debounceMs && pending.Count > 0)
                 {
-                    // Process all pending events
                     foreach (var queued in pending)
                     {
                         var shouldDispatch = false;
@@ -537,7 +486,6 @@ public class FileWatcherService : IDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Normal service shutdown.
         }
         catch (Exception ex)
         {
@@ -585,9 +533,6 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Manually trigger an event (useful for testing or forced updates).
-    /// </summary>
     public void TriggerEvent(FileChangeEvent evt)
     {
         var generation = Volatile.Read(ref _generation);
@@ -596,9 +541,11 @@ public class FileWatcherService : IDisposable
         _eventQueue.Enqueue((evt, generation));
     }
 
-    /// <summary>
-    /// Clear all pending events.
-    /// </summary>
+    internal void TriggerError(Exception exception)
+    {
+        NotifyError(exception);
+    }
+
     public void ClearPendingEvents()
     {
         lock (_stateLock)
@@ -652,7 +599,6 @@ public class FileWatcherService : IDisposable
             }
             catch (OperationCanceledException)
             {
-                // Cancellation is the expected shutdown path.
             }
         }
 
@@ -679,7 +625,6 @@ public class FileWatcherService : IDisposable
         }
         catch
         {
-            // Error observers must not terminate the shared processor.
         }
     }
 
