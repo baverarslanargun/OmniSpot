@@ -1,216 +1,81 @@
-# 🤖 LLM Entegrasyonu - Kurulum ve Kullanım
+# Doğal Dil Arama Yapılandırması
 
-## ✅ Durum: AKTİF
+## Güncel durum
 
-LLM entegrasyonu başarıyla aktifleştirildi ve test edildi!
+OmniSpot'un aktif doğal dil akışı yerel Phi-3, ONNX veya LLamaSharp modeli kullanmaz. Doğal Dil modu iki Groq API isteğini paralel çalıştırır ve sonuçları `StructuredQuery` nesnesine dönüştürür. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
 
----
+Standart arama Groq kullanmaz ve yerel indeks üzerinde çalışır.
 
-## 📋 Sistem Bilgileri
+## Akış
 
-- **Model**: Phi-3-mini-4k-instruct-q4.gguf
-- **Model Boyutu**: 2.28 GB (Q4_K quantization)
-- **Parametre Sayısı**: 3.82 Milyar
-- **Framework**: LLamaSharp 0.19.0
-- **Backend**: CPU (AVX2 optimized)
-- **Bellek Gereksinimi**: ~3 GB RAM
+1. Kullanıcı arayüzünde Doğal Dil modu açılır.
+2. `IntentParser.ParseWithGroqAsync` aynı sorgu için intent ve keyword isteklerini başlatır.
+3. Intent sonucu filtre, hedef türü, tarih/boyut ve benzeri yapılandırılmış alanlara dönüştürülür.
+4. Keyword sonucu başarılıysa ağırlığı `0.3` üzerindeki token'lar sorguya eklenir.
+5. Intent isteği, bağlantı veya zaman aşımı nedeniyle başarısızsa `ParseIntent` kural tabanlı fallback'i çalışır.
 
----
+Aktif endpoint ve modeller:
 
-## 🚀 Çalıştırma
+| Amaç | Model |
+|---|---|
+| Intent analizi | `meta-llama/llama-4-maverick-17b-128e-instruct` |
+| Keyword üretimi | `meta-llama/llama-4-scout-17b-16e-instruct` |
 
-### Yöntem 1: Environment Variable (Önerilen)
+Her iki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve 30 saniyelik timeout sınırına sahiptir.
+
+## API anahtarı
+
+Tek anahtarı iki istek için paylaşmak üzere uygulamayı başlattığınız PowerShell oturumunda şu değişkeni tanımlayın:
 
 ```powershell
-$env:OMNISPOT_MODEL_PATH="C:\LLMModels\Phi-3-mini-4k-instruct-q4.gguf"
+$env:OMNISPOT_GROQ_API_KEY = "gsk_..."
 dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
 ```
 
-### Yöntem 2: Modeli Proje Dizinine Kopyalama
+Intent ve keyword çağrıları için ayrı anahtar gerekirse aşağıdaki değişkenler ortak anahtarın ilgili aşamadaki yerini alır:
 
 ```powershell
-# Models klasörü oluştur
-New-Item -ItemType Directory -Force -Path ".\SmartFileLauncher.UI\bin\Debug\net8.0-windows\Models"
-
-# Modeli kopyala
-Copy-Item "C:\LLMModels\Phi-3-mini-4k-instruct-q4.gguf" ".\SmartFileLauncher.UI\bin\Debug\net8.0-windows\Models\"
-
-# Çalıştır (environment variable'a gerek yok)
-dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
+$env:OMNISPOT_GROQ_INTENT_API_KEY = "gsk_..."
+$env:OMNISPOT_GROQ_KEYWORD_API_KEY = "gsk_..."
 ```
 
----
+Anahtarları kaynak koda, `appsettings` dosyalarına, loglara veya Git geçmişine yazmayın. Yanlışlıkla paylaşılan anahtarları yalnız repodan silmek yeterli değildir; Groq tarafında iptal edip yenileyin.
 
-## 🎯 Kullanım
+## Fallback davranışı
 
-### UI'da Doğal Dil Modu
+API anahtarı yoksa, geçersizse veya Groq'a erişilemiyorsa Doğal Dil modu önce API yolunu dener, ardından intent isteğinin hatası üzerine kural tabanlı parser'a döner. Fallback:
 
-1. Uygulamayı başlat
-2. Arama kutusunun üstündeki **"🤖 Doğal Dil"** toggle butonunu aktifleştir
-3. Doğal dilde sorgular yaz:
-   - "Show me all workplace safety videos"
-   - "Find excel files about budget"
-   - "List PDF documents from last week"
+- sorgudan temel anahtar kelimeleri çıkarır,
+- bilinen dosya türlerini uzantılara eşler,
+- klasör içeriğini aramaya dahil eder,
+- Groq intent sonucundaki gelişmiş tarih, boyut ve eylem semantiğini garanti etmez.
 
-### Model Yükleme
+Fallback kullanıldığında UI uyarı gösterir ve neden `StructuredQuery.FallbackReason` alanında taşınır. Kullanıcının başlattığı cancellation fallback'e çevrilmez; işlem iptal edilir.
 
-Model ilk kez kullanıldığında yüklenir (5-10 saniye). Console'da şu mesajları göreceksiniz:
+## Gizlilik ve ağ davranışı
 
-```
-[IntentParser] 🚀 Starting LLM model loading...
-[IntentParser] Model path: C:\LLMModels\Phi-3-mini-4k-instruct-q4.gguf
-[IntentParser] ✅ Model file found, loading weights...
-[IntentParser] File size: 2282 MB
-[IntentParser] Parameters: Context=2048, Threads=8
-...
-[IntentParser] 🎉 LLM fully loaded and ready to use!
-```
+Doğal Dil modu çalıştırıldığında sorgu metni intent ve keyword analizi için Groq endpoint'ine gönderilmeyi dener. Anahtar eksik olsa bile yetkisiz istek denemesi sorgu gövdesini harici endpoint'e taşıyabilir. Ağ üzerinden sorgu göndermek istemiyorsanız standart arama modunu kullanın.
 
----
+OmniSpot dosya içeriklerini Groq'a göndermez; doğal dil akışında gönderilen veri arama sorgusu ve kodda tanımlı sistem istemleridir.
 
-## 🧪 Test
+## Sorun giderme
 
-Basit konsol test programı ile doğrulama:
+### Sürekli fallback kullanılıyor
 
-```powershell
-cd TestLLM
-$env:OMNISPOT_MODEL_PATH="C:\LLMModels\Phi-3-mini-4k-instruct-q4.gguf"
-dotnet run
-```
+1. Anahtarın uygulamayı başlatan süreçte göründüğünü doğrulayın:
 
-**Test Sorgusu**: "Show me all workplace safety videos"
-
-**Beklenen Çıktı**:
-```
-Intent: search_files
-Keywords: workplace, safety, videos
-FileTypes: video
-PredictedExtensions: .mp4, .mkv, .avi
-IncludeFolderContents: True
-```
-
----
-
-## ⚙️ Yapılandırma
-
-### Model Yolu
-
-Kod, model dosyasını şu sırayla arar:
-
-1. `OMNISPOT_MODEL_PATH` environment variable
-2. `{AppDirectory}\Models\Phi-3-mini-4k-instruct-q4.gguf`
-
-Kaynak: `SmartFileLauncher.Core\Services\IntentParser.cs` (satır 23-25)
-
-### Model Parametreleri
-
-```csharp
-ContextSize = 2048        // Token window
-GpuLayerCount = 0         // CPU only (GPU desteği için >0)
-BatchSize = 512           // Inference batch size
-Threads = 8               // CPU thread sayısı (auto-detect)
-```
-
----
-
-## 📊 Performans
-
-### İlk Yükleme
-- **Süre**: 5-10 saniye
-- **Bellek**: 2.3 GB (model) + 768 MB (KV cache) = ~3 GB
-
-### Inference
-- **CPU (8 thread)**: 2-5 saniye per query
-- **Bellek**: Ek 100-200 MB per query
-
-### Optimizasyon İpuçları
-
-1. **GPU Kullanımı** (eğer CUDA kartınız varsa):
    ```powershell
-   dotnet add package LLamaSharp.Backend.Cuda12
+   Test-Path Env:OMNISPOT_GROQ_API_KEY
    ```
-   `GpuLayerCount = 32` yapın (10-20x hız artışı)
 
-2. **Context Boyutu Azaltma**:
-   2048 → 1024 yaparsanız bellek kullanımı %50 azalır
+2. Ortak anahtar yerine aşamaya özel değişkenler kullanıyorsanız ikisinin de boş olmadığını kontrol edin.
+3. `https://api.groq.com` erişimini ve sistem saatini doğrulayın.
+4. Uygulama logunda intent ve keyword çağrılarının ayrı hata mesajlarını inceleyin.
 
-3. **Thread Sayısı**:
-   `Threads = 4` gibi düşük değer kullanırsanız diğer işlemler etkilenmez
+### Yerel model ayarları çalışmıyor
 
----
+`OMNISPOT_MODEL_PATH`, Phi-3 GGUF dosyaları, LLamaSharp paketleri ve geçmişte belgelenen `TestLLM` projesi aktif uygulama yolunun parçası değildir. `SmartFileLauncher.Core/Legacy` altındaki yardımcı sınıflar güncel doğal dil çağrı zincirine bağlı değildir.
 
-## 🔄 Fallback Sistemi
+## Manuel doğrulama
 
-Eğer LLM yüklenemezse (model bulunamazsa veya bellek yetersizse), otomatik olarak **rule-based parser**'a geçilir. Uygulama çökmez, temel arama çalışmaya devam eder.
-
-Console'da şunu göreceksiniz:
-```
-[IntentParser] ❌ Failed to load LLM model: ...
-[IntentParser] Will fall back to rule-based parser.
-```
-
----
-
-## 🐛 Sorun Giderme
-
-### Problem: "Model file not found"
-
-**Çözüm**:
-```powershell
-# Model yolunu kontrol et
-Test-Path "C:\LLMModels\Phi-3-mini-4k-instruct-q4.gguf"
-
-# Environment variable'ı doğru set et
-$env:OMNISPOT_MODEL_PATH="C:\LLMModels\Phi-3-mini-4k-instruct-q4.gguf"
-```
-
-### Problem: "Access Violation Exception" (eski versiyon)
-
-**Çözüm**: LlamaSharp 0.19.0'a güncelleyin (zaten yapıldı)
-```powershell
-dotnet add package LLamaSharp --version 0.19.0
-dotnet add package LLamaSharp.Backend.Cpu --version 0.19.0
-```
-
-### Problem: Çok yavaş inference
-
-**Çözüm 1**: Context boyutunu azalt (2048 → 1024)
-**Çözüm 2**: GPU backend kullan (eğer varsa)
-**Çözüm 3**: Daha küçük model kullan (örn: Phi-2 veya TinyLlama)
-
----
-
-## 📦 Dependencies
-
-```xml
-<PackageReference Include="LLamaSharp" Version="0.19.0" />
-<PackageReference Include="LLamaSharp.Backend.Cpu" Version="0.19.0" />
-<PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.19.2" />
-<PackageReference Include="System.Text.Json" Version="8.0.5" />
-```
-
----
-
-## 🔮 Gelecek İyileştirmeler
-
-- [ ] GPU acceleration (CUDA/Vulkan)
-- [ ] Model caching (daha hızlı startup)
-- [ ] Streaming inference (real-time sonuçlar)
-- [ ] Synonym expansion (movie → video)
-- [ ] Multi-turn conversation (context-aware)
-- [ ] Query history & suggestions
-- [ ] Türkçe dil desteği
-
----
-
-## 📚 Kaynaklar
-
-- **LlamaSharp Docs**: https://github.com/SciSharp/LLamaSharp
-- **Phi-3 Model**: https://huggingface.co/microsoft/Phi-3-mini-4k-instruct
-- **GGUF Format**: https://github.com/ggerganov/llama.cpp
-
----
-
-**Son Güncelleme**: 20 Kasım 2025  
-**Versiyon**: 1.0  
-**Durum**: ✅ Production Ready
+Groq başarı ve fallback senaryolarını adım adım doğrulamak için [doğal dil arama test rehberini](nlu-integration.md) kullanın.
