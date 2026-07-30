@@ -2074,7 +2074,9 @@ public partial class MainWindow : Window {
             } else {
                 // Dosyayı sistem ile aç
                 Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
-                if (_meta != null && _meta.TryGetValue(path, out var meta)) {
+                if (_indexManager != null) {
+                    _indexManager.IncrementOpenCount(path);
+                } else if (_meta != null && _meta.TryGetValue(path, out var meta)) {
                     meta.OpenCount++;
                 }
             }

@@ -21,6 +21,11 @@ public class IndexManager : IDisposable
     private readonly FileWatcherService _watcher;
     private readonly ITokenizer _tokenizer;
     private readonly object _lock = new();
+    private readonly object _notificationLock = new();
+    private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
+    private Task _notificationTask = Task.CompletedTask;
+    private CancellationTokenSource? _backgroundSyncCts;
+    private Task? _backgroundSyncTask;
     
     // In-memory structures (loaded from DB or built fresh)
     private InvertedIndex _invertedIndex;
@@ -28,7 +33,7 @@ public class IndexManager : IDisposable
     private FileSystemNode? _rootNode;
     private Dictionary<string, FileSystemNode> _pathToNode;
     
-    private bool _disposed;
+    private volatile bool _disposed;
     private bool _isInitialized;
     
     // Background delta sync tracking
@@ -61,16 +66,21 @@ public class IndexManager : IDisposable
     public event Action<int, int, int>? OnDeltaSyncProgress;
 
     public IndexManager(ITokenizer? tokenizer = null)
+        : this(new IndexDatabase(), new FileWatcherService(), tokenizer)
+    {
+    }
+
+    internal IndexManager(IndexDatabase database, FileWatcherService watcher, ITokenizer? tokenizer = null)
     {
         _tokenizer = tokenizer ?? new BasicTokenizer();
-        _db = new IndexDatabase();
-        _watcher = new FileWatcherService();
+        _db = database;
+        _watcher = watcher;
         _invertedIndex = new InvertedIndex();
         _metadataMap = new Dictionary<string, FileMetadata>();
         _pathToNode = new Dictionary<string, FileSystemNode>(StringComparer.OrdinalIgnoreCase);
 
         _watcher.OnChange += HandleFileChange;
-        _watcher.OnError += ex => OnError?.Invoke(ex.Message);
+        _watcher.OnError += ex => NotifyError(ex.Message);
     }
 
     #region Properties
@@ -101,8 +111,26 @@ public class IndexManager : IDisposable
     /// </summary>
     public async Task InitializeAsync(IEnumerable<string> rootPaths, CancellationToken ct = default)
     {
+        await _lifecycleGate.WaitAsync(ct);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            await InitializeCoreAsync(rootPaths, ct);
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+    }
+
+    private async Task InitializeCoreAsync(IEnumerable<string> rootPaths, CancellationToken ct)
+    {
+        await StopBackgroundSyncAsync();
+        _watcher.Stop();
+        _watcher.ClearWatches();
+
         var sw = Stopwatch.StartNew();
-        var paths = new List<string>(rootPaths);
+        var paths = NormalizeRootPaths(rootPaths);
         
         ReportProgress("Başlatılıyor...", 0, 0, 0);
 
@@ -120,8 +148,12 @@ public class IndexManager : IDisposable
             ReportProgress("Önbellekten yükleniyor...", 0, 0, 0);
             await LoadFromCacheMultiAsync(paths, ct);
             
-            // Start background delta sync (non-blocking)
-            _ = Task.Run(() => BackgroundDeltaSyncAsync(paths, ct), ct);
+            // Start background delta sync (non-blocking).
+            var syncCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            _backgroundSyncCts = syncCts;
+            _backgroundSyncTask = Task.Run(
+                () => BackgroundDeltaSyncAsync(paths, syncCts.Token),
+                syncCts.Token);
         }
         else
         {
@@ -130,14 +162,8 @@ public class IndexManager : IDisposable
             await BootstrapScanMultiAsync(paths, ct);
         }
 
-        // Start watching for changes on all paths
-        foreach (var path in paths)
-        {
-            if (Directory.Exists(path))
-            {
-                SetupWatcher(path);
-            }
-        }
+        // Configure every root first, then start the shared event processor once.
+        SetupWatchers(paths);
 
         sw.Stop();
         _db.SetMetadata(IndexMetadata.Keys.LastBuildDurationMs, sw.ElapsedMilliseconds.ToString());
@@ -161,15 +187,27 @@ public class IndexManager : IDisposable
     /// </summary>
     public async Task RescanAsync(string rootPath, CancellationToken ct = default)
     {
-        _watcher.Stop();
-        _db.ClearIndex();
-        _invertedIndex.Clear();
-        _metadataMap.Clear();
-        _pathToNode.Clear();
-        _rootNode = null;
+        await _lifecycleGate.WaitAsync(ct);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            await StopBackgroundSyncAsync();
+            _watcher.Stop();
+            _watcher.ClearWatches();
+            _db.ClearIndex();
+            lock (_lock)
+            {
+                ResetInMemoryIndex();
+            }
 
-        await BootstrapScanAsync(rootPath, ct);
-        SetupWatcher(rootPath);
+            var normalizedRootPath = NormalizeIndexedPath(rootPath);
+            await BootstrapScanAsync(normalizedRootPath, ct);
+            SetupWatchers(new[] { normalizedRootPath });
+        }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
     }
 
     #endregion
@@ -182,9 +220,10 @@ public class IndexManager : IDisposable
 
         // Clear existing data
         _db.ClearIndex();
-        _invertedIndex.Clear();
-        _metadataMap.Clear();
-        _pathToNode.Clear();
+        lock (_lock)
+        {
+            ResetInMemoryIndex();
+        }
 
         // Create root node
         var rootName = Path.GetFileName(rootPath);
@@ -255,9 +294,10 @@ public class IndexManager : IDisposable
 
         // Clear existing data
         _db.ClearIndex();
-        _invertedIndex.Clear();
-        _metadataMap.Clear();
-        _pathToNode.Clear();
+        lock (_lock)
+        {
+            ResetInMemoryIndex();
+        }
 
         // Create virtual root node that contains all paths
         _rootNode = new FileSystemNode("Root", "", true);
@@ -335,7 +375,8 @@ public class IndexManager : IDisposable
     }
 
     private void ScanDirectoryRecursive(string path, FileSystemNode parentNode, long parentDirId, 
-                                        int depth, ref int processedItems, int totalItems, CancellationToken ct)
+                                        int depth, ref int processedItems, int totalItems, CancellationToken ct,
+                                        bool reportProgress = true)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -375,14 +416,22 @@ public class IndexManager : IDisposable
                 var dirId = _db.InsertDirectory(indexedDir);
 
                 processedItems++;
-                if (processedItems % 50 == 0)
+                if (reportProgress && processedItems % 50 == 0)
                 {
                     int pct = Math.Min(99, (int)(processedItems * 100.0 / totalItems));
                     ReportProgress($"Taranıyor: {dirName}", pct, processedItems, 0);
                 }
 
                 // Recurse
-                ScanDirectoryRecursive(dir, dirNode, dirId, depth + 1, ref processedItems, totalItems, ct);
+                ScanDirectoryRecursive(
+                    dir,
+                    dirNode,
+                    dirId,
+                    depth + 1,
+                    ref processedItems,
+                    totalItems,
+                    ct,
+                    reportProgress);
             }
 
             // Process files
@@ -466,6 +515,11 @@ public class IndexManager : IDisposable
     private async Task LoadFromCacheAsync(string rootPath, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+
+        lock (_lock)
+        {
+            ResetInMemoryIndex();
+        }
 
         await Task.Run(() =>
         {
@@ -580,6 +634,11 @@ public class IndexManager : IDisposable
     private async Task LoadFromCacheMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
+
+        lock (_lock)
+        {
+            ResetInMemoryIndex();
+        }
 
         await Task.Run(() =>
         {
@@ -746,8 +805,8 @@ public class IndexManager : IDisposable
             // Process removals
             foreach (var path in filesToRemove)
             {
-                RemoveFromIndex(path);
                 _db.DeleteFile(path);
+                RemoveFromIndex(path);
                 changes++;
             }
 
@@ -863,7 +922,7 @@ public class IndexManager : IDisposable
                     // Report progress every 100 files
                     if (_deltaSyncProcessed % 100 == 0 || _deltaSyncProcessed == _deltaSyncTotal)
                     {
-                        OnDeltaSyncProgress?.Invoke(_deltaSyncProcessed, _deltaSyncTotal, _deltaSyncProgress);
+                        NotifyDeltaSyncProgress(_deltaSyncProcessed, _deltaSyncTotal, _deltaSyncProgress);
                     }
                     
                     // Yield to other threads occasionally
@@ -878,8 +937,8 @@ public class IndexManager : IDisposable
                 {
                     foreach (var path in filesToRemove)
                     {
-                        RemoveFromIndex(path);
                         _db.DeleteFile(path);
+                        RemoveFromIndex(path);
                     }
                 }
                 
@@ -946,16 +1005,48 @@ public class IndexManager : IDisposable
         }
         catch (Exception ex)
         {
-            OnError?.Invoke($"Background delta sync error: {ex.Message}");
+            NotifyError($"Background delta sync error: {ex.Message}");
         }
         finally
         {
             _isDeltaSyncRunning = false;
             _deltaSyncProgress = 100;
-            OnDeltaSyncProgress?.Invoke(_deltaSyncTotal, _deltaSyncTotal, 100);
+            NotifyDeltaSyncProgress(_deltaSyncTotal, _deltaSyncTotal, 100);
         }
     }
     
+    private async Task StopBackgroundSyncAsync()
+    {
+        var syncCts = _backgroundSyncCts;
+        var syncTask = _backgroundSyncTask;
+        _backgroundSyncCts = null;
+        _backgroundSyncTask = null;
+
+        if (syncCts == null && syncTask == null)
+            return;
+
+        try
+        {
+            syncCts?.Cancel();
+            if (syncTask != null)
+            {
+                await syncTask.ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation is the expected lifecycle transition.
+        }
+        catch (Exception ex)
+        {
+            NotifyError($"Background delta sync shutdown error: {ex.Message}");
+        }
+        finally
+        {
+            syncCts?.Dispose();
+        }
+    }
+
     /// <summary>
     /// Ensures a specific path is synced. If delta sync hasn't processed it yet,
     /// performs a quick on-demand sync for just that path.
@@ -999,7 +1090,7 @@ public class IndexManager : IDisposable
                 // Another task is syncing this path - wait a bit
                 if (DateTime.UtcNow - startTime > maxWaitTime)
                 {
-                    OnError?.Invoke($"Timeout waiting for sync of {path}");
+                    NotifyError($"Timeout waiting for sync of {path}");
                     return false;
                 }
                 
@@ -1024,7 +1115,7 @@ public class IndexManager : IDisposable
         }
         catch (Exception ex)
         {
-            OnError?.Invoke($"On-demand sync error for {path}: {ex.Message}");
+            NotifyError($"On-demand sync error for {path}: {ex.Message}");
             return false;
         }
         finally
@@ -1060,7 +1151,7 @@ public class IndexManager : IDisposable
             }
             catch (Exception ex)
             {
-                OnError?.Invoke($"Error enumerating files in {dirPath}: {ex.Message}");
+                NotifyError($"Error enumerating files in {dirPath}: {ex.Message}");
                 return;
             }
             
@@ -1127,8 +1218,8 @@ public class IndexManager : IDisposable
                             
                             lock (_lock)
                             {
-                                RemoveFromIndex(deletedFiles[i]);
                                 _db.DeleteFile(deletedFiles[i]);
+                                RemoveFromIndex(deletedFiles[i]);
                             }
                         }
                     }
@@ -1187,15 +1278,70 @@ public class IndexManager : IDisposable
 
     #region FileWatcher Integration
 
-    private void SetupWatcher(string rootPath)
+    private void SetupWatchers(IEnumerable<string> rootPaths)
     {
         _watcher.Stop();
-        _watcher.Watch(rootPath);
-        _watcher.Start();
+        _watcher.ClearWatches();
+
+        var configured = false;
+        var configuredRoots = new List<string>();
+        var normalizedRoots = NormalizeRootPaths(rootPaths)
+            .Where(Directory.Exists)
+            .OrderBy(path => path.Length);
+
+        foreach (var rootPath in normalizedRoots)
+        {
+            if (configuredRoots.Any(parent => IsSameOrDescendantPath(rootPath, parent)))
+                continue;
+
+            _watcher.Watch(rootPath);
+            configuredRoots.Add(rootPath);
+            configured = true;
+        }
+
+        if (configured)
+        {
+            _watcher.Start();
+        }
     }
+
+    private static List<string> NormalizeRootPaths(IEnumerable<string> rootPaths)
+    {
+        var normalized = rootPaths
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(NormalizeIndexedPath)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(path => path.Length);
+
+        var roots = new List<string>();
+        foreach (var path in normalized)
+        {
+            if (!roots.Any(parent => IsSameOrDescendantPath(path, parent)))
+            {
+                roots.Add(path);
+            }
+        }
+
+        return roots;
+    }
+
+    private static bool IsSameOrDescendantPath(string candidatePath, string parentPath)
+    {
+        if (string.Equals(candidatePath, parentPath, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var prefix = parentPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                     + Path.DirectorySeparatorChar;
+        return candidatePath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal void ApplyFileChange(FileChangeEvent evt) => HandleFileChange(evt);
 
     private void HandleFileChange(FileChangeEvent evt)
     {
+        string? error = null;
+        var processed = false;
+
         lock (_lock)
         {
             try
@@ -1218,100 +1364,118 @@ public class IndexManager : IDisposable
                         HandleModified(evt);
                         break;
                 }
-
-                OnFileChange?.Invoke(evt);
+                processed = true;
             }
             catch (Exception ex)
             {
-                OnError?.Invoke($"Error handling {evt.ChangeType}: {ex.Message}");
+                error = $"Error handling {evt.ChangeType}: {ex.Message}";
             }
+        }
+
+        // User callbacks are external code. Invoke them after releasing the index
+        // lock so lifecycle operations (including Dispose) cannot deadlock.
+        if (error != null)
+        {
+            NotifyError(error);
+        }
+        else if (processed)
+        {
+            QueueNotification(() => OnFileChange?.Invoke(evt));
         }
     }
 
     private void HandleCreated(FileChangeEvent evt)
     {
-        if (evt.IsDirectory)
+        var isDirectory = Directory.Exists(evt.FullPath);
+        if (!isDirectory && !File.Exists(evt.FullPath))
         {
-            // Find parent node
-            var parentPath = Path.GetDirectoryName(evt.FullPath);
-            if (parentPath != null && _pathToNode.TryGetValue(parentPath, out var parentNode))
-            {
-                var dirName = Path.GetFileName(evt.FullPath);
-                var node = new FileSystemNode(dirName, evt.FullPath, true);
-                parentNode.AddChild(node);
-                _pathToNode[evt.FullPath] = node;
-                IndexNode(node);
+            isDirectory = evt.IsDirectory;
+        }
 
-                // Insert into DB
-                var parentDir = _db.GetDirectoryByPath(parentPath);
-                var indexedDir = new IndexedDirectory
-                {
-                    FullPath = evt.FullPath,
-                    Name = dirName,
-                    ParentId = parentDir?.Id,
-                    Depth = (parentDir?.Depth ?? 0) + 1,
-                    LastWriteTimeUtc = DateTime.UtcNow.Ticks,
-                    LastIndexedTimeUtc = DateTime.UtcNow.Ticks
-                };
-                _db.InsertDirectory(indexedDir);
+        AddPathToIndex(evt.FullPath, isDirectory);
+    }
+
+    private void AddPathToIndex(string path, bool isDirectory)
+    {
+        path = NormalizeIndexedPath(path);
+
+        if (_pathToNode.TryGetValue(path, out var existingNode))
+        {
+            if (existingNode.IsDirectory == isDirectory)
+            {
+                return;
             }
+
+            DeletePersistedPath(existingNode.FullPath, existingNode.IsDirectory);
+            RemoveFromIndex(existingNode.FullPath);
+        }
+
+        var parentPath = Path.GetDirectoryName(path);
+        if (parentPath == null || !_pathToNode.TryGetValue(parentPath, out var parentNode))
+        {
+            return;
+        }
+
+        if (isDirectory)
+        {
+            AddDirectoryTreeToIndex(path, parentNode);
         }
         else
         {
-            var parentPath = Path.GetDirectoryName(evt.FullPath);
-            if (parentPath != null && _pathToNode.TryGetValue(parentPath, out var parentNode))
-            {
-                AddFileToIndex(evt.FullPath, parentNode);
-            }
+            AddFileToIndex(path, parentNode);
         }
     }
 
     private void HandleDeleted(FileChangeEvent evt)
     {
-        RemoveFromIndex(evt.FullPath);
+        var eventPath = NormalizeIndexedPath(evt.FullPath);
+        _pathToNode.TryGetValue(eventPath, out var existingNode);
+        var persistedPath = existingNode?.FullPath ?? eventPath;
+        var isDirectory = ResolveIsDirectory(persistedPath, existingNode, evt.IsDirectory);
 
-        if (evt.IsDirectory)
-        {
-            _db.DeleteDirectory(evt.FullPath);
-        }
-        else
-        {
-            _db.DeleteFile(evt.FullPath);
-        }
+        DeletePersistedPath(persistedPath, isDirectory);
+        RemoveFromIndex(persistedPath);
     }
 
     private void HandleRenamed(FileChangeEvent evt)
     {
-        if (evt.OldPath != null)
+        if (evt.OldPath == null)
         {
-            // Remove old
-            RemoveFromIndex(evt.OldPath);
-            if (evt.IsDirectory)
-            {
-                _db.DeleteDirectory(evt.OldPath);
-            }
-            else
-            {
-                _db.DeleteFile(evt.OldPath);
-            }
+            HandleCreated(evt);
+            return;
         }
 
-        // Add new (treat as created)
-        HandleCreated(evt);
+        var oldPath = NormalizeIndexedPath(evt.OldPath);
+        var newPath = NormalizeIndexedPath(evt.FullPath);
+        _pathToNode.TryGetValue(oldPath, out var existingNode);
+        var persistedOldPath = existingNode?.FullPath ?? oldPath;
+        var wasDirectory = ResolveIsDirectory(persistedOldPath, existingNode, evt.IsDirectory);
+
+        DeletePersistedPath(persistedOldPath, wasDirectory);
+        RemoveFromIndex(persistedOldPath);
+
+        // A rename can race with a subsequent delete. Do not add a phantom path.
+        if (!Directory.Exists(newPath) && !File.Exists(newPath))
+        {
+            return;
+        }
+
+        AddPathToIndex(newPath, wasDirectory);
     }
 
     private void HandleModified(FileChangeEvent evt)
     {
-        if (_pathToNode.TryGetValue(evt.FullPath, out var node) && node.Metadata != null)
+        var path = NormalizeIndexedPath(evt.FullPath);
+        if (_pathToNode.TryGetValue(path, out var node) && node.Metadata != null)
         {
             try
             {
-                var fi = new FileInfo(evt.FullPath);
+                var fi = new FileInfo(path);
                 node.Metadata.SizeBytes = fi.Length;
                 node.Metadata.LastWriteTime = fi.LastWriteTime;
 
                 // Update DB
-                var existing = _db.GetFileByPath(evt.FullPath);
+                var existing = _db.GetFileByPath(path);
                 if (existing != null)
                 {
                     existing.LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks;
@@ -1336,11 +1500,104 @@ public class IndexManager : IDisposable
         }
     }
 
+    private void ResetInMemoryIndex()
+    {
+        _invertedIndex.Clear();
+        _metadataMap.Clear();
+        _pathToNode.Clear();
+        _syncedPaths.Clear();
+        _currentlySyncing.Clear();
+        _rootNode = null;
+    }
+
+    private void AddDirectoryTreeToIndex(string directoryPath, FileSystemNode parentNode)
+    {
+        if (!Directory.Exists(directoryPath)) return;
+
+        var parentDir = _db.GetDirectoryByPath(parentNode.FullPath);
+        if (parentDir == null)
+        {
+            NotifyError($"Cannot index directory because its parent is missing from the database: {directoryPath}");
+            return;
+        }
+
+        var directoryInfo = new DirectoryInfo(directoryPath);
+        var node = new FileSystemNode(directoryInfo.Name, directoryPath, true);
+
+        using var transaction = _db.BeginTransaction();
+        try
+        {
+            var indexedDir = new IndexedDirectory
+            {
+                FullPath = directoryPath,
+                Name = directoryInfo.Name,
+                ParentId = parentDir.Id,
+                Depth = parentDir.Depth + 1,
+                LastWriteTimeUtc = directoryInfo.LastWriteTimeUtc.Ticks,
+                LastIndexedTimeUtc = DateTime.UtcNow.Ticks,
+                IsHidden = (directoryInfo.Attributes & FileAttributes.Hidden) != 0
+            };
+            var directoryId = _db.InsertDirectory(indexedDir);
+
+            parentNode.AddChild(node);
+            _pathToNode[directoryPath] = node;
+            IndexNode(node);
+
+            var processedItems = 0;
+            ScanDirectoryRecursive(
+                directoryPath,
+                node,
+                directoryId,
+                indexedDir.Depth + 1,
+                ref processedItems,
+                totalItems: 1,
+                CancellationToken.None,
+                reportProgress: false);
+
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            RemoveFromIndex(directoryPath);
+            throw;
+        }
+    }
+
+    private bool ResolveIsDirectory(string path, FileSystemNode? existingNode, bool fallback)
+    {
+        if (existingNode != null) return existingNode.IsDirectory;
+        if (_db.GetDirectoryByPath(path) != null) return true;
+        if (_db.GetFileByPath(path) != null) return false;
+        return fallback;
+    }
+
+    private void DeletePersistedPath(string path, bool isDirectory)
+    {
+        if (isDirectory)
+        {
+            _db.DeleteDirectory(path);
+        }
+        else
+        {
+            _db.DeleteFile(path);
+        }
+    }
+
     private void AddFileToIndex(string filePath, FileSystemNode parentNode)
     {
+        if (_pathToNode.ContainsKey(filePath) || !File.Exists(filePath)) return;
+
         try
         {
             var fi = new FileInfo(filePath);
+            var parentDir = _db.GetDirectoryByPath(parentNode.FullPath);
+            if (parentDir == null)
+            {
+                NotifyError($"Cannot index file because its parent is missing from the database: {filePath}");
+                return;
+            }
+
             var node = new FileSystemNode(fi.Name, filePath, false)
             {
                 Metadata = new FileMetadata
@@ -1351,44 +1608,55 @@ public class IndexManager : IDisposable
                 }
             };
 
-            parentNode.AddChild(node);
-            _pathToNode[filePath] = node;
-            _metadataMap[filePath] = node.Metadata!;
-            IndexNode(node);
-
-            // Insert into DB with correct DirectoryId
-            var parentPath = Path.GetDirectoryName(filePath);
-            var parentDir = parentPath != null ? _db.GetDirectoryByPath(parentPath) : null;
-            
             var indexedFile = new IndexedFile
             {
                 FullPath = filePath,
                 FileName = fi.Name,
                 Extension = fi.Extension.ToLowerInvariant(),
-                DirectoryId = parentDir?.Id ?? 0,
+                DirectoryId = parentDir.Id,
                 SizeBytes = fi.Length,
                 CreatedTimeUtc = fi.CreationTimeUtc.Ticks,
                 LastWriteTimeUtc = fi.LastWriteTimeUtc.Ticks,
                 LastIndexedTimeUtc = DateTime.UtcNow.Ticks
             };
             _db.InsertFile(indexedFile);
+
+            parentNode.AddChild(node);
+            _pathToNode[filePath] = node;
+            _metadataMap[filePath] = node.Metadata!;
+            IndexNode(node);
         }
-        catch { }
+        catch (Exception ex)
+        {
+            NotifyError($"Error indexing file {filePath}: {ex.Message}");
+        }
     }
 
     private void RemoveFromIndex(string path)
     {
-        if (_pathToNode.TryGetValue(path, out var node))
+        path = NormalizeIndexedPath(path);
+        if (!_pathToNode.TryGetValue(path, out var rootNode)) return;
+
+        var normalizedRoot = NormalizeIndexedPath(rootNode.FullPath);
+        var descendantPrefix = normalizedRoot.EndsWith(Path.DirectorySeparatorChar)
+            ? normalizedRoot
+            : normalizedRoot + Path.DirectorySeparatorChar;
+
+        var nodesToRemove = _pathToNode.Values
+            .Where(node =>
+                ReferenceEquals(node, rootNode) ||
+                NormalizeIndexedPath(node.FullPath)
+                    .StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(node => node.FullPath.Length)
+            .ToList();
+
+        foreach (var node in nodesToRemove)
         {
-            // Remove from inverted index
-            _invertedIndex.RemoveByPath(path);
-
-            // Remove from parent
-            node.Parent?.Children.Remove(node);
-
-            // Remove from maps
-            _pathToNode.Remove(path);
-            _metadataMap.Remove(path);
+            _invertedIndex.RemoveByPath(node.FullPath);
+            node.Parent?.Children.RemoveAll(child =>
+                string.Equals(child.FullPath, node.FullPath, StringComparison.OrdinalIgnoreCase));
+            _pathToNode.Remove(node.FullPath);
+            _metadataMap.Remove(node.FullPath);
         }
     }
 
@@ -1398,13 +1666,14 @@ public class IndexManager : IDisposable
 
     private void ReportProgress(string status, int percentage, int itemCount, long elapsedMs)
     {
-        OnProgress?.Invoke(new IndexProgress
+        var progress = new IndexProgress
         {
             Status = status,
             Percentage = percentage,
             ItemCount = itemCount,
             ElapsedMs = elapsedMs
-        });
+        };
+        QueueNotification(() => OnProgress?.Invoke(progress));
     }
 
     #endregion
@@ -1416,7 +1685,9 @@ public class IndexManager : IDisposable
     /// </summary>
     public FileSystemNode? GetNode(string path)
     {
-        return _pathToNode.TryGetValue(path, out var node) ? node : null;
+        if (string.IsNullOrWhiteSpace(path)) return null;
+        var normalizedPath = NormalizeIndexedPath(path);
+        return _pathToNode.TryGetValue(normalizedPath, out var node) ? node : null;
     }
 
     /// <summary>
@@ -1424,11 +1695,15 @@ public class IndexManager : IDisposable
     /// </summary>
     public void IncrementOpenCount(string path)
     {
-        _db.IncrementOpenCount(path);
-        
-        if (_metadataMap.TryGetValue(path, out var meta))
+        lock (_lock)
         {
-            meta.OpenCount++;
+            var normalizedPath = NormalizeIndexedPath(path);
+            _db.IncrementOpenCount(normalizedPath);
+
+            if (_metadataMap.TryGetValue(normalizedPath, out var meta))
+            {
+                meta.OpenCount++;
+            }
         }
     }
 
@@ -1463,13 +1738,82 @@ public class IndexManager : IDisposable
 
     public void Dispose()
     {
-        if (!_disposed)
+        _lifecycleGate.Wait();
+        try
         {
-            _watcher.Dispose();
-            _db.Dispose();
+            if (_disposed) return;
+
             _disposed = true;
+            try
+            {
+                _watcher.Stop();
+            }
+            finally
+            {
+                try
+                {
+                    StopBackgroundSyncAsync().GetAwaiter().GetResult();
+                }
+                finally
+                {
+                    try
+                    {
+                        _watcher.Dispose();
+                    }
+                    finally
+                    {
+                        _db.Dispose();
+                    }
+                }
+            }
         }
+        finally
+        {
+            _lifecycleGate.Release();
+        }
+
         GC.SuppressFinalize(this);
+    }
+
+    private static string NormalizeIndexedPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return path;
+
+        var fullPath = Path.GetFullPath(
+            path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar));
+        var root = Path.GetPathRoot(fullPath);
+        return string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase)
+            ? fullPath
+            : fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private void NotifyDeltaSyncProgress(int processed, int total, int percentage)
+    {
+        QueueNotification(() => OnDeltaSyncProgress?.Invoke(processed, total, percentage));
+    }
+
+    private void NotifyError(string message)
+    {
+        QueueNotification(() => OnError?.Invoke(message));
+    }
+
+    private void QueueNotification(Action notification)
+    {
+        lock (_notificationLock)
+        {
+            if (_disposed) return;
+
+            _notificationTask = _notificationTask.ContinueWith(
+                _ =>
+                {
+                    if (_disposed) return;
+                    try { notification(); }
+                    catch { }
+                },
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                TaskScheduler.Default);
+        }
     }
 
     #endregion
