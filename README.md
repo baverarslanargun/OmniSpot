@@ -13,12 +13,12 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile her yerden erişin!
 ### Temel Özellikler
 - ✅ **Global Hotkey**: Ctrl+Space ile her yerden açın
 - ✅ **Akıllı Arama**: Dosya adlarında hızlı arama
-- ✅ **AI Destekli Arama**: Doğal dil ile arama ("indirilenler klasöründeki resimler")
+- ✅ **Doğal Dil Arama**: İsteğe bağlı Groq desteği ve kural tabanlı fallback ile sorguları yapılandırın
 - ✅ **Klasör Navigasyonu**: Uygulama içinde klasörlerde gezinin
 - ✅ **Dosya İşlemleri**: Kopyala, Kes, Yapıştır, Sil, Yeniden Adlandır
 - ✅ **Thumbnail Önizleme**: Resim ve video önizlemeleri
 - ✅ **Renkli Klasörler**: Klasör türüne göre renk kodlaması
-- ✅ **Çoklu Dizin Desteği**: Birden fazla klasörü indeksleyin
+- ✅ **Çoklu Dizin İndeksi**: Varsayılan cache-backed akışta Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini indeksleyin
 
 ### Klavye Kısayolları
 | Kısayol | İşlem |
@@ -31,6 +31,13 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile her yerden erişin!
 | **Delete** | Sil (hover) |
 | **F5** | Yenile |
 | **ESC** | Kapat |
+
+### Doğal Dil Arama ve Gizlilik
+
+- Standart dosya araması yerel indeks üzerinde çalışır.
+- Doğal Dil modu, sorguyu yapılandırmak için Groq API'ına iki paralel istek göndermeyi dener. Bu mod kullanıldığında sorgu metni harici servise aktarılabilir.
+- Groq anahtarı eksik/geçersizse veya servis yanıt vermezse uygulama kural tabanlı yerel parser'a döner. Fallback daha sınırlı sorgu semantiği sunar.
+- Yapılandırma ve güncel mimari için [doğal dil arama rehberine](docs/guides/llm-setup.md) bakın.
 
 ## 📦 Kurulum
 
@@ -66,13 +73,13 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj -c Release -o .\
 
 Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 
-### Güvenlik Notları
+### Sistem ve Güvenlik Davranışı
 
-⚠️ **GÜVENLİK**: Bu uygulama sisteminize kalıcı değişiklik yapmaz:
-- Explorer.exe'yi kapatmaz veya değiştirmez
-- Kayıt defterini değiştirmez
-- Sistem dosyalarını değiştirmez
-- Kapatıldığında her şey normale döner
+- Uygulama Explorer.exe'yi veya Windows sistem dosyalarını değiştirmez.
+- Ayarlar ve indeks önbelleği kullanıcı profilinde kalıcı olarak saklanır.
+- "Windows ile başlat" seçeneği etkinleştirildiğinde kullanıcıya ait `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` kaydı güncellenir.
+- Installer'lar kısayol, kaldırma bilgisi ve seçilen başlangıç ayarları için kullanıcı kapsamındaki dosya/registry kayıtlarını değiştirebilir.
+- Doğal Dil modu etkin kullanıldığında sorgu metni Groq API'ına gönderilebilir; standart arama yerel çalışır.
 
 ### Gelecek Özellikler (TODO)
 
@@ -80,7 +87,8 @@ Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 - [ ] TF-IDF skorlama
 - [ ] Trie tabanlı autocomplete
 - [ ] Sesli komut desteği (Vosk)
-- [ ] Çoklu klasör tarama
+- [ ] Kullanıcı tanımlı indeks kökleri
+- [ ] Cache açık/kapalı tarama kapsamını eşitleme
 - [ ] Tema desteği
 - [ ] Özelleştirilebilir kısayollar
 - [ ] Dosya içerik araması
@@ -108,9 +116,9 @@ OmniSpot/
 
 ### Performans
 
-- Desktop tarama: ~100-500 dosya için <100ms
-- Arama: Tipik sorgular için <10ms
-- Bellek: ~20-50 MB (dosya sayısına bağlı)
+- İndeksleme süresi; dosya sayısı, disk hızı, seçilen kökler ve cache durumuna bağlıdır.
+- Arama bellek içi snapshot üzerinde çalışır; gerçek süre ve bellek tüketimi indeks boyutuna ve sorguya göre değişir.
+- Release kararı vermeden önce hedef sistemde temsilî veriyle ölçüm yapılmalıdır.
 
 ### Katkıda Bulunma
 
@@ -118,13 +126,15 @@ Bu bir eğitim projesidir. Öneriler için issue açabilirsiniz.
 
 ### Lisans
 
-Eğitim amaçlı proje.
+Depoda henüz bir `LICENSE` dosyası yoktur. Kullanım, kopyalama ve dağıtım izinleri açık bir lisans seçilene kadar tanımlı değildir.
 
 ## 📚 Dokümantasyon
 
 Tüm belgeler için [dokümantasyon indeksine](docs/README.md) bakın.
 
 - [Derleme ve yayınlama](docs/guides/build.md)
+- [Doğal dil arama yapılandırması](docs/guides/llm-setup.md)
+- [Doğal dil arama testi](docs/guides/nlu-integration.md)
 - [Teknik referans](docs/architecture/technical-reference.md)
 - [Veri yapıları](docs/architecture/data-structures.md)
 - [Güvenlik](SECURITY.md)
