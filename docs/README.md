@@ -5,8 +5,8 @@ OmniSpot belgeleri konuya göre aşağıdaki klasörlerde düzenlenir.
 ## Rehberler
 
 - [Derleme ve yayınlama](guides/build.md)
-- [LLM kurulumu](guides/llm-setup.md)
-- [Doğal dil arama entegrasyonu](guides/nlu-integration.md)
+- [Doğal dil arama yapılandırması](guides/llm-setup.md)
+- [Doğal dil arama testi](guides/nlu-integration.md)
 
 ## Mimari
 
