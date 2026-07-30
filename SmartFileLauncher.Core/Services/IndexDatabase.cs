@@ -50,17 +50,22 @@ public class IndexDatabase : IDisposable
         {
             DataSource = _dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared
+            Cache = SqliteCacheMode.Shared,
+            Pooling = false
         }.ToString();
 
         _connection = new SqliteConnection(connectionString);
         _connection.Open();
+
+        // SQLite foreign key enforcement is connection-scoped and disabled by default.
+        ExecuteNonQuery("PRAGMA foreign_keys=ON;");
 
         // Enable WAL mode for better concurrent performance
         ExecuteNonQuery("PRAGMA journal_mode=WAL;");
         ExecuteNonQuery("PRAGMA synchronous=NORMAL;");
 
         EnsureSchema();
+        RepairOrphanedRows();
     }
 
     /// <summary>
@@ -99,6 +104,37 @@ public class IndexDatabase : IDisposable
         {
             CreateSchema();
             SetMetadata(IndexMetadata.Keys.SchemaVersion, CurrentSchemaVersion.ToString());
+        }
+    }
+
+    /// <summary>
+    /// Repairs rows that may have been written by older versions while SQLite
+    /// foreign-key enforcement was disabled. Future writes are protected by the
+    /// connection-level PRAGMA; this makes existing caches safe to reuse too.
+    /// </summary>
+    private void RepairOrphanedRows()
+    {
+        using var transaction = BeginTransaction();
+        try
+        {
+            ExecuteNonQuery(@"
+                DELETE FROM FileTokens
+                WHERE NOT EXISTS (SELECT 1 FROM Files WHERE Files.Id = FileTokens.FileId)
+                   OR NOT EXISTS (SELECT 1 FROM Tokens WHERE Tokens.Id = FileTokens.TokenId);
+
+                DELETE FROM Files
+                WHERE NOT EXISTS (SELECT 1 FROM Directories WHERE Directories.Id = Files.DirectoryId);
+
+                DELETE FROM Directories
+                WHERE ParentId IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM Directories AS Parent WHERE Parent.Id = Directories.ParentId);
+            ");
+            transaction.Commit();
+        }
+        catch
+        {
+            transaction.Rollback();
+            throw;
         }
     }
 
