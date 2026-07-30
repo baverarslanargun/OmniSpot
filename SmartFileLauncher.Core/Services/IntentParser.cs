@@ -567,7 +567,7 @@ public class IntentParser
 
     // ============================================================
     // INTENT SYSTEM PROMPT - Analyzes query for metadata/filters
-    // TODO: Copy content from Prompt2Intent.txt here
+    // Source reference: docs/prompts/metadata-analyzer.txt
     // ============================================================
     private const string IntentSystemPrompt = """
 # AGENT 1: METADATA ANALYZER
@@ -886,7 +886,7 @@ Prompt: ""
 
     // ============================================================
     // KEYWORD SYSTEM PROMPT - Generates keywords for file matching
-    // TODO: Copy content from Prompt1keyword.txt here
+    // Source reference: docs/prompts/keyword-generator.txt
     // ============================================================
     private const string KeywordSystemPrompt = """
 You are the keyword generation specialist for OmniSpot desktop launcher.

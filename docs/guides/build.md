@@ -24,7 +24,7 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj `
   -o .\publish
 ```
 
-Bu komut `publish\SmartFileLauncher.UI.exe` dosyasını oluşturur (~70MB).
+Bu komut `publish\OmniSpot.exe` dosyasını oluşturur (~70MB).
 .NET runtime gerektirmez, tek başına çalışır.
 
 ## 📦 Kurulum Dosyası Oluşturma
@@ -49,15 +49,17 @@ Bu komut `publish\SmartFileLauncher.UI.exe` dosyasını oluşturur (~70MB).
 ```
 OmniSpot/
 ├── publish/                    # Yayınlanmış dosyalar
-│   └── SmartFileLauncher.UI.exe  # Ana uygulama (~70MB)
+│   └── OmniSpot.exe              # Ana uygulama (~70MB)
 ├── installer/
 │   ├── OmniSpotSetup.iss      # Inno Setup script
 │   └── output/                 # Kurulum dosyası çıktısı
 ├── SmartFileLauncher.Core/     # İş mantığı
 ├── SmartFileLauncher.UI/       # WPF arayüz
-└── Tools/
-    └── IconGenerator/
-        └── omnispot.ico       # Uygulama ikonu
+├── tests/                       # Otomatik testler
+├── docs/                        # Teknik belgeler ve rehberler
+├── scripts/                     # Geliştirme yardımcıları
+├── assets/branding/             # Logo kaynakları
+└── Tools/IconGenerator/         # İkon üretim aracı
 ```
 
 ## 🔧 Publish Seçenekleri
@@ -119,5 +121,5 @@ Daha sonra imzalama eklemek için:
 1. Code signing sertifikası al
 2. `signtool.exe` ile exe'yi imzala:
 ```powershell
-signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com publish\SmartFileLauncher.UI.exe
+signtool sign /f certificate.pfx /p password /t http://timestamp.digicert.com publish\OmniSpot.exe
 ```
