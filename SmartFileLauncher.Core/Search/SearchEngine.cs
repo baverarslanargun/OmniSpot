@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using System.Linq;
-using System.Collections.Concurrent;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.DataStructures;
 namespace SmartFileLauncher.Core.Search;
@@ -10,21 +9,48 @@ namespace SmartFileLauncher.Core.Search;
 /// PriorityQueue handles ordering in O(log m') per insertion.
 /// </summary>
 public class SearchEngine {
-    private readonly InvertedIndex _invertedIndex;
+    private readonly Func<CancellationToken, SearchSnapshot> _snapshotProvider;
     private readonly ITokenizer _tokenizer;
     private readonly IScoringStrategy _scoring;
+
     public SearchEngine(InvertedIndex invertedIndex, ITokenizer tokenizer, IScoringStrategy scoring) {
-        _invertedIndex = invertedIndex; _tokenizer = tokenizer; _scoring = scoring;
+        ArgumentNullException.ThrowIfNull(invertedIndex);
+        _snapshotProvider = cancellationToken =>
+            SearchSnapshot.Create(invertedIndex, cancellationToken: cancellationToken);
+        _tokenizer = tokenizer;
+        _scoring = scoring;
     }
-    public IEnumerable<SearchResult> Search(string query, int maxResults = 50) {
+
+    public SearchEngine(
+        Func<CancellationToken, SearchSnapshot> snapshotProvider,
+        ITokenizer tokenizer,
+        IScoringStrategy scoring) {
+        _snapshotProvider = snapshotProvider ??
+            throw new ArgumentNullException(nameof(snapshotProvider));
+        _tokenizer = tokenizer ?? throw new ArgumentNullException(nameof(tokenizer));
+        _scoring = scoring ?? throw new ArgumentNullException(nameof(scoring));
+    }
+
+    public IReadOnlyList<SearchResult> Search(
+        string query,
+        int maxResults = 50,
+        CancellationToken cancellationToken = default) {
+        cancellationToken.ThrowIfCancellationRequested();
+        var snapshot = _snapshotProvider(cancellationToken);
+        var invertedIndex = snapshot.InvertedIndex;
         var tokens = _tokenizer.Tokenize(query).ToArray();
-        if (tokens.Length == 0) yield break;
+        cancellationToken.ThrowIfCancellationRequested();
+        if (tokens.Length == 0 || maxResults <= 0) {
+            return Array.Empty<SearchResult>();
+        }
         
         // Collect all candidate nodes with their token matches
         var nodeMatches = new Dictionary<string, (FileSystemNode node, HashSet<string> matchedTokens)>();
         
         foreach (var token in tokens) {
-            foreach (var node in _invertedIndex.Get(token)) {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (var node in invertedIndex.Get(token)) {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (!nodeMatches.ContainsKey(node.FullPath)) {
                     nodeMatches[node.FullPath] = (node, new HashSet<string>());
                 }
@@ -36,6 +62,7 @@ public class SearchEngine {
         var pq = new PriorityQueue<SearchResult, double>();
         
         foreach (var (path, (node, matchedTokens)) in nodeMatches) {
+            cancellationToken.ThrowIfCancellationRequested();
             // Calculate score based on token match count and quality
             double score = 0;
             
@@ -56,7 +83,9 @@ public class SearchEngine {
             
             // Bonus for exact token matches
             var fileTokens = _tokenizer.Tokenize(node.Name).ToHashSet();
+            cancellationToken.ThrowIfCancellationRequested();
             foreach (var token in matchedTokens) {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (fileTokens.Contains(token)) {
                     score += 25;
                 }
@@ -69,10 +98,14 @@ public class SearchEngine {
             pq.Enqueue(new SearchResult { Name = node.Name, FullPath = node.FullPath, Score = score }, -score);
         }
         
+        var results = new List<SearchResult>(Math.Min(maxResults, pq.Count));
         int count = 0;
         while (pq.Count > 0 && count < maxResults) {
-            yield return pq.Dequeue();
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Add(pq.Dequeue());
             count++;
         }
+
+        return results;
     }
 }
