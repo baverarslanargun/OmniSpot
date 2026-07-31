@@ -194,6 +194,60 @@ public sealed class SearchApplicationServiceTests
         Assert.Null(outcome.AutoOpenPath);
     }
 
+    [Fact]
+    public async Task AmbiguousOpeningActionDoesNotReturnAutoOpenPath()
+    {
+        var structuredQuery = new StructuredQuery
+        {
+            OpenAction = new OpenAction
+            {
+                ShouldOpen = true,
+                OpenMode = "single_best"
+            }
+        };
+        var service = CreateService(
+            advancedSearch: (query, maxResults, cancellationToken) =>
+                new[]
+                {
+                    Result("first.txt", 120),
+                    Result("second.txt", 100)
+                },
+            onlineParser: (query, cancellationToken) =>
+                Task.FromResult(structuredQuery));
+
+        var outcome = await service.SearchAsync(
+            new SearchRequest("first dosyasını aç", true, true));
+
+        Assert.Null(outcome.AutoOpenPath);
+    }
+
+    [Fact]
+    public async Task ClearOpeningActionReturnsAutoOpenPath()
+    {
+        var structuredQuery = new StructuredQuery
+        {
+            OpenAction = new OpenAction
+            {
+                ShouldOpen = true,
+                OpenMode = "single_best"
+            }
+        };
+        var service = CreateService(
+            advancedSearch: (query, maxResults, cancellationToken) =>
+                new[]
+                {
+                    Result("first.txt", 180),
+                    Result("second.txt", 100)
+                },
+            onlineParser: (query, cancellationToken) =>
+                Task.FromResult(structuredQuery));
+
+        var outcome = await service.SearchAsync(
+            new SearchRequest("first dosyasını aç", true, true));
+
+        Assert.Equal(@"C:\Workspace\first.txt", outcome.AutoOpenPath);
+    }
+
     private static SearchApplicationService CreateService(
         Func<string, int, CancellationToken, IReadOnlyList<SearchResult>>? standardSearch = null,
         Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>>? advancedSearch = null,
@@ -208,11 +262,11 @@ public sealed class SearchApplicationServiceTests
                 Task.FromResult(new StructuredQuery())),
             ruleBasedParser ?? (query => new StructuredQuery()));
 
-    private static SearchResult Result(string name) =>
+    private static SearchResult Result(string name, double score = 100) =>
         new()
         {
             Name = name,
             FullPath = $@"C:\Workspace\{name}",
-            Score = 100
+            Score = score
         };
 }
