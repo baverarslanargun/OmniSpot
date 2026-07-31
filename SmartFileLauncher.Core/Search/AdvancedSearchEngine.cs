@@ -52,15 +52,16 @@ public class AdvancedSearchEngine {
         }
 
         // 1. Get candidate nodes
-        List<(FileSystemNode node, HashSet<string> tokens)> candidates;
-        
-        if (query.FilterOnlyMode || !query.Keywords.Any()) {
+        List<(FileSystemNode node, Dictionary<string, double> matches)> candidates;
+        var searchTerms = GetSearchTerms(query);
+
+        if (query.FilterOnlyMode || searchTerms.Count == 0) {
             // Filter-only mode: get all files, apply filters (no keyword matching)
             candidates = GetAllFilesForFiltering(query, rootNode, cancellationToken);
         } else {
             // Keyword search mode: find files matching keywords
             candidates = GetCandidateNodes(
-                query.Keywords,
+                searchTerms,
                 snapshot.InvertedIndex,
                 rootNode,
                 cancellationToken);
@@ -88,13 +89,18 @@ public class AdvancedSearchEngine {
         HashSet<string> allowedExtensions = new(StringComparer.OrdinalIgnoreCase);
         
         // Priority 1: Use AI-predicted specific extensions if available
-        if (query.PredictedExtensions.Any()) {
+        if (query.HardExtensions.Any()) {
+            foreach (var ext in query.HardExtensions) {
+                cancellationToken.ThrowIfCancellationRequested();
+                allowedExtensions.Add(ext.StartsWith(".") ? ext : $".{ext}");
+            }
+        }
+        else if (query.PredictedExtensions.Any()) {
             foreach (var ext in query.PredictedExtensions) {
                 cancellationToken.ThrowIfCancellationRequested();
                 allowedExtensions.Add(ext.StartsWith(".") ? ext : $".{ext}");
             }
         }
-        // Priority 2: Fallback to general file types
         else if (query.FileTypes.Any()) {
             var mappedExtensions = FileTypeMapper.GetExtensionsForTypes(query.FileTypes);
             foreach (var ext in mappedExtensions) {
@@ -117,24 +123,13 @@ public class AdvancedSearchEngine {
             }).ToList();
         }
         
-        // 4. Apply date filter
-        if (query.DateFilter != null) {
-            candidates = ApplyDateFilter(candidates, query.DateFilter, cancellationToken);
-        }
-
-        // 5. Apply size filter
-        if (query.SizeFilter != null) {
-            candidates = ApplySizeFilter(candidates, query.SizeFilter, cancellationToken);
-        }
-        
-        // 6. Expand folder contents if needed (only if user doesn't prefer folders)
-        var finalResults = new List<(FileSystemNode node, HashSet<string> tokens)>();
-        foreach (var (node, tokens) in candidates) {
+        var finalResults = new List<(FileSystemNode node, Dictionary<string, double> matches)>();
+        foreach (var (node, matches) in candidates) {
             cancellationToken.ThrowIfCancellationRequested();
             if (node.IsDirectory) {
                 // If user prefers folders, add the folder itself
                 if (userWantsFolders) {
-                    finalResults.Add((node, tokens));
+                    finalResults.Add((node, matches));
                 }
                 else if (query.IncludeFolderContents) {
                     // Add all children of matching folders
@@ -152,22 +147,37 @@ public class AdvancedSearchEngine {
                     
                     foreach (var child in children) {
                         cancellationToken.ThrowIfCancellationRequested();
-                        finalResults.Add((child, tokens)); // Inherit parent folder tokens
+                        finalResults.Add((child, new Dictionary<string, double>(matches)));
                     }
                 }
             } else {
-                finalResults.Add((node, tokens));
+                finalResults.Add((node, matches));
             }
         }
-        
-        // 7. Score and rank
+
+        finalResults = finalResults
+            .GroupBy(item => item.node.FullPath, StringComparer.OrdinalIgnoreCase)
+            .Select(group => (
+                group.First().node,
+                MergeMatches(group.Select(item => item.matches))))
+            .ToList();
+
+        if (query.DateFilter != null) {
+            finalResults = ApplyDateFilter(finalResults, query.DateFilter, cancellationToken);
+        }
+
+        if (query.SizeFilter != null) {
+            finalResults = ApplySizeFilter(finalResults, query.SizeFilter, cancellationToken);
+        }
+
         var pq = new PriorityQueue<SearchResult, double>();
-        foreach (var (node, matchedTokens) in finalResults) {
+        foreach (var (node, matches) in finalResults) {
             cancellationToken.ThrowIfCancellationRequested();
             double score = CalculateScore(
                 query,
                 node,
-                matchedTokens,
+                matches,
+                searchTerms,
                 cancellationToken);
             pq.Enqueue(new SearchResult { 
                 Name = node.Name, 
@@ -189,63 +199,180 @@ public class AdvancedSearchEngine {
         return results;
     }
     
-    private List<(FileSystemNode node, HashSet<string> tokens)> GetCandidateNodes(
-        List<string> keywords,
+    private static IReadOnlyList<SearchTerm> GetSearchTerms(StructuredQuery query) {
+        if (query.SearchTerms.Count > 0) {
+            return query.SearchTerms
+                .Where(term => !string.IsNullOrWhiteSpace(term.Text))
+                .Select(term => new SearchTerm {
+                    Text = term.Text,
+                    Category = term.Category,
+                    Role = term.Role,
+                    AnchorGroup = term.AnchorGroup,
+                    Weight = Math.Clamp(term.Weight, 0, 1)
+                })
+                .ToList();
+        }
+
+        return query.Keywords
+            .Where(keyword => !string.IsNullOrWhiteSpace(keyword))
+            .Select(keyword => new SearchTerm {
+                Text = keyword,
+                Category = SearchTermCategory.Legacy,
+                Role = SearchTermRole.Anchor,
+                AnchorGroup = 0,
+                Weight = 1
+            })
+            .ToList();
+    }
+
+    private List<(FileSystemNode node, Dictionary<string, double> matches)> GetCandidateNodes(
+        IReadOnlyList<SearchTerm> searchTerms,
         InvertedIndexSnapshot invertedIndex,
         FileSystemNode rootNode,
         CancellationToken cancellationToken) {
-        if (!keywords.Any()) {
-            // No keywords = return all nodes
-            var allNodes = GetAllChildren(rootNode, cancellationToken);
-            return allNodes.Select(n => (n, new HashSet<string>())).ToList();
+        var anchorGroups = searchTerms
+            .Where(term => term.Role == SearchTermRole.Anchor)
+            .GroupBy(term => term.AnchorGroup)
+            .OrderBy(group => group.Key)
+            .ToList();
+        if (anchorGroups.Count == 0) {
+            return [];
         }
-        
-        var nodeMatches = new Dictionary<string, (FileSystemNode node, HashSet<string> tokens)>();
-        
-        foreach (var keyword in keywords) {
+
+        Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)>? candidates = null;
+        foreach (var anchorGroup in anchorGroups) {
             cancellationToken.ThrowIfCancellationRequested();
-            var keywordTokens = _tokenizer.Tokenize(keyword).ToList();
-            foreach (var token in keywordTokens) {
-                cancellationToken.ThrowIfCancellationRequested();
-                bool foundAny = false;
+            var groupMatches = new Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)>(
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var searchTerm in anchorGroup) {
+                var termMatches = GetTermMatches(
+                    searchTerm,
+                    invertedIndex,
+                    cancellationToken);
+                MergeCandidateUnion(groupMatches, termMatches);
+            }
 
-                // 1. Exact match
-                var exactMatches = invertedIndex.Get(token);
-                if (exactMatches.Count > 0) {
-                    foreach (var node in exactMatches) {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        AddMatch(nodeMatches, node, token);
-                    }
-                    foundAny = true;
-                } 
-                
-                // 2. Partial match (Substring) - Solves "612" -> "FR612"
-                // Only if token is long enough to avoid noise (e.g. don't match "a" in everything)
-                if (token.Length >= 2) {
-                    var partialMatches = invertedIndex.GetPartial(token, cancellationToken);
-                    foreach (var node in partialMatches) {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        AddMatch(nodeMatches, node, token);
-                        foundAny = true;
-                    }
+            if (groupMatches.Count == 0) {
+                return [];
+            }
+
+            if (candidates == null) {
+                candidates = groupMatches;
+                continue;
+            }
+
+            foreach (var path in candidates.Keys.ToList()) {
+                if (!groupMatches.TryGetValue(path, out var groupMatch)) {
+                    candidates.Remove(path);
+                    continue;
                 }
 
-                // 3. Fuzzy match (Fallback)
-                // If we haven't found anything yet, try fuzzy matching
-                if (!foundAny) {
-                    var fuzzyMatches = invertedIndex.GetFuzzy(
-                        token,
-                        maxDistance: 2,
-                        cancellationToken: cancellationToken);
-                    foreach (var node in fuzzyMatches) {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        AddMatch(nodeMatches, node, token);
-                    }
-                }
+                MergeContributions(candidates[path].matches, groupMatch.matches);
+            }
+
+            if (candidates.Count == 0) {
+                return [];
             }
         }
-        
-        return nodeMatches.Values.ToList();
+
+        return candidates?.Values.ToList() ?? [];
+    }
+
+    private Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)> GetTermMatches(
+        SearchTerm searchTerm,
+        InvertedIndexSnapshot invertedIndex,
+        CancellationToken cancellationToken) {
+        var tokens = _tokenizer.Tokenize(searchTerm.Text)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)>? termMatches = null;
+        foreach (var token in tokens) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var tokenMatches = GetTokenMatches(
+                token,
+                searchTerm.Weight,
+                invertedIndex,
+                cancellationToken);
+            if (tokenMatches.Count == 0) {
+                return [];
+            }
+
+            if (termMatches == null) {
+                termMatches = tokenMatches;
+                continue;
+            }
+
+            foreach (var path in termMatches.Keys.ToList()) {
+                if (!tokenMatches.TryGetValue(path, out var tokenMatch)) {
+                    termMatches.Remove(path);
+                    continue;
+                }
+
+                MergeContributions(termMatches[path].matches, tokenMatch.matches);
+            }
+        }
+
+        return termMatches ?? [];
+    }
+
+    private static void MergeCandidateUnion(
+        Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)> destination,
+        Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)> source) {
+        foreach (var (path, candidate) in source) {
+            if (destination.TryGetValue(path, out var existing)) {
+                MergeContributions(existing.matches, candidate.matches);
+            }
+            else {
+                destination[path] = (
+                    candidate.node,
+                    new Dictionary<string, double>(candidate.matches, StringComparer.OrdinalIgnoreCase));
+            }
+        }
+    }
+
+    private Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)> GetTokenMatches(
+        string token,
+        double weight,
+        InvertedIndexSnapshot invertedIndex,
+        CancellationToken cancellationToken) {
+        var matches = new Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)>(
+            StringComparer.OrdinalIgnoreCase);
+        foreach (var node in invertedIndex.Get(token)) {
+            cancellationToken.ThrowIfCancellationRequested();
+            AddMatch(matches, node, token, weight);
+        }
+
+        var allowPartial = token.Length >= 4 ||
+            (token.Length >= 3 && token.Any(char.IsDigit));
+        if (allowPartial) {
+            foreach (var node in invertedIndex.GetPartial(token, cancellationToken)) {
+                cancellationToken.ThrowIfCancellationRequested();
+                AddMatch(matches, node, token, weight * 0.7);
+            }
+        }
+
+        if (matches.Count == 0 && token.Length >= 4) {
+            var maxDistance = token.Length >= 7 ? 2 : 1;
+            foreach (var node in invertedIndex.GetFuzzy(
+                         token,
+                         maxDistance,
+                         cancellationToken)) {
+                cancellationToken.ThrowIfCancellationRequested();
+                AddMatch(matches, node, token, weight * 0.4);
+            }
+        }
+
+        return matches;
+    }
+
+    private static void MergeContributions(
+        Dictionary<string, double> destination,
+        Dictionary<string, double> source) {
+        foreach (var (token, contribution) in source) {
+            if (!destination.TryGetValue(token, out var current) || contribution > current) {
+                destination[token] = contribution;
+            }
+        }
     }
 
     /// <summary>
@@ -253,7 +380,7 @@ public class AdvancedSearchEngine {
     /// In filter-only mode, we return all files (not searching by keywords),
     /// just applying type/date/size filters.
     /// </summary>
-    private List<(FileSystemNode node, HashSet<string> tokens)> GetAllFilesForFiltering(
+    private List<(FileSystemNode node, Dictionary<string, double> matches)> GetAllFilesForFiltering(
         StructuredQuery query,
         FileSystemNode rootNode,
         CancellationToken cancellationToken) {
@@ -306,25 +433,50 @@ public class AdvancedSearchEngine {
             }).ToList();
         }
         
-        return allNodes.Select(n => (n, new HashSet<string>())).ToList();
+        return allNodes
+            .Select(n => (n, new Dictionary<string, double>()))
+            .ToList();
     }
 
-    private void AddMatch(Dictionary<string, (FileSystemNode node, HashSet<string> tokens)> matches, FileSystemNode node, string token) {
+    private static void AddMatch(
+        Dictionary<string, (FileSystemNode node, Dictionary<string, double> matches)> matches,
+        FileSystemNode node,
+        string token,
+        double contribution) {
         if (!matches.ContainsKey(node.FullPath)) {
-            matches[node.FullPath] = (node, new HashSet<string>());
+            matches[node.FullPath] = (node, new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase));
         }
-        matches[node.FullPath].tokens.Add(token);
+
+        if (!matches[node.FullPath].matches.TryGetValue(token, out var current) ||
+            contribution > current) {
+            matches[node.FullPath].matches[token] = contribution;
+        }
+    }
+
+    private static Dictionary<string, double> MergeMatches(
+        IEnumerable<Dictionary<string, double>> sources) {
+        var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var source in sources) {
+            foreach (var (token, contribution) in source) {
+                if (!result.TryGetValue(token, out var current) ||
+                    contribution > current) {
+                    result[token] = contribution;
+                }
+            }
+        }
+
+        return result;
     }
     
-    private List<(FileSystemNode node, HashSet<string> tokens)> ApplyDateFilter(
-        List<(FileSystemNode node, HashSet<string> tokens)> candidates, 
+    private List<(FileSystemNode node, Dictionary<string, double> matches)> ApplyDateFilter(
+        List<(FileSystemNode node, Dictionary<string, double> matches)> candidates,
         DateFilter filter,
         CancellationToken cancellationToken) {
         
         return candidates.Where(c => {
             cancellationToken.ThrowIfCancellationRequested();
             var metadata = c.node.Metadata;
-            if (metadata == null) return true;
+            if (metadata == null) return false;
             
             if (filter.CreatedAfter != null && DateTime.TryParse(filter.CreatedAfter, out var createdAfter)) {
                 if (metadata.CreatedTime == null || metadata.CreatedTime < createdAfter) {
@@ -332,8 +484,9 @@ public class AdvancedSearchEngine {
                 }
             }
             
-            if (filter.CreatedBefore != null && DateTime.TryParse(filter.CreatedBefore, out var createdBefore)) {
-                if (metadata.CreatedTime == null || metadata.CreatedTime > createdBefore) {
+            if (filter.CreatedBeforeExclusive != null &&
+                DateTime.TryParse(filter.CreatedBeforeExclusive, out var createdBeforeExclusive)) {
+                if (metadata.CreatedTime == null || metadata.CreatedTime >= createdBeforeExclusive) {
                     return false;
                 }
             }
@@ -344,8 +497,9 @@ public class AdvancedSearchEngine {
                 }
             }
             
-            if (filter.ModifiedBefore != null && DateTime.TryParse(filter.ModifiedBefore, out var modifiedBefore)) {
-                if (metadata.LastWriteTime == null || metadata.LastWriteTime > modifiedBefore) {
+            if (filter.ModifiedBeforeExclusive != null &&
+                DateTime.TryParse(filter.ModifiedBeforeExclusive, out var modifiedBeforeExclusive)) {
+                if (metadata.LastWriteTime == null || metadata.LastWriteTime >= modifiedBeforeExclusive) {
                     return false;
                 }
             }
@@ -354,8 +508,8 @@ public class AdvancedSearchEngine {
         }).ToList();
     }
 
-    private List<(FileSystemNode node, HashSet<string> tokens)> ApplySizeFilter(
-        List<(FileSystemNode node, HashSet<string> tokens)> candidates,
+    private List<(FileSystemNode node, Dictionary<string, double> matches)> ApplySizeFilter(
+        List<(FileSystemNode node, Dictionary<string, double> matches)> candidates,
         SizeFilter filter,
         CancellationToken cancellationToken)
     {
@@ -363,7 +517,7 @@ public class AdvancedSearchEngine {
             cancellationToken.ThrowIfCancellationRequested();
             if (c.node.IsDirectory) return true; // Don't filter folders by size
             var sizeBytes = c.node.Metadata?.SizeBytes;
-            if (sizeBytes == null) return true;
+            if (sizeBytes == null) return false;
 
             double sizeMb = sizeBytes.Value / (1024.0 * 1024.0);
 
@@ -398,49 +552,86 @@ public class AdvancedSearchEngine {
     private double CalculateScore(
         StructuredQuery query,
         FileSystemNode node,
-        HashSet<string> matchedTokens,
+        Dictionary<string, double> matches,
+        IReadOnlyList<SearchTerm> searchTerms,
         CancellationToken cancellationToken) {
         cancellationToken.ThrowIfCancellationRequested();
-        double score = 0;
-        
-        // Base score from matched tokens
-        score += matchedTokens.Count * 50;
-        
-        // Bonus if folder name matches
+        double score = matches.Values.Sum() * 100;
+
         if (node.FullPath.Contains(Path.DirectorySeparatorChar)) {
             var parentFolder = Path.GetFileName(Path.GetDirectoryName(node.FullPath) ?? "");
             var folderTokens = _tokenizer.Tokenize(parentFolder).ToHashSet();
-            var folderMatchCount = matchedTokens.Count(t => folderTokens.Contains(t));
-            score += folderMatchCount * 75; // Higher weight for folder matches
+            score += matches
+                .Where(match => folderTokens.Contains(match.Key))
+                .Sum(match => match.Value * 60);
         }
 
-        // Bonus from Folder Hints (AI)
         if (query.FolderHints.Any()) {
             var pathLower = node.FullPath.ToLowerInvariant();
             foreach (var hint in query.FolderHints) {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (pathLower.Contains(hint.Name.ToLowerInvariant())) {
-                    score += 100 * hint.Weight;
+                    score += 100 * Math.Clamp(hint.Weight, 0, 1);
                 }
             }
         }
-        
-        // Target type bonus - boost score based on file/folder preference
+
         if (query.TargetType != null) {
             if (node.IsDirectory && query.TargetType.PrefersFolder) {
-                // User wants folders and this is a folder - bonus!
                 score += 150 * query.TargetType.Folder;
             }
             else if (!node.IsDirectory && query.TargetType.PrefersFile) {
-                // User wants files and this is a file - bonus!
                 score += 100 * query.TargetType.File;
             }
         }
-        
-        // Frequency bonus
+
+        if (!node.IsDirectory && query.SoftExtensions.Count > 0) {
+            var extension = Path.GetExtension(node.Name).TrimStart('.');
+            var softIndex = query.SoftExtensions.FindIndex(
+                value => string.Equals(
+                    value.TrimStart('.'),
+                    extension,
+                    StringComparison.OrdinalIgnoreCase));
+            if (softIndex >= 0) {
+                score += Math.Max(10, 35 - softIndex * 5);
+            }
+        }
+
+        var fileName = Path.GetFileNameWithoutExtension(node.Name);
+        var normalizedName = NormalizeForComparison(fileName);
+        foreach (var term in searchTerms.Where(term =>
+                     term.Role == SearchTermRole.Phrase ||
+                     (term.Role == SearchTermRole.Anchor && term.Category == SearchTermCategory.Exact))) {
+            cancellationToken.ThrowIfCancellationRequested();
+            var normalizedTerm = NormalizeForComparison(term.Text);
+            if (normalizedName == normalizedTerm) {
+                score += 150 * term.Weight;
+            }
+            else if (normalizedTerm.Length > 1 && normalizedName.Contains(normalizedTerm)) {
+                score += 75 * term.Weight;
+            }
+        }
+
+        var nameTokens = _tokenizer.Tokenize(fileName)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var contextTokenWeights = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var term in searchTerms.Where(term => term.Role == SearchTermRole.Context)) {
+            foreach (var token in _tokenizer.Tokenize(term.Text)) {
+                if (!contextTokenWeights.TryGetValue(token, out var current) || term.Weight > current) {
+                    contextTokenWeights[token] = term.Weight;
+                }
+            }
+        }
+        score += contextTokenWeights
+            .Where(item => nameTokens.Contains(item.Key))
+            .Sum(item => item.Value * 30);
+
         var freq = node.Metadata?.OpenCount ?? 0;
         score += freq * 2;
-        
+
         return score;
     }
+
+    private string NormalizeForComparison(string value) =>
+        string.Join(' ', _tokenizer.Tokenize(value));
 }

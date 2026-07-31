@@ -12,6 +12,9 @@ public class StructuredQuery {
     
     [JsonPropertyName("keywords")]
     public List<string> Keywords { get; set; } = new();
+
+    [JsonIgnore]
+    public List<SearchTerm> SearchTerms { get; set; } = new();
     
     [JsonPropertyName("file_types")]
     public List<string> FileTypes { get; set; } = new();
@@ -22,6 +25,12 @@ public class StructuredQuery {
     /// </summary>
     [JsonPropertyName("predicted_extensions")]
     public List<string> PredictedExtensions { get; set; } = new();
+
+    [JsonPropertyName("hard_extensions")]
+    public List<string> HardExtensions { get; set; } = new();
+
+    [JsonPropertyName("soft_extensions")]
+    public List<string> SoftExtensions { get; set; } = new();
     
     [JsonPropertyName("date_filter")]
     public DateFilter? DateFilter { get; set; }
@@ -78,14 +87,36 @@ public class DateFilter {
     [JsonPropertyName("created_after")]
     public string? CreatedAfter { get; set; }
     
-    [JsonPropertyName("created_before")]
-    public string? CreatedBefore { get; set; }
+    [JsonPropertyName("created_before_exclusive")]
+    public string? CreatedBeforeExclusive { get; set; }
     
     [JsonPropertyName("modified_after")]
     public string? ModifiedAfter { get; set; }
     
-    [JsonPropertyName("modified_before")]
-    public string? ModifiedBefore { get; set; }
+    [JsonPropertyName("modified_before_exclusive")]
+    public string? ModifiedBeforeExclusive { get; set; }
+}
+
+public enum SearchTermCategory {
+    Exact,
+    Variant,
+    Translation,
+    Related,
+    Legacy
+}
+
+public enum SearchTermRole {
+    Anchor,
+    Phrase,
+    Context
+}
+
+public sealed class SearchTerm {
+    public string Text { get; set; } = "";
+    public SearchTermCategory Category { get; set; }
+    public SearchTermRole Role { get; set; } = SearchTermRole.Anchor;
+    public int AnchorGroup { get; set; }
+    public double Weight { get; set; }
 }
 
 public class SizeFilter {

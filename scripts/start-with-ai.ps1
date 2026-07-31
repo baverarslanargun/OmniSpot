@@ -2,6 +2,11 @@
 param(
     [string]$ConfigPath = (Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OmniSpot\groq-keys.json"),
     [string]$ExecutablePath,
+    [string]$ProbeQuery,
+    [ValidateSet("qwen/qwen3.6-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "llama-3.3-70b-versatile")]
+    [string]$ProbeModel = "qwen/qwen3.6-27b",
+    [ValidateSet("none", "default", "low", "medium", "high")]
+    [string]$ProbeReasoningEffort = "none",
     [switch]$ValidateOnly
 )
 
@@ -72,34 +77,36 @@ try {
         return
     }
 
-    if (Get-Process -Name "OmniSpot" -ErrorAction SilentlyContinue) {
-        throw "OmniSpot zaten acik. Mevcut uygulamayi kapatip AI kisayolunu yeniden calistirin."
-    }
-
     $repoRoot = Split-Path -Parent $PSScriptRoot
-    if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
-        $releaseExecutable = Join-Path $repoRoot "SmartFileLauncher.UI\bin\Release\net8.0-windows\win-x64\OmniSpot.exe"
-        $publishedExecutable = Join-Path $repoRoot "publish\OmniSpot.exe"
+    if ([string]::IsNullOrWhiteSpace($ProbeQuery)) {
+        if (Get-Process -Name "OmniSpot" -ErrorAction SilentlyContinue) {
+            throw "OmniSpot zaten acik. Mevcut uygulamayi kapatip AI kisayolunu yeniden calistirin."
+        }
 
-        if (Test-Path -LiteralPath $releaseExecutable) {
-            $ExecutablePath = $releaseExecutable
-        }
-        elseif (Test-Path -LiteralPath $publishedExecutable) {
-            $ExecutablePath = $publishedExecutable
-        }
-        else {
-            $solutionPath = Join-Path $repoRoot "SmartFileLauncher.sln"
-            & dotnet build $solutionPath --configuration Release --nologo
-            if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $releaseExecutable)) {
-                throw "Release uygulamasi olusturulamadi."
+        if ([string]::IsNullOrWhiteSpace($ExecutablePath)) {
+            $releaseExecutable = Join-Path $repoRoot "SmartFileLauncher.UI\bin\Release\net8.0-windows\win-x64\OmniSpot.exe"
+            $publishedExecutable = Join-Path $repoRoot "publish\OmniSpot.exe"
+
+            if (Test-Path -LiteralPath $releaseExecutable) {
+                $ExecutablePath = $releaseExecutable
             }
-            $ExecutablePath = $releaseExecutable
+            elseif (Test-Path -LiteralPath $publishedExecutable) {
+                $ExecutablePath = $publishedExecutable
+            }
+            else {
+                $solutionPath = Join-Path $repoRoot "SmartFileLauncher.sln"
+                & dotnet build $solutionPath --configuration Release --nologo
+                if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $releaseExecutable)) {
+                    throw "Release uygulamasi olusturulamadi."
+                }
+                $ExecutablePath = $releaseExecutable
+            }
         }
-    }
 
-    $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
-    if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
-        throw "OmniSpot calistirilabilir dosyasi bulunamadi: $ExecutablePath"
+        $ExecutablePath = [IO.Path]::GetFullPath($ExecutablePath)
+        if (-not (Test-Path -LiteralPath $ExecutablePath -PathType Leaf)) {
+            throw "OmniSpot calistirilabilir dosyasi bulunamadi: $ExecutablePath"
+        }
     }
 
     $intentName = "OMNISPOT_GROQ_INTENT_API_KEY"
@@ -112,7 +119,20 @@ try {
     try {
         Set-Item -Path "Env:$intentName" -Value $intentPlain
         Set-Item -Path "Env:$keywordName" -Value $keywordPlain
-        Start-Process -FilePath $ExecutablePath -WorkingDirectory (Split-Path -Parent $ExecutablePath) | Out-Null
+        if ([string]::IsNullOrWhiteSpace($ProbeQuery)) {
+            Start-Process -FilePath $ExecutablePath -WorkingDirectory (Split-Path -Parent $ExecutablePath) | Out-Null
+        }
+        else {
+            $probeProject = Join-Path $repoRoot "Tools\PromptProbe\PromptProbe.csproj"
+            if (-not (Test-Path -LiteralPath $probeProject -PathType Leaf)) {
+                throw "Prompt probe projesi bulunamadi: $probeProject"
+            }
+
+            & dotnet run --project $probeProject --configuration Release --no-launch-profile --verbosity quiet -- --model $ProbeModel --reasoning-effort $ProbeReasoningEffort $ProbeQuery
+            if ($LASTEXITCODE -ne 0) {
+                throw "Prompt probe hata koduyla tamamlandi: $LASTEXITCODE"
+            }
+        }
     }
     finally {
         Restore-EnvironmentValue $intentName $hadIntent $previousIntent
@@ -120,7 +140,7 @@ try {
     }
 }
 catch {
-    if ($ValidateOnly) {
+    if ($ValidateOnly -or -not [string]::IsNullOrWhiteSpace($ProbeQuery)) {
         Write-Error $_
     }
     else {
