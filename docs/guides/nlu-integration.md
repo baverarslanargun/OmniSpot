@@ -1,13 +1,13 @@
 # Doğal Dil Arama Test Rehberi
 
-Bu rehber aktif Groq + rule-based fallback akışının manuel doğrulamasını kapsar. Testler kişisel dosyalar yerine ayrı bir örnek klasörde yapılmalıdır.
+Bu rehber aktif Groq + rule-based fallback akışının manuel doğrulamasını kapsar. Anahtar yönetimi ve başlatma davranışının tek kaynağı [doğal dil arama yapılandırma rehberidir](llm-setup.md). Testler kişisel dosyalar yerine ayrı bir örnek klasörde yapılmalıdır.
 
 ## Ön koşullar
 
 - Windows 10/11
 - .NET 8 SDK
 - Güncel bir build
-- Groq başarı senaryosu için geçerli bir API anahtarı ve ağ erişimi
+- Groq başarı senaryosu için yapılandırma rehberine göre hazırlanmış `OmniSpot AI` kısayolu, geçerli API anahtarları ve Groq tarafından kabul edilen ağ bağlantısı
 
 OmniSpot Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini tek kalıcı indeks üzerinden tarar ve canlı izler. Bu rehber, test verisini kolayca ayırmak ve temizlemek için Desktop altında oluşturur.
 
@@ -47,13 +47,23 @@ AI kısayolu daha önce hazırlanmadıysa bir kez yapılandırın:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1
 ```
 
-OmniSpot'u Masaüstündeki `OmniSpot AI` kısayoluyla başlatın.
+Önce çalışan tüm OmniSpot süreçlerini kapatın. Ardından Masaüstündeki `OmniSpot AI` kısayoluyla veya aşağıdaki eşdeğer komutla başlatın:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1
+```
+
+Doğrudan Release exe'sini çalıştırmayın; bu yol şifreli anahtarları alt sürece aktarmaz.
+
+UI testinden önce aynı sorgunun yapılandırılmış sonucunu terminalde görmek isterseniz [yapılandırma rehberindeki hızlı prompt probe](llm-setup.md#hızlı-prompt-probe) komutunu kullanabilirsiniz.
 
 1. Doğal Dil modunu açın.
 2. `workplace safety klasöründeki videoları göster` sorgusunu çalıştırın.
 3. Logda intent ve keyword çağrılarının tamamlandığını doğrulayın.
 4. Sonuçlarda örnek `.mp4` dosyalarının bulunduğunu kontrol edin.
 5. `budget ile ilgili excel dosyasını bul` sorgusunda `.xlsx` örneğinin döndüğünü kontrol edin.
+6. `yaz dönemine ait biletler` sorgusunda logda ana hedefin `bilet`, yardımcı bağlamın `yaz` olduğunu ve tarih aralığının çalıştırıldığı yıl için 1 Haziran–1 Eylül üretildiğini kontrol edin.
+7. `Yaza merhaba` veya `altyazı` içeren fakat `bilet` içermeyen örneklerin yalnız `yaz` benzerliği nedeniyle sonuçlara girmediğini doğrulayın.
 
 Model çıktısı deterministik olmadığı için token listesi veya skorlar birebir sabit kabul edilmemelidir. Doğrulama; uygun dosya türünün, klasör ipucunun ve beklenen örneklerin sonuçlara yansımasına odaklanır.
 
@@ -98,4 +108,11 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 
 ## Otomasyon kapsamı
 
-Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. Groq başarı/fallback sözleşmesi için deterministik fake HTTP client tabanlı otomatik testler henüz bulunmadığından bu rehber manuel doğrulama sağlar.
+Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. `IntentParserTests` ayrıca Groq JSON doğrulaması, rol ve anchor grubu eşlemesi, açık komut koruması, HTTP retry ve kısmi fallback sözleşmelerini deterministik fake HTTP yanıtlarıyla doğrular. Arama testleri context'in aday üretmediğini, grup içi alternatifleri, gruplar arası zorunluluğu, kısa token güvenliğini ve sayısal identifier eşleşmesini kapsar. Gerçek Groq hesabı, model kalitesi, VPN kabulü ve uçtan uca UI davranışı bu rehberle manuel doğrulanır.
+
+## Güncelleme notu — 2026-07-31
+
+- AI ve anahtarsız smoke başlatma yolları açıkça ayrıldı.
+- Yapılandırma rehberi tek kaynak olarak bağlandı.
+- Eklenen fake HTTP tabanlı otomatik test kapsamı belgeye işlendi.
+- Anchor/phrase/context arama davranışı ve yaz bileti gerileme senaryosu eklendi.

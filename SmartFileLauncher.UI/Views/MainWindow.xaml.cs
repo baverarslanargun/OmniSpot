@@ -1273,21 +1273,43 @@ public partial class MainWindow : Window {
             if (structuredQuery.FilterOnlyMode) {
                 Log("   🔍 Mode: FILTER-ONLY (sadece filtrelerle arama)");
             } else {
-                Log($"   Keywords: [{string.Join(", ", structuredQuery.Keywords)}]");
+                var primaryTerms = structuredQuery.SearchTerms
+                    .Where(term =>
+                        term.Role == SearchTermRole.Anchor &&
+                        term.Category == SearchTermCategory.Exact)
+                    .Select(term => term.Text);
+                var alternativeTerms = structuredQuery.SearchTerms
+                    .Where(term =>
+                        term.Role == SearchTermRole.Anchor &&
+                        term.Category != SearchTermCategory.Exact)
+                    .Select(term => term.Text);
+                var phraseTerms = structuredQuery.SearchTerms
+                    .Where(term => term.Role == SearchTermRole.Phrase)
+                    .Select(term => term.Text);
+                var contextTerms = structuredQuery.SearchTerms
+                    .Where(term => term.Role == SearchTermRole.Context)
+                    .Select(term => term.Text);
+                Log($"   Ana hedefler: [{string.Join(", ", primaryTerms)}]");
+                Log($"   Alternatifler: [{string.Join(", ", alternativeTerms)}]");
+                Log($"   İfadeler: [{string.Join(", ", phraseTerms)}]");
+                Log($"   Yardımcı bağlam: [{string.Join(", ", contextTerms)}]");
             }
 
             Log($"   File Types: [{string.Join(", ", structuredQuery.FileTypes)}]");
-            if (structuredQuery.PredictedExtensions.Any()) {
-                Log($"   🎯 AI Tahmin Edilen Uzantılar: [{string.Join(", ", structuredQuery.PredictedExtensions)}]");
+            if (structuredQuery.HardExtensions.Any()) {
+                Log($"   Zorunlu uzantılar: [{string.Join(", ", structuredQuery.HardExtensions)}]");
+            }
+            if (structuredQuery.SoftExtensions.Any()) {
+                Log($"   Önerilen uzantılar: [{string.Join(", ", structuredQuery.SoftExtensions)}]");
             }
 
             if (structuredQuery.DateFilter != null) {
                 var dateFilter = structuredQuery.DateFilter;
                 var parts = new List<string>();
                 if (dateFilter.CreatedAfter != null) parts.Add($"Created > {dateFilter.CreatedAfter}");
-                if (dateFilter.CreatedBefore != null) parts.Add($"Created < {dateFilter.CreatedBefore}");
+                if (dateFilter.CreatedBeforeExclusive != null) parts.Add($"Created < {dateFilter.CreatedBeforeExclusive}");
                 if (dateFilter.ModifiedAfter != null) parts.Add($"Modified > {dateFilter.ModifiedAfter}");
-                if (dateFilter.ModifiedBefore != null) parts.Add($"Modified < {dateFilter.ModifiedBefore}");
+                if (dateFilter.ModifiedBeforeExclusive != null) parts.Add($"Modified < {dateFilter.ModifiedBeforeExclusive}");
                 if (parts.Count > 0) {
                     Log($"   📅 Date Filter: {string.Join(", ", parts)}");
                 }
