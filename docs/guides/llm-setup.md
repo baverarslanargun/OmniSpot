@@ -18,28 +18,43 @@ Aktif endpoint ve modeller:
 
 | Amaç | Model |
 |---|---|
-| Intent analizi | `meta-llama/llama-4-maverick-17b-128e-instruct` |
-| Keyword üretimi | `meta-llama/llama-4-scout-17b-16e-instruct` |
+| Intent analizi | `qwen/qwen3.6-27b` |
+| Keyword üretimi | `qwen/qwen3.6-27b` |
 
-Her iki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve 30 saniyelik timeout sınırına sahiptir.
+Her iki istek de `reasoning_effort=none` ile `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve 30 saniyelik timeout sınırına sahiptir.
 
 ## API anahtarı
 
-Tek anahtarı iki istek için paylaşmak üzere uygulamayı başlattığınız PowerShell oturumunda şu değişkeni tanımlayın:
+Önerilen yerel geliştirme akışı, anahtarları Windows DPAPI ile şifreleyip kullanıcı profili altında tutar. Bir kez çalıştırın:
 
 ```powershell
-$env:OMNISPOT_GROQ_API_KEY = "gsk_..."
-dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1
 ```
 
-Intent ve keyword çağrıları için ayrı anahtar gerekirse aşağıdaki değişkenler ortak anahtarın ilgili aşamadaki yerini alır:
+Script intent ve keyword anahtarlarını görünmeden ister, `%LOCALAPPDATA%\OmniSpot\groq-keys.json` dosyasına DPAPI ile şifreli yazar ve Masaüstünde `OmniSpot AI` kısayolu oluşturur. Sonraki başlatmalarda yalnız bu kısayolu kullanın.
+
+Kısayol:
+
+- şifreli anahtarları yalnız mevcut Windows kullanıcısı için çözer,
+- anahtarları OmniSpot alt sürecine ortam değişkeni olarak verir,
+- başlatıcı süreçteki geçici değerleri hemen temizler,
+- Release çıktısı yoksa uygulamayı bir kez derler.
+
+Anahtarları güncellemek için yapılandırma komutunu yeniden çalıştırın. Yerel anahtarları ve kısayolu kaldırmak için:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1 -Remove
+```
+
+Şifreli dosya repo dışında kalır ve yalnız aynı Windows kullanıcısı tarafından aynı bilgisayarda çözülebilir. Anahtarları kaynak koda, `appsettings` dosyalarına, loglara veya Git geçmişine yazmayın. Yanlışlıkla paylaşılan anahtarları yalnız repodan silmek yeterli değildir; Groq tarafında iptal edip yenileyin.
+
+Geçici manuel başlatma gerektiğinde ortam değişkenleri hâlâ kullanılabilir:
 
 ```powershell
 $env:OMNISPOT_GROQ_INTENT_API_KEY = "gsk_..."
 $env:OMNISPOT_GROQ_KEYWORD_API_KEY = "gsk_..."
+dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
 ```
-
-Anahtarları kaynak koda, `appsettings` dosyalarına, loglara veya Git geçmişine yazmayın. Yanlışlıkla paylaşılan anahtarları yalnız repodan silmek yeterli değildir; Groq tarafında iptal edip yenileyin.
 
 ## Fallback davranışı
 

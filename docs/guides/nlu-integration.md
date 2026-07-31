@@ -41,12 +41,13 @@ Bu senaryo standart arama için ağ bağımlılığı olmadığını kontrol ede
 
 ## Senaryo 2 — Groq destekli doğal dil arama
 
-Uygulamayı geçerli anahtarla başlatın:
+AI kısayolu daha önce hazırlanmadıysa bir kez yapılandırın:
 
 ```powershell
-$env:OMNISPOT_GROQ_API_KEY = "gsk_..."
-dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1
 ```
+
+OmniSpot'u Masaüstündeki `OmniSpot AI` kısayoluyla başlatın.
 
 1. Doğal Dil modunu açın.
 2. `workplace safety klasöründeki videoları göster` sorgusunu çalıştırın.
