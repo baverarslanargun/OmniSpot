@@ -123,7 +123,23 @@ public sealed class SearchApplicationService : ISearchApplicationService
             return null;
         }
 
-        return results[0].FullPath;
+        var best = results[0];
+        if (best.Score < 100)
+        {
+            return null;
+        }
+
+        if (results.Count > 1)
+        {
+            var runnerUp = results[1];
+            var requiredMargin = Math.Max(40, Math.Abs(runnerUp.Score) * 0.25);
+            if (best.Score - runnerUp.Score < requiredMargin)
+            {
+                return null;
+            }
+        }
+
+        return best.FullPath;
     }
 
     private static StructuredQuery CreateDefaultQuery(string query) =>
