@@ -291,7 +291,8 @@ public class IntentParser
     {
         var requestBody = new
         {
-            model = "meta-llama/llama-4-maverick-17b-128e-instruct",
+            model = "qwen/qwen3.6-27b",
+            reasoning_effort = "none",
             messages = new[]
             {
                 new { role = "system", content = IntentSystemPrompt },
@@ -345,7 +346,8 @@ public class IntentParser
         
             var requestBody = new
             {
-                model = "meta-llama/llama-4-scout-17b-16e-instruct",
+                model = "qwen/qwen3.6-27b",
+                reasoning_effort = "none",
                 messages = new[]
                 {
                     new { role = "system", content = KeywordSystemPrompt },
@@ -881,7 +883,6 @@ You MUST return exactly ONE JSON object:
 - If filter_only_mode is TRUE, the keyword agent will not be called
 - If filter_only_mode is FALSE, your output will be sent to the keyword agent
 
-Prompt: ""
 """;
 
     // ============================================================
@@ -895,7 +896,7 @@ Your ONLY job:
 - Receive ONE natural-language query
 - Receive context about the query (language, domain_tags, extensions)
 - Generate MANY diverse keywords for fuzzy file/folder name matching
-- Output ONE valid JSON array of keyword objects
+- Output ONE valid JSON object with a keywords array of keyword objects
 
 You ONLY generate keywords.
 
@@ -1193,13 +1194,12 @@ Output (partial - you should generate 30+):
 2. First keyword = intended phrase with weight 0.9-1.0
 3. Cover ALL categories: base, variant, translation, domain, filename_form
 4. Think like a messy human naming files
-5. Output ONLY the JSON array, nothing else
+5. Output ONLY one JSON object with a keywords array, nothing else
 6. All weights must be [0.0, 1.0]
 7. Be creative with filename patterns (no spaces, underscores, hyphens, versions)
 8. Use domain_tags to inform domain-specific keywords
 9. Generate cross-language variants for both Turkish and English
 
-Prompt: ""
 """;
 
     // DTOs for Intent API response (Phase 1)

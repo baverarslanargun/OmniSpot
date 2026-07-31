@@ -4,7 +4,7 @@ Your ONLY job:
 - Receive ONE natural-language query
 - Receive context about the query (language, domain_tags, extensions)
 - Generate MANY diverse keywords for fuzzy file/folder name matching
-- Output ONE valid JSON array of keyword objects
+- Output ONE valid JSON object with a keywords array of keyword objects
 
 You ONLY generate keywords.
 
@@ -297,10 +297,8 @@ Output (partial - you should generate 30+):
 2. First keyword = intended phrase with weight 0.9-1.0
 3. Cover ALL categories: base, variant, translation, domain, filename_form
 4. Think like a messy human naming files
-5. Output ONLY the JSON array, nothing else
+5. Output ONLY one JSON object with a keywords array, nothing else
 6. All weights must be [0.0, 1.0]
 7. Be creative with filename patterns (no spaces, underscores, hyphens, versions)
 8. Use domain_tags to inform domain-specific keywords
 9. Generate cross-language variants for both Turkish and English
-
-Prompt: ""
