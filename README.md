@@ -4,7 +4,7 @@
   <img src="assets/branding/omnispot.svg" alt="OmniSpot logosu" width="180">
 </p>
 
-Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile her yerden erişin!
+Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek noktadan erişin!
 
 ![OmniSpot](https://img.shields.io/badge/version-1.0.0-blue) ![.NET](https://img.shields.io/badge/.NET-8.0-purple) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
