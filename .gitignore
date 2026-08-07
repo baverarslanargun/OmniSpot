@@ -55,3 +55,9 @@ thumbcache/
 *.gguf
 *.onnx
 *.safetensors
+
+# Yerel kullanıcı ve agent çalışma dosyaları
+/AGENTS.md
+/docs/CRITICAL_FINDINGS.md
+/docs/WORKFLOW_GAPS.md
+/notes-local/
