@@ -69,7 +69,7 @@ public sealed class SearchConcurrencyTests
     }
 
     [Fact]
-    public void SearchObservesCancellationAfterTokenization()
+    public void SearchChecksCancellationAfterTokenizationBeforeEmptyResult()
     {
         var index = new InvertedIndex();
         index.Add(
@@ -82,7 +82,7 @@ public sealed class SearchConcurrencyTests
             new BasicScoringStrategy());
 
         Assert.Throws<OperationCanceledException>(() =>
-            engine.Search("document", cancellationToken: cancellation.Token));
+            engine.Search("", cancellationToken: cancellation.Token));
     }
 
     [Fact]
@@ -105,7 +105,7 @@ public sealed class SearchConcurrencyTests
             watcher.Stop();
 
             var standard = new SearchEngine(
-                manager.CreateSearchSnapshot,
+                manager.CreateSearchState,
                 new BasicTokenizer(),
                 new BasicScoringStrategy());
             var advanced = new AdvancedSearchEngine(

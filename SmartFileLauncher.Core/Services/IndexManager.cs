@@ -29,6 +29,7 @@ public class IndexManager : IDisposable
     private Dictionary<string, FileMetadata> _metadataMap;
     private FileSystemNode? _rootNode;
     private Dictionary<string, FileSystemNode> _pathToNode;
+    private SearchState _publishedSearchState = SearchState.Empty;
     private long _searchStateVersion;
     private long _cachedSearchSnapshotVersion = -1;
     private SearchSnapshot? _cachedSearchSnapshot;
@@ -80,6 +81,7 @@ public class IndexManager : IDisposable
     #region Properties
 
     public InvertedIndex InvertedIndex => _invertedIndex;
+    public SearchState CurrentSearchState => Volatile.Read(ref _publishedSearchState);
     public IReadOnlyDictionary<string, FileMetadata> MetadataMap {
         get {
             lock (_lock) {
@@ -160,6 +162,11 @@ public class IndexManager : IDisposable
 
         _activeRootPaths = paths;
 
+        lock (_lock)
+        {
+            PublishSearchStateFromCurrentIndex();
+        }
+
         SetupWatchers(paths);
 
         sw.Stop();
@@ -195,6 +202,10 @@ public class IndexManager : IDisposable
             await BootstrapScanAsync(normalizedRootPath, ct);
             var paths = new List<string> { normalizedRootPath };
             _activeRootPaths = paths;
+            lock (_lock)
+            {
+                PublishSearchStateFromCurrentIndex();
+            }
             SetupWatchers(paths);
             StartBackgroundReconciliation(paths);
         }
@@ -852,7 +863,11 @@ public class IndexManager : IDisposable
 
             if (changes > 0)
             {
-                InvalidateSearchSnapshot();
+                lock (_lock)
+                {
+                    PublishSearchStateFromCurrentIndex();
+                    InvalidateSearchSnapshot();
+                }
                 ReportProgress(
                     $"İndeks uzlaştırıldı: {changes} değişiklik.",
                     100,
@@ -881,8 +896,10 @@ public class IndexManager : IDisposable
         ReconciliationSnapshot snapshot,
         CancellationToken ct)
     {
-        lock (_lock)
+        try
         {
+            lock (_lock)
+            {
             var changes = 0;
             var cachedNodes = _pathToNode.Values
                 .Where(node => rootPaths.Any(root =>
@@ -978,8 +995,17 @@ public class IndexManager : IDisposable
 
                 changes += UpdatePersistedFile(existing, entry);
             }
-
-            return changes;
+                return changes;
+            }
+        }
+        catch
+        {
+            lock (_lock)
+            {
+                PublishSearchStateFromCurrentIndex();
+                InvalidateSearchSnapshot();
+            }
+            throw;
         }
     }
 
@@ -1450,12 +1476,15 @@ public class IndexManager : IDisposable
                         HandleModified(evt);
                         break;
                 }
+                PublishSearchStateForFileChange(evt);
                 InvalidateSearchSnapshot();
                 processed = true;
             }
             catch (Exception ex)
             {
                 error = $"Error handling {evt.ChangeType}: {ex.Message}";
+                PublishSearchStateFromCurrentIndex();
+                InvalidateSearchSnapshot();
             }
         }
 
@@ -1592,7 +1621,39 @@ public class IndexManager : IDisposable
         _metadataMap.Clear();
         _pathToNode.Clear();
         _rootNode = null;
+        Volatile.Write(ref _publishedSearchState, SearchState.Empty);
         InvalidateSearchSnapshot();
+    }
+
+    private void PublishSearchStateFromCurrentIndex()
+    {
+        Volatile.Write(
+            ref _publishedSearchState,
+            SearchState.Create(_pathToNode.Values, _tokenizer));
+    }
+
+    private void PublishSearchStateForFileChange(FileChangeEvent evt)
+    {
+        var currentState = CurrentSearchState;
+        var currentPath = NormalizeIndexedPath(evt.FullPath);
+
+        if (evt.ChangeType is FileChangeType.Deleted or FileChangeType.Renamed)
+        {
+            var removedPath = evt.ChangeType == FileChangeType.Renamed && evt.OldPath != null
+                ? NormalizeIndexedPath(evt.OldPath)
+                : currentPath;
+            currentState = currentState.WithoutPathAndDescendants(removedPath);
+        }
+
+        if (evt.ChangeType != FileChangeType.Deleted)
+        {
+            var currentNodes = _pathToNode.Values
+                .Where(node => IsSameOrDescendantPath(node.FullPath, currentPath))
+                .ToArray();
+            currentState = currentState.WithUpserts(currentNodes, _tokenizer);
+        }
+
+        Volatile.Write(ref _publishedSearchState, currentState);
     }
 
     private void InvalidateSearchSnapshot()
@@ -1784,6 +1845,14 @@ public class IndexManager : IDisposable
         }
     }
 
+    public SearchState CreateSearchState(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        return CurrentSearchState;
+    }
+
     public SearchSnapshot CreateSearchSnapshot(
         CancellationToken cancellationToken = default)
     {
@@ -1818,6 +1887,12 @@ public class IndexManager : IDisposable
             if (_metadataMap.TryGetValue(normalizedPath, out var meta))
             {
                 meta.OpenCount++;
+                if (_pathToNode.TryGetValue(normalizedPath, out var node))
+                {
+                    Volatile.Write(
+                        ref _publishedSearchState,
+                        CurrentSearchState.WithUpserts(new[] { node }, _tokenizer));
+                }
                 InvalidateSearchSnapshot();
             }
         }

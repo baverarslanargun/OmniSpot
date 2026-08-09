@@ -24,6 +24,8 @@ public interface IIndexLifecycleService : IDisposable
     IndexTokenMatches GetTokenMatches(
         string token,
         CancellationToken cancellationToken = default);
+    SearchState CreateSearchState(
+        CancellationToken cancellationToken = default);
     SearchSnapshot CreateSearchSnapshot(
         CancellationToken cancellationToken = default);
     IndexStats GetStats();

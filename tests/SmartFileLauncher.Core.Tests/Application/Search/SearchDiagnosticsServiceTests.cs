@@ -34,4 +34,26 @@ public sealed class SearchDiagnosticsServiceTests
         Assert.Equal(1, diagnostics[0].MatchCount);
         Assert.Equal(["rapor.txt"], diagnostics[0].SampleNames);
     }
+    [Fact]
+    public void Inspect_UsesOneImmutableSearchState()
+    {
+        var tokenizer = new BasicTokenizer();
+        var report = new FileSystemNode("rapor.txt", @"C:\files\rapor.txt", false);
+        var state = SearchState.Create([report], tokenizer);
+        var stateCalls = 0;
+        var service = new SearchDiagnosticsService(
+            tokenizer,
+            _ =>
+            {
+                stateCalls++;
+                return state;
+            });
+
+        var diagnostics = service.Inspect("Rapor missing");
+
+        Assert.Equal(1, stateCalls);
+        Assert.Equal(2, diagnostics.Count);
+        Assert.Equal(1, diagnostics[0].MatchCount);
+        Assert.Equal(0, diagnostics[1].MatchCount);
+    }
 }
