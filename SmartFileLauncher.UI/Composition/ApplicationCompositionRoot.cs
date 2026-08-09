@@ -55,7 +55,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             tokenizer,
             scoring);
         var advancedSearch = new AdvancedSearchEngine(
-            _indexLifecycle.CreateSearchSnapshot,
+            _indexLifecycle.CreateSearchState,
             tokenizer,
             scoring);
         var intentParser = new IntentParser(_log.Write);

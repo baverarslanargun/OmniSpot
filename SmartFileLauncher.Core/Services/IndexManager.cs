@@ -1629,7 +1629,9 @@ public class IndexManager : IDisposable
     {
         Volatile.Write(
             ref _publishedSearchState,
-            SearchState.Create(_pathToNode.Values, _tokenizer));
+            SearchState.Create(
+                _pathToNode.Values.Where(node => !ReferenceEquals(node, _rootNode)),
+                _tokenizer));
     }
 
     private void PublishSearchStateForFileChange(FileChangeEvent evt)
@@ -1648,7 +1650,8 @@ public class IndexManager : IDisposable
         if (evt.ChangeType != FileChangeType.Deleted)
         {
             var currentNodes = _pathToNode.Values
-                .Where(node => IsSameOrDescendantPath(node.FullPath, currentPath))
+                .Where(node => !ReferenceEquals(node, _rootNode) &&
+                               IsSameOrDescendantPath(node.FullPath, currentPath))
                 .ToArray();
             currentState = currentState.WithUpserts(currentNodes, _tokenizer);
         }

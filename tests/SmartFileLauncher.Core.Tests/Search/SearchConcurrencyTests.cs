@@ -109,7 +109,7 @@ public sealed class SearchConcurrencyTests
                 new BasicTokenizer(),
                 new BasicScoringStrategy());
             var advanced = new AdvancedSearchEngine(
-                manager.CreateSearchSnapshot,
+                manager.CreateSearchState,
                 new BasicTokenizer(),
                 new BasicScoringStrategy());
             var query = new StructuredQuery
