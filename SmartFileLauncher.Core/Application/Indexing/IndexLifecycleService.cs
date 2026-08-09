@@ -87,12 +87,17 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
-        var matches = _indexManager.CreateSearchSnapshot(cancellationToken)
-            .InvertedIndex
-            .Get(token);
+        var matches = _indexManager.CreateSearchState(cancellationToken).Get(token);
         return new IndexTokenMatches(
             matches.Count,
-            matches.Take(3).Select(node => node.Name).ToArray());
+            matches.Take(3).Select(item => item.Name).ToArray());
+    }
+
+    public SearchState CreateSearchState(
+        CancellationToken cancellationToken = default)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _indexManager.CreateSearchState(cancellationToken);
     }
 
     public SearchSnapshot CreateSearchSnapshot(

@@ -51,7 +51,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
 
         var scoring = new BasicScoringStrategy();
         var standardSearch = new SearchEngine(
-            _indexLifecycle.CreateSearchSnapshot,
+            _indexLifecycle.CreateSearchState,
             tokenizer,
             scoring);
         var advancedSearch = new AdvancedSearchEngine(
@@ -67,7 +67,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             intentParser.ParseIntent);
         _searchDiagnostics = new SearchDiagnosticsService(
             tokenizer,
-            _indexLifecycle.CreateSearchSnapshot);
+            _indexLifecycle.CreateSearchState);
         _thumbnails = new ThumbnailService(_log.Write);
         _folderNavigation = new FolderNavigationService(
             new FolderBrowserService(),

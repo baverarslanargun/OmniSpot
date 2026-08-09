@@ -80,6 +80,39 @@ public sealed class SearchBehaviorTests
     }
 
     [Fact]
+    public void StandardSearchUsesImmutableSearchState()
+    {
+        var tokenizer = new BasicTokenizer();
+        var exact = new FileSystemNode(
+            "budget-report.txt",
+            @"C:\Workspace\budget-report.txt",
+            false)
+        {
+            Metadata = new FileMetadata { OpenCount = 3 }
+        };
+        var partial = new FileSystemNode(
+            "budget-report-final.txt",
+            @"C:\Workspace\budget-report-final.txt",
+            false);
+        var state = SearchState.Create([exact, partial], tokenizer);
+        var providerCalls = 0;
+        var engine = new SearchEngine(
+            _ =>
+            {
+                providerCalls++;
+                return state;
+            },
+            tokenizer,
+            new BasicScoringStrategy());
+
+        exact.Metadata!.OpenCount = 500;
+        var result = Assert.Single(engine.Search("budget-report.txt", maxResults: 1));
+
+        Assert.Equal(1, providerCalls);
+        Assert.Equal(exact.FullPath, result.FullPath);
+        Assert.Equal(531, result.Score);
+    }
+    [Fact]
     public void AdvancedSearchAppliesFolderAndExtensionFiltersTogether()
     {
         var root = new FileSystemNode("User", @"C:\Users\person", true);
