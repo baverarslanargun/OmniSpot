@@ -6,17 +6,16 @@ namespace SmartFileLauncher.Core.Application.Search;
 public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
 {
     private readonly ITokenizer _tokenizer;
-    private readonly Func<string, CancellationToken, IndexTokenMatches>
-        _getTokenMatches;
+    private readonly Func<CancellationToken, SearchSnapshot> _snapshotProvider;
 
     public SearchDiagnosticsService(
         ITokenizer tokenizer,
-        Func<string, CancellationToken, IndexTokenMatches> getTokenMatches)
+        Func<CancellationToken, SearchSnapshot> snapshotProvider)
     {
         _tokenizer = tokenizer
             ?? throw new ArgumentNullException(nameof(tokenizer));
-        _getTokenMatches = getTokenMatches
-            ?? throw new ArgumentNullException(nameof(getTokenMatches));
+        _snapshotProvider = snapshotProvider
+            ?? throw new ArgumentNullException(nameof(snapshotProvider));
     }
 
     public IReadOnlyList<string> Tokenize(string query)
@@ -30,14 +29,15 @@ public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
         CancellationToken cancellationToken = default)
     {
         var diagnostics = new List<SearchTokenDiagnostics>();
+        var invertedIndex = _snapshotProvider(cancellationToken).InvertedIndex;
         foreach (var token in Tokenize(query))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var matches = _getTokenMatches(token, cancellationToken);
+            var matches = invertedIndex.Get(token);
             diagnostics.Add(new SearchTokenDiagnostics(
                 token,
                 matches.Count,
-                matches.SampleNames));
+                matches.Take(3).Select(node => node.Name).ToArray()));
         }
 
         return diagnostics;

@@ -29,6 +29,9 @@ public class IndexManager : IDisposable
     private Dictionary<string, FileMetadata> _metadataMap;
     private FileSystemNode? _rootNode;
     private Dictionary<string, FileSystemNode> _pathToNode;
+    private long _searchStateVersion;
+    private long _cachedSearchSnapshotVersion = -1;
+    private SearchSnapshot? _cachedSearchSnapshot;
     
     private volatile bool _disposed;
     private bool _isInitialized;
@@ -849,6 +852,7 @@ public class IndexManager : IDisposable
 
             if (changes > 0)
             {
+                InvalidateSearchSnapshot();
                 ReportProgress(
                     $"İndeks uzlaştırıldı: {changes} değişiklik.",
                     100,
@@ -1446,6 +1450,7 @@ public class IndexManager : IDisposable
                         HandleModified(evt);
                         break;
                 }
+                InvalidateSearchSnapshot();
                 processed = true;
             }
             catch (Exception ex)
@@ -1587,6 +1592,14 @@ public class IndexManager : IDisposable
         _metadataMap.Clear();
         _pathToNode.Clear();
         _rootNode = null;
+        InvalidateSearchSnapshot();
+    }
+
+    private void InvalidateSearchSnapshot()
+    {
+        _searchStateVersion++;
+        _cachedSearchSnapshot = null;
+        _cachedSearchSnapshotVersion = -1;
     }
 
     private void AddDirectoryTreeToIndex(
@@ -1778,11 +1791,20 @@ public class IndexManager : IDisposable
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             cancellationToken.ThrowIfCancellationRequested();
-            return SearchSnapshot.Create(
+            if (_cachedSearchSnapshot != null &&
+                _cachedSearchSnapshotVersion == _searchStateVersion)
+            {
+                return _cachedSearchSnapshot;
+            }
+
+            var snapshot = SearchSnapshot.Create(
                 _invertedIndex.CreateSnapshot(cancellationToken),
                 _pathToNode.Values,
                 _rootNode,
                 cancellationToken);
+            _cachedSearchSnapshot = snapshot;
+            _cachedSearchSnapshotVersion = _searchStateVersion;
+            return snapshot;
         }
     }
 
@@ -1796,6 +1818,7 @@ public class IndexManager : IDisposable
             if (_metadataMap.TryGetValue(normalizedPath, out var meta))
             {
                 meta.OpenCount++;
+                InvalidateSearchSnapshot();
             }
         }
     }

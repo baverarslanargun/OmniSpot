@@ -67,7 +67,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             intentParser.ParseIntent);
         _searchDiagnostics = new SearchDiagnosticsService(
             tokenizer,
-            _indexLifecycle.GetTokenMatches);
+            _indexLifecycle.CreateSearchSnapshot);
         _thumbnails = new ThumbnailService(_log.Write);
         _folderNavigation = new FolderNavigationService(
             new FolderBrowserService(),

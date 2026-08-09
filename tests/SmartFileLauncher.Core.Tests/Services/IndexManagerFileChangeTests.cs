@@ -219,4 +219,44 @@ public sealed class IndexManagerFileChangeTests
             manager.Dispose();
         }
     }
+    [Fact]
+    public async Task SearchSnapshot_IsCachedUntilSearchableStateChanges()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        var file = workspace.CreateFile(Path.Combine("root", "document.txt"));
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1);
+        var manager = new IndexManager(database, watcher);
+
+        try
+        {
+            await manager.InitializeAsync(root);
+            watcher.Stop();
+
+            var first = manager.CreateSearchSnapshot();
+            var second = manager.CreateSearchSnapshot();
+            Assert.Same(first, second);
+
+            manager.IncrementOpenCount(file);
+            var afterOpen = manager.CreateSearchSnapshot();
+            Assert.NotSame(first, afterOpen);
+
+            var addedFile = workspace.CreateFile(Path.Combine("root", "new-document.txt"));
+            manager.ApplyFileChange(new FileChangeEvent
+            {
+                ChangeType = FileChangeType.Created,
+                FullPath = addedFile,
+                IsDirectory = false
+            });
+            var afterCreate = manager.CreateSearchSnapshot();
+            Assert.NotSame(afterOpen, afterCreate);
+            Assert.Contains(afterCreate.InvertedIndex.Get("new"), node =>
+                string.Equals(node.FullPath, addedFile, StringComparison.OrdinalIgnoreCase));
+        }
+        finally
+        {
+            manager.Dispose();
+        }
+    }
 }
