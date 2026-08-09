@@ -113,6 +113,131 @@ public sealed class SearchBehaviorTests
         Assert.Equal(531, result.Score);
     }
     [Fact]
+    public void AdvancedSearchUsesOneImmutableStateForFolderExpansion()
+    {
+        var tokenizer = new BasicTokenizer();
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var archive = new FileSystemNode("Archive", @"C:\Root\Archive", true);
+        var report = new FileSystemNode("report.pdf", @"C:\Root\Archive\report.pdf", false)
+        {
+            Metadata = new FileMetadata { OpenCount = 4 }
+        };
+        root.AddChild(archive);
+        archive.AddChild(report);
+
+        var state = SearchState.Create([archive, report], tokenizer);
+        var providerCalls = 0;
+        var engine = new AdvancedSearchEngine(
+            _ =>
+            {
+                providerCalls++;
+                return state;
+            },
+            tokenizer,
+            new BasicScoringStrategy());
+
+        report.Metadata!.OpenCount = 500;
+        var query = new StructuredQuery
+        {
+            Keywords = ["archive"],
+            IncludeFolderContents = true,
+            PredictedExtensions = ["pdf"]
+        };
+
+        var result = Assert.Single(engine.Search(query));
+
+        Assert.Equal(1, providerCalls);
+        Assert.Equal(report.FullPath, result.FullPath);
+        Assert.Equal(168, result.Score);
+    }
+
+    [Fact]
+    public void AdvancedSearchUsesImmutableStateForPartialAndFuzzyMatches()
+    {
+        var tokenizer = new BasicTokenizer();
+        var part = new FileSystemNode("FR612-report.txt", @"C:\Root\FR612-report.txt", false);
+        var fuzzy = new FileSystemNode("budget.txt", @"C:\Root\budget.txt", false);
+        var state = SearchState.Create([part, fuzzy], tokenizer);
+        var engine = new AdvancedSearchEngine(
+            _ => state,
+            tokenizer,
+            new BasicScoringStrategy());
+
+        var partialResult = Assert.Single(engine.Search(new StructuredQuery
+        {
+            Keywords = ["612"]
+        }));
+        var fuzzyResult = Assert.Single(engine.Search(new StructuredQuery
+        {
+            Keywords = ["budjet"]
+        }));
+
+        Assert.Equal(part.FullPath, partialResult.FullPath);
+        Assert.Equal(fuzzy.FullPath, fuzzyResult.FullPath);
+    }
+
+    [Fact]
+    public void AdvancedSearchLegacyConstructorPreservesCustomIndexTokens()
+    {
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var report = new FileSystemNode("report.txt", @"C:\Root\report.txt", false);
+        root.AddChild(report);
+        var index = new InvertedIndex();
+        index.Add("special-token", report);
+        var engine = new AdvancedSearchEngine(
+            index,
+            new BasicTokenizer(),
+            new BasicScoringStrategy(),
+            root);
+
+        var result = Assert.Single(engine.Search(new StructuredQuery
+        {
+            Keywords = ["special-token"]
+        }));
+
+        Assert.Equal(report.FullPath, result.FullPath);
+    }
+
+    [Fact]
+    public void SearchStateRemovesDescendantsWhenDirectoryBecomesFile()
+    {
+        var tokenizer = new BasicTokenizer();
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var directory = new FileSystemNode("report", @"C:\Root\report", true);
+        var child = new FileSystemNode("old.txt", @"C:\Root\report\old.txt", false);
+        root.AddChild(directory);
+        directory.AddChild(child);
+        var replacement = new FileSystemNode("report", @"C:\Root\report", false);
+        root.AddChild(replacement);
+
+        var state = SearchState.Create([directory, child], tokenizer)
+            .WithUpserts([replacement], tokenizer);
+
+        Assert.Empty(state.Get("old"));
+        Assert.Empty(state.GetDescendants(Assert.Single(state.Get("report"))));
+    }
+
+    [Fact]
+    public void AdvancedSearchStopsWhenCancellationOccursBeforeFilterOnlyEnumeration()
+    {
+        var tokenizer = new BasicTokenizer();
+        var node = new FileSystemNode("report.txt", @"C:\Root\report.txt", false);
+        var state = SearchState.Create([node], tokenizer);
+        using var cancellation = new CancellationTokenSource();
+        var engine = new AdvancedSearchEngine(
+            _ =>
+            {
+                cancellation.Cancel();
+                return state;
+            },
+            tokenizer,
+            new BasicScoringStrategy());
+
+        Assert.Throws<OperationCanceledException>(() => engine.Search(
+            new StructuredQuery { FilterOnlyMode = true },
+            cancellationToken: cancellation.Token));
+    }
+    [Fact]
     public void AdvancedSearchAppliesFolderAndExtensionFiltersTogether()
     {
         var root = new FileSystemNode("User", @"C:\Users\person", true);
