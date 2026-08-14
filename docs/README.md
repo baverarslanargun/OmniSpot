@@ -17,6 +17,7 @@ OmniSpot belgeleri konuya göre aşağıdaki klasörlerde düzenlenir.
 ## Performans
 
 - [Büyük klasör optimizasyonu](performance/large-folder-optimization.md)
+- [Tekrarlanabilir benchmark sözleşmesi](performance/benchmark-contract.md)
 
 ## Referans dosyaları
 
