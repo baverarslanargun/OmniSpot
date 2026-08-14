@@ -2,7 +2,7 @@
 
 ## Güncel durum
 
-OmniSpot'un aktif doğal dil akışı yerel Phi-3, ONNX veya LLamaSharp modeli kullanmaz. Doğal Dil modu iki Groq API isteğini paralel çalıştırır ve sonuçları `StructuredQuery` nesnesine dönüştürür. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
+OmniSpot'un aktif doğal dil akışı yerel Phi-3, ONNX veya LLamaSharp modeli kullanmaz. İnternet bağlantısı görülen Doğal Dil modu iki Groq API isteğini paralel çalıştırır ve sonuçları `StructuredQuery` nesnesine dönüştürür. Retriable 429/5xx için her çağrı en fazla bir kez yinelenebildiğinden normalde iki, en kötü durumda dört POST oluşabilir. İnternet yoksa arama standard/local yola düşer. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
 
 Standart arama Groq kullanmaz ve yerel indeks üzerinde çalışır.
 
@@ -22,7 +22,7 @@ Aktif endpoint ve modeller:
 | Intent analizi | `openai/gpt-oss-120b` (`reasoning_effort=medium`) |
 | Keyword üretimi | `qwen/qwen3.6-27b` |
 
-İki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve 30 saniyelik timeout sınırına sahiptir. Intent çağrısı `medium`, keyword çağrısı `none` reasoning profiliyle çalışır.
+İki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve her biri 30 saniyelik linked-timeout sınırına sahiptir. Intent çağrısı `medium`, keyword çağrısı `none` reasoning profiliyle çalışır. Varsayılan profilde araç yoktur; yalnız açıkça `groq/compound` seçilen alternatif profilde `code_interpreter` payload'ı ve `Groq-Model-Version: latest` header'ı eklenebilir.
 
 ## API anahtarı
 
@@ -73,9 +73,11 @@ Fallback kullanıldığında UI uyarı gösterir ve neden `StructuredQuery.Fallb
 
 ## Gizlilik ve ağ davranışı
 
-Doğal Dil modu geçerli intent yapılandırmasıyla çalıştırıldığında sorgu metni intent ve keyword analizi için Groq endpoint'ine gönderilir. Intent anahtarı eksikse güncel uygulama ağ isteği yapmadan fallback'e geçer. Ağ üzerinden sorgu göndermek istemiyorsanız standart arama modunu kullanın.
+Doğal Dil modu geçerli intent yapılandırması ve internet bağlantısıyla çalıştırıldığında sorgu metni intent ve keyword analizi için Groq endpoint'ine gönderilir. Intent payload'ı sorguya ek olarak gün ve saat dilimini; keyword payload'ı sorguyu taşır. Intent anahtarı eksikse güncel uygulama ağ isteği yapmadan fallback'e geçer. Ağ üzerinden sorgu göndermek istemiyorsanız standart arama modunu kullanın.
 
-OmniSpot dosya içeriklerini Groq'a göndermez; doğal dil akışında gönderilen veri arama sorgusu ve kodda tanımlı sistem istemleridir.
+OmniSpot bu çağrı zincirinde indekslenmiş dosya adlarını, path'leri, içerikleri, snippet'leri veya sonucu Groq'a göndermez; dinamik veri sorgu (intent isteğinde ayrıca gün/saat dilimi) ve kodda tanımlı sistem istemleridir.
+
+Bu, provider'ın kendi retention/processing politikasını değerlendirme gereğini ortadan kaldırmaz; yalnız güncel uygulama payload sınırını tanımlar.
 
 ## Sorun giderme
 

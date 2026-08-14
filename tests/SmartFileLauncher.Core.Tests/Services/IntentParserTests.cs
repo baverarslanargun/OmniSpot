@@ -538,9 +538,10 @@ public sealed class IntentParserTests
 
         using var request = JsonDocument.Parse(Assert.Single(keywordHandler.RequestBodies));
         var prompt = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
-        Assert.Contains("primary", prompt);
-        Assert.Contains("bilet", prompt);
-        Assert.Contains("Use zero only when metadata filters fully satisfy", prompt);
+        Assert.Contains("Only anchor terms can admit candidates", prompt);
+        Assert.Contains("Input: uçak bileti", prompt);
+        Assert.Contains("Input: club rom", prompt);
+        Assert.Contains("Input: geçen hafta değiştirilmiş PDF dosyaları", prompt);
     }
 
     [Fact]
