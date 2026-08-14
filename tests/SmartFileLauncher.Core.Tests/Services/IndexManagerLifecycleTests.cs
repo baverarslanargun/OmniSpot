@@ -61,6 +61,37 @@ public sealed class IndexManagerLifecycleTests
     }
 
     [Fact]
+    public async Task InitializeAsync_ReportsIndeterminateSearchPreparation()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        workspace.CreateFile(Path.Combine("root", "document.txt"));
+        using var preparationReported = new ManualResetEventSlim();
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1);
+        var manager = new IndexManager(database, watcher);
+
+        manager.OnProgress += progress =>
+        {
+            if (progress.Status == "Arama hazırlanıyor..." && progress.IsIndeterminate)
+            {
+                preparationReported.Set();
+            }
+        };
+
+        try
+        {
+            await manager.InitializeAsync(root);
+
+            Assert.True(preparationReported.Wait(TimeSpan.FromSeconds(3)));
+        }
+        finally
+        {
+            manager.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task InitializeTwiceFromTheSameCache_ReplacesRatherThanDuplicatesMemoryState()
     {
         using var workspace = new TemporaryDirectory();

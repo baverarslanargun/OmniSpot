@@ -52,6 +52,8 @@ public class IndexManager : IDisposable
     
     public event Action<int, int, int>? OnDeltaSyncProgress;
 
+    public event Action<bool>? OnDeltaSyncStateChanged;
+
     public IndexManager(ITokenizer? tokenizer = null)
         : this(new IndexDatabase(), new FileWatcherService(), tokenizer)
     {
@@ -160,13 +162,22 @@ public class IndexManager : IDisposable
             await BootstrapScanMultiAsync(paths, ct);
         }
 
-        _activeRootPaths = paths;
-
-        lock (_lock)
+        ReportProgress(
+            "Arama hazırlanıyor...",
+            0,
+            _invertedIndex.NodeCount,
+            sw.ElapsedMilliseconds,
+            isIndeterminate: true);
+        await Task.Run(() =>
         {
-            PublishSearchStateFromCurrentIndex();
-        }
+            ct.ThrowIfCancellationRequested();
+            lock (_lock)
+            {
+                PublishSearchStateFromCurrentIndex();
+            }
+        }, ct).ConfigureAwait(false);
 
+        _activeRootPaths = paths;
         SetupWatchers(paths);
 
         sw.Stop();
@@ -841,6 +852,7 @@ public class IndexManager : IDisposable
             _deltaSyncProgress = 0;
             _deltaSyncProcessed = 0;
             _deltaSyncTotal = 0;
+            NotifyDeltaSyncStateChanged(isRunning: true);
 
             var snapshot = await Task.Run(
                     () => CaptureDiskSnapshot(normalizedRoots, ct),
@@ -887,6 +899,7 @@ public class IndexManager : IDisposable
         finally
         {
             _isDeltaSyncRunning = false;
+            NotifyDeltaSyncStateChanged(isRunning: false);
             _reconciliationGate.Release();
         }
     }
@@ -1822,14 +1835,20 @@ public class IndexManager : IDisposable
 
     #region Progress Reporting
 
-    private void ReportProgress(string status, int percentage, int itemCount, long elapsedMs)
+    private void ReportProgress(
+        string status,
+        int percentage,
+        int itemCount,
+        long elapsedMs,
+        bool isIndeterminate = false)
     {
         var progress = new IndexProgress
         {
             Status = status,
             Percentage = percentage,
             ItemCount = itemCount,
-            ElapsedMs = elapsedMs
+            ElapsedMs = elapsedMs,
+            IsIndeterminate = isIndeterminate
         };
         QueueNotification(() => OnProgress?.Invoke(progress));
     }
@@ -2000,6 +2019,11 @@ public class IndexManager : IDisposable
         QueueNotification(() => OnDeltaSyncProgress?.Invoke(processed, total, percentage));
     }
 
+    private void NotifyDeltaSyncStateChanged(bool isRunning)
+    {
+        QueueNotification(() => OnDeltaSyncStateChanged?.Invoke(isRunning));
+    }
+
     private void NotifyError(string message)
     {
         QueueNotification(() => OnError?.Invoke(message));
@@ -2033,6 +2057,7 @@ public class IndexProgress
     public int Percentage { get; set; }
     public int ItemCount { get; set; }
     public long ElapsedMs { get; set; }
+    public bool IsIndeterminate { get; set; }
 }
 
 public class IndexStats

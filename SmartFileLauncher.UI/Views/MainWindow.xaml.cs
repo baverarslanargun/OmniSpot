@@ -146,6 +146,7 @@ public partial class MainWindow : Window {
         _indexLifecycle.Error += HandleIndexError;
         _indexLifecycle.FileChanged += HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged += HandleReconciliationProgress;
+        _indexLifecycle.ReconciliationStateChanged += HandleReconciliationStateChanged;
         _shellService.ToggleRequested += HandleShellToggleRequested;
         _shellService.ShowRequested += HandleShellShowRequested;
         _shellService.SettingsRequested += HandleShellSettingsRequested;
@@ -334,6 +335,7 @@ public partial class MainWindow : Window {
         _indexLifecycle.Error -= HandleIndexError;
         _indexLifecycle.FileChanged -= HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged -= HandleReconciliationProgress;
+        _indexLifecycle.ReconciliationStateChanged -= HandleReconciliationStateChanged;
         _connectivityMonitor.ConnectivityChanged -= HandleConnectivityChanged;
         _shellService.ToggleRequested -= HandleShellToggleRequested;
         _shellService.ShowRequested -= HandleShellShowRequested;
@@ -427,8 +429,13 @@ public partial class MainWindow : Window {
 
         Dispatcher.BeginInvoke(new Action(() => {
             LoadingStatus.Text = progress.Status;
-            if (progress.Percentage > 0 && progress.Percentage < 100) {
-                LoadingProgress.IsIndeterminate = false;
+            if (progress.IsIndeterminate) {
+                LoadingProgress.IsIndeterminate = true;
+                return;
+            }
+
+            LoadingProgress.IsIndeterminate = false;
+            if (progress.Percentage >= 0 && progress.Percentage <= 100) {
                 LoadingProgress.Value = progress.Percentage;
             }
         }));
@@ -446,6 +453,12 @@ public partial class MainWindow : Window {
 
         Dispatcher.BeginInvoke(new Action(() =>
             UpdateDeltaSyncProgress(processed, total, percentage)));
+    }
+
+    private void HandleReconciliationStateChanged(bool isRunning) {
+        if (_isPreparedForShutdown) return;
+
+        Dispatcher.BeginInvoke(new Action(() => UpdateDeltaSyncState(isRunning)));
     }
     
     private void ToggleConsole() {
@@ -1128,6 +1141,7 @@ public partial class MainWindow : Window {
     /// Delta sync progress'i günceller
     /// </summary>
     private void UpdateDeltaSyncProgress(int processed, int total, int percentage) {
+        DeltaSyncProgressBar.IsIndeterminate = false;
         DeltaSyncProgressBar.Value = percentage;
         DeltaSyncDetails.Text = $" - %{percentage}";
         DeltaSyncMinimizedText.Text = $"%{percentage}";
@@ -1138,6 +1152,22 @@ public partial class MainWindow : Window {
             DeltaSyncMinimized.Visibility = Visibility.Collapsed;
             Log("✅ Delta sync tamamlandı");
         }
+    }
+
+    private void UpdateDeltaSyncState(bool isRunning) {
+        if (!isRunning) {
+            DeltaSyncProgressBar.IsIndeterminate = false;
+            DeltaSyncPanel.Visibility = Visibility.Collapsed;
+            DeltaSyncMinimized.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        DeltaSyncText.Text = "Değişiklikler kontrol ediliyor";
+        DeltaSyncDetails.Text = string.Empty;
+        DeltaSyncProgressBar.IsIndeterminate = true;
+        DeltaSyncMinimizedText.Text = "Kontrol ediliyor";
+        DeltaSyncPanel.Visibility = Visibility.Visible;
+        DeltaSyncMinimized.Visibility = Visibility.Collapsed;
     }
     
     /// <summary>

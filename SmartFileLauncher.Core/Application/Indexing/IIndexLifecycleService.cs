@@ -10,6 +10,7 @@ public interface IIndexLifecycleService : IDisposable
     event Action<FileChangeEvent>? FileChanged;
     event Action<string>? Error;
     event Action<int, int, int>? ReconciliationProgressChanged;
+    event Action<bool>? ReconciliationStateChanged;
 
     bool IsInitialized { get; }
     string DatabasePath { get; }
