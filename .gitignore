@@ -58,6 +58,9 @@ thumbcache/
 
 # Yerel kullanıcı ve agent çalışma dosyaları
 /AGENTS.md
+/.agents/
+/.claude/
+/.codex/
 /docs/CRITICAL_FINDINGS.md
 /docs/WORKFLOW_GAPS.md
 /notes-local/
