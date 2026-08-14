@@ -1575,7 +1575,7 @@
                                            Foreground="#1D1D1F" 
                                            FontWeight="Medium"/>
                                 <TextBlock x:Name="DeltaSyncDetails" 
-                                           Text=" - 0%" 
+                                           Text=""
                                            FontSize="12" 
                                            Foreground="#86868B"/>
                             </StackPanel>
@@ -1586,6 +1586,7 @@
                                          Minimum="0"
                                          Maximum="100"
                                          Value="0"
+                                         IsIndeterminate="True"
                                          Foreground="#007AFF" 
                                          Background="#E5E5E7" 
                                          Margin="0,8,0,0"
@@ -1639,7 +1640,7 @@
                                    VerticalAlignment="Center"
                                    Margin="0,0,8,0"/>
                         <TextBlock x:Name="DeltaSyncMinimizedText" 
-                                   Text="47%" 
+                                   Text="Kontrol ediliyor"
                                    FontSize="12" 
                                    Foreground="#007AFF" 
                                    FontWeight="SemiBold"

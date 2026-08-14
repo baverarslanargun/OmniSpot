@@ -8,6 +8,52 @@ namespace SmartFileLauncher.Core.Tests.Services;
 public sealed class IndexManagerReconciliationTests
 {
     [Fact]
+    public async Task BackgroundReconciliation_ReportsRunningAndCompletedStates()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        workspace.CreateFile(Path.Combine("root", "document.txt"));
+        using var reconciliationCompleted = new ManualResetEventSlim();
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1);
+        var manager = new IndexManager(database, watcher);
+        var stateLock = new object();
+        var states = new List<bool>();
+
+        manager.OnDeltaSyncStateChanged += isRunning =>
+        {
+            lock (stateLock)
+            {
+                states.Add(isRunning);
+            }
+
+            if (!isRunning)
+            {
+                reconciliationCompleted.Set();
+            }
+        };
+
+        try
+        {
+            await manager.InitializeAsync(root);
+
+            Assert.True(reconciliationCompleted.Wait(TimeSpan.FromSeconds(3)));
+            bool[] observedStates;
+            lock (stateLock)
+            {
+                observedStates = states.ToArray();
+            }
+
+            Assert.True(observedStates[0]);
+            Assert.False(observedStates[^1]);
+        }
+        finally
+        {
+            manager.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task CacheReload_ReconcilesRecursiveCreateDeleteAndRename()
     {
         using var workspace = new TemporaryDirectory();

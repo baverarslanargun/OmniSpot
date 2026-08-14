@@ -43,6 +43,12 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         remove => _indexManager.OnDeltaSyncProgress -= value;
     }
 
+    public event Action<bool>? ReconciliationStateChanged
+    {
+        add => _indexManager.OnDeltaSyncStateChanged += value;
+        remove => _indexManager.OnDeltaSyncStateChanged -= value;
+    }
+
     public bool IsInitialized => _indexManager.IsInitialized;
     public string DatabasePath => _indexManager.DatabasePath;
     public IndexReconciliationStatus ReconciliationStatus =>
