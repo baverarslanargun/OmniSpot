@@ -15,7 +15,8 @@ internal sealed class FileSystemProfileScanner
 
     private readonly ITokenizer _tokenizer;
     private readonly Func<DateTimeOffset> _utcNow;
-    private readonly Func<IReadOnlyList<ProfileRootRequest>, ProfileEnvironment> _captureEnvironment;
+    private readonly Func<IReadOnlyList<ProfileRootRequest>, ProfileEnvironmentCapture>
+        _beginEnvironmentCapture;
 
     internal FileSystemProfileScanner(
         ITokenizer tokenizer,
@@ -24,7 +25,9 @@ internal sealed class FileSystemProfileScanner
     {
         _tokenizer = tokenizer ?? throw new ArgumentNullException(nameof(tokenizer));
         _utcNow = utcNow ?? (() => DateTimeOffset.UtcNow);
-        _captureEnvironment = captureEnvironment ?? ProfileEnvironmentProbe.Capture;
+        _beginEnvironmentCapture = captureEnvironment is null
+            ? ProfileEnvironmentProbe.BeginCapture
+            : roots => ProfileEnvironmentCapture.FromCompleted(captureEnvironment(roots));
     }
 
     internal ProfileDocument Scan(
@@ -37,6 +40,7 @@ internal sealed class FileSystemProfileScanner
             throw new ArgumentException("At least one profile root is required.", nameof(roots));
         }
 
+        var environmentCapture = _beginEnvironmentCapture(roots);
         var started = _utcNow();
         var stopwatch = Stopwatch.StartNew();
         var accumulator = new ProfileAccumulator(_tokenizer);
@@ -56,15 +60,15 @@ internal sealed class FileSystemProfileScanner
         var metrics = accumulator.CreateMetrics();
         return new ProfileDocument(
             SchemaMajor: 2,
-            SchemaMinor: 0,
-            ProfilerVersion: "0.3.1",
+            SchemaMinor: 1,
+            ProfilerVersion: "0.4.0",
             MetricsFingerprint: ProfileJson.ComputeMetricsFingerprint(metrics),
             Manifest: new ProfileManifest(
                 started.ToUnixTimeSeconds(),
                 completed.ToUnixTimeSeconds(),
                 stopwatch.ElapsedMilliseconds,
                 rootMetrics.Select(metric => metric.ToImmutable()).ToArray(),
-                _captureEnvironment(roots)),
+                environmentCapture.Complete()),
             Metrics: metrics);
     }
 

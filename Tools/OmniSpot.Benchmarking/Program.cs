@@ -1,3 +1,3 @@
-using OmniSpot.Benchmarking.Profiling;
+using OmniSpot.Benchmarking;
 
-return await ProfileCommand.CreateRootCommand().Parse(args).InvokeAsync();
+return await BenchmarkRootCommand.Create().Parse(args).InvokeAsync();

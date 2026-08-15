@@ -16,6 +16,7 @@ internal static class ProfileSummaryFormatter
         AppendLine(builder, $"Şema: {document.SchemaMajor}.{document.SchemaMinor} | profiler: {document.ProfilerVersion}");
         AppendLine(builder, $"Metrics SHA-256: {document.MetricsFingerprint}");
         AppendLine(builder, $"Süre: {document.Manifest.DurationMilliseconds} ms");
+        AppendFrequencySummary(builder, document.Manifest.Environment);
         AppendLine(builder, $"Kök sayısı: {document.Manifest.Roots.Count}");
 
         foreach (var root in document.Manifest.Roots.Take(20))
@@ -56,6 +57,35 @@ internal static class ProfileSummaryFormatter
 
         return summary;
     }
+
+    private static void AppendFrequencySummary(
+        StringBuilder builder,
+        ProfileEnvironment environment)
+    {
+        AppendLine(
+            builder,
+            "CPU frekansı: " +
+            $"AC={Value(environment.ProcessorThrottleMaxAcStartPercent)}→" +
+            $"{Value(environment.ProcessorThrottleMaxAcEndPercent)}%, " +
+            $"DC={Value(environment.ProcessorThrottleMaxDcStartPercent)}→" +
+            $"{Value(environment.ProcessorThrottleMaxDcEndPercent)}%, " +
+            $"base={Value(environment.ProcessorNominalBaseMhz)} MHz, " +
+            $"yük={Value(environment.ProcessorFrequencyStartMhz)}→" +
+            $"{Value(environment.ProcessorFrequencyEndMhz)} MHz, " +
+            $"kayma={Ratio(environment.ProcessorFrequencyDriftPercent)}");
+        if (environment.Labels.Count > 0)
+        {
+            AppendLine(builder, "Ortam etiketleri: " + string.Join(", ", environment.Labels));
+        }
+    }
+
+    private static string Value(int? value) =>
+        value?.ToString(CultureInfo.InvariantCulture) ?? "ölçülmedi";
+
+    private static string Ratio(double? value) =>
+        value is double ratio
+            ? "%" + ratio.ToString("0.00", CultureInfo.InvariantCulture)
+            : "ölçülmedi";
 
     private static string RootLabel(ProfileRootMetric root) =>
         root.Kind == ProfileRootKind.Custom

@@ -6,9 +6,8 @@ namespace OmniSpot.Benchmarking.Profiling;
 
 internal static class ProfileCommand
 {
-    internal static RootCommand CreateRootCommand()
+    internal static Command CreateCommand()
     {
-        var rootCommand = new RootCommand("OmniSpot yerel benchmark yardımcı araçları.");
         var profileCommand = new Command(
             "profile",
             "Dosya içeriğini açmadan anonim B-1 profilini üretir.");
@@ -54,8 +53,7 @@ internal static class ProfileCommand
                 parseResult.GetValue(printOption),
                 parseResult.GetValue(showPathsOption),
                 cancellationToken));
-        rootCommand.Subcommands.Add(profileCommand);
-        return rootCommand;
+        return profileCommand;
     }
 
     private static async Task<int> RunAsync(

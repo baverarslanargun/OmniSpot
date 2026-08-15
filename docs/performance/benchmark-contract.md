@@ -78,9 +78,10 @@ güncel source ve yakın testlerden doğrulanmıştır.
 - Sentetik corpus çalışma alanı: OmniSpot'un indekslediği köklerin dışında,
   kullanıcı tarafından seçilen geçici dizin.
 
-İlk uygulama tek executable ve alt komutlardan oluşur: `profile`, `micro`,
-`corpus`, `run` ve `verify`. Gerçek bir izolasyon sorunu ölçülmeden
-ikinci proje açılmaz.
+İlk uygulama tek executable ve alt komutlardan oluşur: `profile`, `pilot`,
+`measure`, `compare`, `phases`, `corpus`, `run` ve `verify`. Mikro ölçüm
+`measure` komutunun içindedir; gerçek bir izolasyon sorunu ölçülmeden ikinci
+proje açılmaz.
 
 ## 4. Gerçek ağaç profili gizlilik sözleşmesi
 
@@ -139,7 +140,8 @@ Dağılımlar sabit kovalı histogramlarla birlikte `p50`, `p90`, `p95`,
 birlikte sabitlenir. Dosya ve klasör sonuçları anlamlı olduğu her yerde ayrı
 raporlanır.
 
-Şema `2.0` ve profiler `0.3.1` yüzdelikleri nearest-rank yöntemiyle hesaplar:
+Şema `2.0`/`2.1` ve profiler `0.3.1`/`0.4.0` yüzdelikleri nearest-rank
+yöntemiyle hesaplar:
 `rank = ceil(p * count)` ve sıralı örnekte 1 tabanlı `rank` değerindeki öğe
 seçilir. Dosya boyutunda `0` ayrı kovadır; pozitif bir byte değeri
 `floor(log2(bytes))` üslü `2^n` kovasına girer. Oran alanları JSON'da `0..1`
@@ -261,6 +263,10 @@ Manifest kullanıcı verisi taşımadan şunları kaydeder:
 - OS build, .NET SDK/runtime, process architecture;
 - CPU, mantıksal çekirdek, RAM ve taranan kök volume'lerinin disk türü;
 - GC modu, power plan, Defender realtime ve Windows Search durumu;
+- CPU nominal taban MHz'i, koşum başı/sonu yük altı gerçek MHz'i ve AC/DC
+  `PROCTHROTTLEMAX` başlangıç/bitiş yüzdeleri;
+- anlamlı koşum içi frekans veya frekans politikası kaymasında
+  `frekans-kaymasi` etiketi;
 - çalışan OmniSpot örneği var/yok;
 - repo HEAD ve tracked/untracked Git status girişlerini kapsayan yalnız dirty
   boolean/count; dirty dosya adları yazılmaz.
@@ -272,16 +278,17 @@ type, komut yokluğu, izin hatası veya timeout durumunda `disk_kind=null` olur.
 Defender cmdlet'i realtime durumunu güvenle döndüremezse
 `defender_realtime_enabled=null` olur. Bu alanlarda `null`, “kapalı” değil
 “ölçülemedi” demektir; boolean `false` yalnız başarılı probe sonucudur.
-`duration_milliseconds` yalnız ağaç taramasını ölçer; sonrasında alınan ortam
-manifestinin yaklaşık maliyetini içermez.
+`duration_milliseconds` yalnız ağaç taramasını ölçer; taramayı çevreleyen ortam
+ve yük altı frekans problarının yaklaşık maliyetini içermez.
 
 Ağaç değişmediğinde iki koşumun deterministik kabulü, volatile manifest
-alanları (zaman ve süre) kapsam dışındayken canonical `metrics` byte'larının
-birebir eşitliğidir. Parmak izleri yalnız schema major/minor ve profiler sürümü
-birlikte birebir eşleştiğinde karşılaştırılır. Karşılaştırma için ad/path hash'i
-üretilmez.
+alanları (zaman, süre ve frekans ölçümleri) kapsam dışındayken canonical
+`metrics` byte'larının birebir eşitliğidir. Parmak izleri aynı canonical metrics
+sözleşmesini kullanan şema/profiler çiftlerinde karşılaştırılır. Yalnız manifest
+alanı ekleyen ve bu belgede açıkça uyumlu ilan edilen minor geçiş bunun
+istisnasıdır. Karşılaştırma için ad/path hash'i üretilmez.
 
-Şema `2.0`, bu eşitliği tek bakışta denetlemek için `metrics_fingerprint`
+Şema `2.0` ve `2.1`, bu eşitliği tek bakışta denetlemek için `metrics_fingerprint`
 alanını `ProfileDocument` kökünde taşır; alan `metrics` içine girmez ve manifest
 veya kök sayımlarını kapsamaz. Canonical girdi, yalnız `metrics` nesnesinin
 `ProfileJson.SerializeCanonicalMetrics(metrics)` sonucu olan sıkıştırılmış UTF-8
@@ -290,7 +297,10 @@ ve son satır sonu içermez. Property ve enum yazımı `snake_case_lower` olarak
 sabittir.
 Parmak izi SHA-256 ve 64 karakter lowercase hex biçimindedir. Bu byte'ları
 değiştiren serializer ayarı veya metrics sözleşmesi değişikliği şema sürümünü
-değiştirmeden yapılamaz; farklı şema veya profiler sürümlerinin parmak izleri
+değiştirmeden yapılamaz. Şema `2.0` / profiler `0.3.1` ile şema `2.1` /
+profiler `0.4.0` arasındaki tek fark manifest frekans alanlarıdır; canonical
+`metrics` sözleşmesi değişmediği için bu iki çiftin parmak izleri
+karşılaştırılabilir. Başka sürüm çiftleri açık uyumluluk kaydı olmadan
 karşılaştırılmaz.
 
 Şema `0.2` çıktıları ile schema `1.0` / profiler `0.3.0` tek-A çıktısı teslim
@@ -329,6 +339,14 @@ kararını besler. B-5 yalnız production akışındaki lock, state yayını ve
 tokenizasyon gibi alt span'leri birbirinden ayırmak; public ölçüm ile in-situ
 ölçüm arasındaki ek maliyeti açıklamak için gerekir.
 
+`publish.tokenize` ve `SearchState.Create`'in diğer fazları, B-5 beklemeden
+`phases` komutuyla **instrumented profiler lane'inde** ölçülür (protokol
+"Deney düzeni": instrumented profiler run ile düşük-overhead timing run
+ayrılır). Bu lane in-situ span üretmez: aynı fixture üzerinde kümülatif
+replika koşumlarının farkını raporlar ve replikanın üretimi birebir
+yansıttığı, `SearchState.Create` çıktısına karşı doğruluk kapısıyla
+doğrulanır. Bu lane süre regresyon kararı vermez; çıktısı faz payıdır.
+
 ## 8. Ölçüm rejimi
 
 ### 8.1 Dondurulan kurallar
@@ -343,15 +361,28 @@ tokenizasyon gibi alt span'leri birbirinden ayırmak; public ölçüm ile in-sit
   sayısı dondurulduktan sonra p95'tir.
 - Durumlu dosya sistemi koşumlarında outlier silinmez; gürültü de ölçümün
   parçasıdır. Ayrık sistem olayı varsa örnek silinmek yerine işaretlenir.
+- Koşum içinde yük altı CPU frekansı `%2`'den fazla değişirse veya AC/DC
+  `PROCTHROTTLEMAX` politikası değişirse sonuç `frekans-kaymasi` etiketi alır;
+  örnekler sessizce silinmez ve sonuç kalıcı baseline olamaz.
 - “Cold”, yalnız boş app DB/cache anlamına gelir. OS cache'i temizlenmediyse
   “disk cold” veya “physical cold” denmez.
 - Tek makine sonuçları mutlak kullanıcı cihazı bütçesi üretmez.
 
 ### 8.2 B-2 pilotunda dondurulacaklar
 
-- ortam manifesti benchmark oturumu başında bir kez, warmup ve ölçüm
-  iterasyonlarının dışında alınır; bu kural henüz uygulanmamış B-2 harness'ına
-  aittir, tek taramalı B-1 profiler davranışını değiştirmez;
+Ortam manifesti benchmark oturumunda warmup ve ölçüm iterasyonlarının dışında
+alınır: sabit alanlar başlangıçta bir kez, frekans ve `PROCTHROTTLEMAX` ise
+başlangıçta ve bitişte ölçülür. Bu bir çalışma kuralıdır; aşağıdaki sekiz
+karardan biri değildir. B-1 profiler aynı alanları tek taramayı çevreleyecek
+biçimde alır.
+
+B-2 karşılaştırması sayı üretmeden önce fixture parmak izi, ortam manifesti,
+contract+tool sürümü ve CPU frekans politikası/frekans uyumu olmak üzere dört
+guard'ı geçer. Pilot turu 2 boyunca AC ve DC `PROCTHROTTLEMAX` `%99` kalır;
+InProcess toolchain kullanılmaz.
+
+Pilotun donduracağı sekiz karar:
+
 - Workstation/Server ve concurrent açık/kapalı GC kombinasyonlarından biri;
 - custom probe ve diagnoser overhead'i;
 - stateful warmup ve ölçüm tekrar sayıları;
@@ -360,6 +391,34 @@ tokenizasyon gibi alt span'leri birbirinden ayırmak; public ölçüm ile in-sit
 - iki koşum varyans bandı;
 - regresyon eşiği ve kaç ardışık aşımın regresyon sayılacağı;
 - steady-memory idle süresi.
+
+### 8.3 B-2 sonucu — pilot kapatıldı, rejim dondurulmadı (`2026-08-15`)
+
+Yedi pilot turu, `79` dakika ölçüm ve `93` BenchmarkDotNet koşumu sonunda
+**kabul edilmiş bir minimum ölçülebilir fark üretilemedi.** Sonuç cümlesi:
+*geliştirici laptopunda küçük süre farkları güvenilir biçimde kalibre
+edilemedi; allocation güvenilir ana metriktir.*
+
+- `8.2`'deki sekiz kararın hiçbiri dondurulmadı. Bu belge `1.0`'a
+  **çıkarılmaz**, `0.1` kalır.
+- Süre için kalıcı regresyon kapısı bu makinede kurulamadı. `R5` gibi ürün
+  kararları allocation ve `phases` faz payı üzerinden verilir; süre yalnız
+  ikincil ve büyüklük mertebesi göstergesidir.
+- Korunan zemin: parmak izli sentetik fixture, ortam manifesti (CPU frekans
+  alanları dahil), allocation ölçümü, `compare` guard'ları ve `phases`
+  profiler lane'i.
+- `pilot` komutu ve canary otomasyonu **deneysel** kalır; ürün geliştirmesinin
+  kapısı değildir.
+
+Pilot turlarının kalıcı iki bulgusu:
+
+- **Doğrulandı:** eşleştirilmiş (paired) tasarım canary sinyalinin yönünü
+  düzeltti. Önceki sıralı tasarımda bilerek yavaşlatılmış kod baseline'dan
+  hızlı görünüyordu.
+- **Çürütüldü:** driftin CPU turbo değişiminden geldiği hipotezi — frekans
+  `3195→3195 MHz` sabitken de canary yakalanamadı. Driftin Defender kaynaklı
+  olduğu iddiası da B-1 manifestiyle düştü (`defender_realtime_enabled: false`).
+  Frekans sabitleme yine de doğru bir önlemdir, ama kök neden değildi.
 
 ## 9. Araç seçimi
 
@@ -375,6 +434,10 @@ tokenizasyon gibi alt span'leri birbirinden ayırmak; public ölçüm ile in-sit
 `GetFuzzy` ve allocation mikro ölçümlerinde kullanılır. Soğuk tarama,
 watcher, reconciliation ve oracle gibi durumlu senaryolar özel headless runner
 ile yürütülür.
+`SearchState.Create` pilotu varsayılan out-of-process toolchain ile çalışır ve
+`DontEnforcePowerPlan` kullanarak makinenin power plan'ını değiştirmez.
+`InProcessEmitToolchain`, süreç izolasyonu ve allocation ölçümünü zayıflatacağı
+için B-2 pilot rejiminin parçası değildir.
 
 `Bogus` ana corpus generator değildir: locale fallback'i ve sürümle
 deterministik dizinin değişebilmesi corpus sözleşmesini gereksiz yere dış
@@ -405,7 +468,9 @@ indeks davranışını ölçmediği için ana harness değildir. Yeni plugin ger
 1. **Sözleşme v0.1:** Bu belge, README bağlantısı ve source sınırı doğrulaması.
 2. **B-1 profiler:** Privacy testleri, iki-koşum determinism ve kullanıcı
    onaylı gerçek tarama.
-3. **B-2 pilot:** GC/overhead/gürültü ölçümü; bu belge `1.0` olur.
+3. **B-2 pilot:** GC/overhead/gürültü ölçümü. **Kapatıldı (`8.3`):** rejim
+   dondurulamadı, belge `0.1` kaldı; allocation ve faz payı birincil karar
+   metriği oldu.
 4. **B-3 corpus:** Bellek/disk generator, capability strata, golden
    determinism testi ve 50k erken A5 maliyet probu.
 5. **B-4/B-5 harness:** Oracle, arama bucket'ları, A3/A4/A6, canary regresyon;

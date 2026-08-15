@@ -62,5 +62,14 @@ internal sealed class ProfileTestFixture : IDisposable
             PowerPlanGuid: null,
             DefenderRealtimeEnabled: null,
             WindowsSearchRunning: null,
-            DiskKind: null);
+            DiskKind: null,
+            ProcessorThrottleMaxAcStartPercent: 99,
+            ProcessorThrottleMaxDcStartPercent: 99,
+            ProcessorThrottleMaxAcEndPercent: 99,
+            ProcessorThrottleMaxDcEndPercent: 99,
+            ProcessorNominalBaseMhz: 3300,
+            ProcessorFrequencyStartMhz: 3120,
+            ProcessorFrequencyEndMhz: 3130,
+            ProcessorFrequencyDriftPercent: 0.32,
+            Labels: Array.Empty<string>());
 }
