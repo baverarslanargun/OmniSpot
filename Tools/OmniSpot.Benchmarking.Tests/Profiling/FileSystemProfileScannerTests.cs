@@ -87,6 +87,15 @@ public sealed class FileSystemProfileScannerTests
         Assert.True(names.TryGetProperty("culture_fold_difference_name_ratio", out _));
         Assert.False(names.TryGetProperty("culture_fold_difference_count", out _));
         Assert.False(names.TryGetProperty("culture_fold_difference_ratio", out _));
+        var environment = parsed.RootElement
+            .GetProperty("manifest")
+            .GetProperty("environment");
+        Assert.True(environment.TryGetProperty("processor_throttle_max_ac_start_percent", out _));
+        Assert.True(environment.TryGetProperty("processor_throttle_max_dc_start_percent", out _));
+        Assert.True(environment.TryGetProperty("processor_frequency_start_mhz", out _));
+        Assert.True(environment.TryGetProperty("processor_frequency_end_mhz", out _));
+        Assert.True(environment.TryGetProperty("processor_frequency_drift_percent", out _));
+        Assert.True(environment.TryGetProperty("labels", out _));
     }
 
     [Fact]
@@ -110,8 +119,8 @@ public sealed class FileSystemProfileScannerTests
             first.MetricsFingerprint);
         Assert.Matches("^[0-9a-f]{64}$", first.MetricsFingerprint);
         Assert.Equal(2, first.SchemaMajor);
-        Assert.Equal(0, first.SchemaMinor);
-        Assert.Equal("0.3.1", first.ProfilerVersion);
+        Assert.Equal(1, first.SchemaMinor);
+        Assert.Equal("0.4.0", first.ProfilerVersion);
 
         var changedMetrics = first.Metrics with
         {
@@ -120,6 +129,20 @@ public sealed class FileSystemProfileScannerTests
         Assert.NotEqual(
             first.MetricsFingerprint,
             ProfileJson.ComputeMetricsFingerprint(changedMetrics));
+
+        var changedEnvironment = first with
+        {
+            Manifest = first.Manifest with
+            {
+                Environment = first.Manifest.Environment with
+                {
+                    ProcessorFrequencyStartMhz = 4_252,
+                    ProcessorFrequencyEndMhz = 4_252
+                }
+            }
+        };
+        Assert.Equal(first.MetricsFingerprint, changedEnvironment.MetricsFingerprint);
+        Assert.NotEqual(ProfileJson.Serialize(first), ProfileJson.Serialize(changedEnvironment));
     }
 
     [Fact]

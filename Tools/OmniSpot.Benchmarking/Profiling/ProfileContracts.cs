@@ -69,7 +69,37 @@ internal sealed record ProfileEnvironment(
     string? PowerPlanGuid,
     bool? DefenderRealtimeEnabled,
     bool? WindowsSearchRunning,
-    string? DiskKind);
+    string? DiskKind,
+    int? ProcessorThrottleMaxAcStartPercent,
+    int? ProcessorThrottleMaxDcStartPercent,
+    int? ProcessorThrottleMaxAcEndPercent,
+    int? ProcessorThrottleMaxDcEndPercent,
+    int? ProcessorNominalBaseMhz,
+    int? ProcessorFrequencyStartMhz,
+    int? ProcessorFrequencyEndMhz,
+    double? ProcessorFrequencyDriftPercent,
+    IReadOnlyList<string> Labels);
+
+internal sealed class ProfileEnvironmentCapture
+{
+    private readonly Func<ProfileEnvironment> _complete;
+    private ProfileEnvironment? _completed;
+
+    internal ProfileEnvironmentCapture(
+        ProfileEnvironment startEnvironment,
+        Func<ProfileEnvironment> complete)
+    {
+        StartEnvironment = startEnvironment;
+        _complete = complete;
+    }
+
+    internal ProfileEnvironment StartEnvironment { get; }
+
+    internal ProfileEnvironment Complete() => _completed ??= _complete();
+
+    internal static ProfileEnvironmentCapture FromCompleted(ProfileEnvironment environment) =>
+        new(environment, () => environment);
+}
 
 internal sealed record ProfileMetrics(
     long TotalItemCount,

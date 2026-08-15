@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.8" />
     <PackageReference Include="System.CommandLine" Version="2.0.11" />
     <ProjectReference Include="..\..\SmartFileLauncher.Core\SmartFileLauncher.Core.csproj" />
   </ItemGroup>

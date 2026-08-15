@@ -9,11 +9,16 @@ namespace OmniSpot.Benchmarking.Profiling;
 
 internal static partial class ProfileEnvironmentProbe
 {
-    internal static ProfileEnvironment Capture(IReadOnlyList<ProfileRootRequest> roots)
+    internal static ProfileEnvironment Capture(IReadOnlyList<ProfileRootRequest> roots) =>
+        BeginCapture(roots).Complete();
+
+    internal static ProfileEnvironmentCapture BeginCapture(
+        IReadOnlyList<ProfileRootRequest> roots)
     {
         ArgumentNullException.ThrowIfNull(roots);
         var (repoHead, repoDirty, dirtyCount) = ReadRepositoryState();
-        return new ProfileEnvironment(
+        var frequencyStart = ProcessorFrequencyProbe.Capture();
+        var startEnvironment = new ProfileEnvironment(
             RuntimeInformation.OSDescription,
             RuntimeInformation.FrameworkDescription,
             ReadDotnetSdkVersion(),
@@ -30,7 +35,43 @@ internal static partial class ProfileEnvironmentProbe
             ReadPowerPlanGuid(),
             ReadDefenderRealtimeState(),
             ReadWindowsSearchState(),
-            ReadDiskKind(roots));
+            ReadDiskKind(roots),
+            frequencyStart.ThrottleMaxAcPercent,
+            frequencyStart.ThrottleMaxDcPercent,
+            frequencyStart.ThrottleMaxAcPercent,
+            frequencyStart.ThrottleMaxDcPercent,
+            frequencyStart.NominalBaseMhz,
+            frequencyStart.LoadedMhz,
+            frequencyStart.LoadedMhz,
+            ProcessorFrequencyDriftPercent: 0,
+            Labels: Array.Empty<string>());
+        return new ProfileEnvironmentCapture(
+            startEnvironment,
+            () => CompleteFrequencyCapture(startEnvironment, frequencyStart));
+    }
+
+    private static ProfileEnvironment CompleteFrequencyCapture(
+        ProfileEnvironment startEnvironment,
+        ProcessorFrequencySnapshot frequencyStart)
+    {
+        var frequencyEnd = ProcessorFrequencyProbe.Capture();
+        var drift = ProcessorFrequencyProbe.CalculateDriftPercent(
+            frequencyStart.LoadedMhz,
+            frequencyEnd.LoadedMhz);
+        var policyChanged =
+            frequencyStart.ThrottleMaxAcPercent != frequencyEnd.ThrottleMaxAcPercent ||
+            frequencyStart.ThrottleMaxDcPercent != frequencyEnd.ThrottleMaxDcPercent;
+        var labels = ProcessorFrequencyProbe.IsDrift(drift) || policyChanged
+            ? new[] { "frekans-kaymasi" }
+            : Array.Empty<string>();
+        return startEnvironment with
+        {
+            ProcessorThrottleMaxAcEndPercent = frequencyEnd.ThrottleMaxAcPercent,
+            ProcessorThrottleMaxDcEndPercent = frequencyEnd.ThrottleMaxDcPercent,
+            ProcessorFrequencyEndMhz = frequencyEnd.LoadedMhz,
+            ProcessorFrequencyDriftPercent = drift,
+            Labels = labels
+        };
     }
 
     private static string ReadProcessorModel()
