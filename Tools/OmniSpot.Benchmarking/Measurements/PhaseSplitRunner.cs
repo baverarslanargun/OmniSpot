@@ -366,15 +366,47 @@ internal static class PhaseSplitRunner
         return total;
     }
 
-    private static ImmutableHashSet<string>[] RunTokenSets(
+    /// <summary>
+    /// Üretimin `SearchState.Tokenize` şeklini yansıtır: dizi,
+    /// `OrdinalIgnoreCase` benzersiz, tokenizer sırası korunur.
+    /// </summary>
+    private static ImmutableArray<string> TokenizeReplica(
+        string name,
+        ITokenizer tokenizer,
+        List<string> buffer)
+    {
+        buffer.Clear();
+        foreach (var token in tokenizer.Tokenize(name))
+        {
+            var seen = false;
+            for (var existing = 0; existing < buffer.Count; existing++)
+            {
+                if (PathComparer.Equals(buffer[existing], token))
+                {
+                    seen = true;
+                    break;
+                }
+            }
+
+            if (!seen)
+            {
+                buffer.Add(token);
+            }
+        }
+
+        return [.. buffer];
+    }
+
+    private static ImmutableArray<string>[] RunTokenSets(
         IReadOnlyList<FileSystemNode> nodes,
         ITokenizer tokenizer)
     {
         var items = RunDistinct(nodes);
-        var sets = new ImmutableHashSet<string>[items.Length];
+        var sets = new ImmutableArray<string>[items.Length];
+        var buffer = new List<string>();
         for (var index = 0; index < items.Length; index++)
         {
-            sets[index] = tokenizer.Tokenize(items[index].Name).ToImmutableHashSet(PathComparer);
+            sets[index] = TokenizeReplica(items[index].Name, tokenizer, buffer);
         }
 
         return sets;
@@ -387,10 +419,11 @@ internal static class PhaseSplitRunner
         var sourceItems = RunDistinct(nodes);
         var items = ImmutableDictionary.CreateBuilder<string, SearchItem>(PathComparer);
         var pathBuildersByToken = new Dictionary<string, ImmutableHashSet<string>.Builder>(PathComparer);
-        var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(PathComparer);
+        var buffer = new List<string>();
         foreach (var item in sourceItems)
         {
-            var tokens = tokenizer.Tokenize(item.Name).ToImmutableHashSet(PathComparer);
+            var tokens = TokenizeReplica(item.Name, tokenizer, buffer);
             items[item.FullPath] = item;
             tokensByPath[item.FullPath] = tokens;
             foreach (var token in tokens)
@@ -417,7 +450,7 @@ internal static class PhaseSplitRunner
     private sealed record PostingsReplica(
         ImmutableDictionary<string, SearchItem>.Builder Items,
         ImmutableDictionary<string, ImmutableHashSet<string>>.Builder PathsByToken,
-        ImmutableDictionary<string, ImmutableHashSet<string>>.Builder TokensByPath);
+        ImmutableDictionary<string, ImmutableArray<string>>.Builder TokensByPath);
 }
 
 internal static class PhaseSplitSummaryFormatter

@@ -11,13 +11,20 @@ public sealed class SearchState
 
     private readonly ImmutableDictionary<string, SearchItem> _itemsByPath;
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _pathsByToken;
-    private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _tokensByPath;
+
+    /// <summary>
+    /// Öğe başına token'lar küme değil dizidir. Öğe başına token sayısı küçük
+    /// (medyan `2`, `p99 = 10`, `max = 30`) ve bu değerler yalnız dolaşılıyor —
+    /// üyelik sorgusu yok. `OrdinalIgnoreCase` benzersizliği kurulum sırasında
+    /// korunur; kümenin düğüm başına maliyeti bu boyutta karşılıksızdır.
+    /// </summary>
+    private readonly ImmutableDictionary<string, ImmutableArray<string>> _tokensByPath;
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _childrenByPath;
 
     private SearchState(
         ImmutableDictionary<string, SearchItem> itemsByPath,
         ImmutableDictionary<string, ImmutableHashSet<string>> pathsByToken,
-        ImmutableDictionary<string, ImmutableHashSet<string>> tokensByPath,
+        ImmutableDictionary<string, ImmutableArray<string>> tokensByPath,
         ImmutableDictionary<string, ImmutableHashSet<string>> childrenByPath)
     {
         _itemsByPath = itemsByPath;
@@ -29,7 +36,7 @@ public sealed class SearchState
     public static SearchState Empty { get; } = new(
         ImmutableDictionary.Create<string, SearchItem>(PathComparer),
         ImmutableDictionary.Create<string, ImmutableHashSet<string>>(PathComparer),
-        ImmutableDictionary.Create<string, ImmutableHashSet<string>>(PathComparer),
+        ImmutableDictionary.Create<string, ImmutableArray<string>>(PathComparer),
         ImmutableDictionary.Create<string, ImmutableHashSet<string>>(PathComparer));
 
     public int ItemCount => _itemsByPath.Count;
@@ -132,7 +139,7 @@ public sealed class SearchState
         var sourceItems = ToDistinctItems(nodes);
         var items = ImmutableDictionary.CreateBuilder<string, SearchItem>(PathComparer);
         var pathBuildersByToken = new Dictionary<string, ImmutableHashSet<string>.Builder>(PathComparer);
-        var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(PathComparer);
 
         foreach (var item in sourceItems)
         {
@@ -172,7 +179,7 @@ public sealed class SearchState
         var sourceItems = ToDistinctItems(sourceNodes);
         var items = ImmutableDictionary.CreateBuilder<string, SearchItem>(PathComparer);
         var pathsByToken = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
-        var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        var tokenListsByPath = new Dictionary<string, List<string>>(PathComparer);
         foreach (var item in sourceItems)
         {
             items[item.FullPath] = item;
@@ -190,10 +197,23 @@ public sealed class SearchState
                 pathsByToken.TryGetValue(token, out var paths);
                 pathsByToken[token] = (paths ?? ImmutableHashSet.Create<string>(PathComparer))
                     .Add(node.FullPath);
-                tokensByPath.TryGetValue(node.FullPath, out var tokens);
-                tokensByPath[node.FullPath] = (tokens ?? ImmutableHashSet.Create<string>(PathComparer))
-                    .Add(token);
+                if (!tokenListsByPath.TryGetValue(node.FullPath, out var tokens))
+                {
+                    tokens = [];
+                    tokenListsByPath[node.FullPath] = tokens;
+                }
+
+                if (!ContainsToken(tokens, token))
+                {
+                    tokens.Add(token);
+                }
             }
+        }
+
+        var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(PathComparer);
+        foreach (var (path, tokens) in tokenListsByPath)
+        {
+            tokensByPath[path] = [.. tokens];
         }
 
         return Create(items, pathsByToken, tokensByPath);
@@ -256,7 +276,7 @@ public sealed class SearchState
 
     private SearchState WithItem(
         SearchItem item,
-        ImmutableHashSet<string> tokens)
+        ImmutableArray<string> tokens)
     {
         var items = _itemsByPath.SetItem(item.FullPath, item);
         var pathsByToken = _pathsByToken;
@@ -349,7 +369,7 @@ public sealed class SearchState
     private static SearchState Create(
         ImmutableDictionary<string, SearchItem>.Builder items,
         ImmutableDictionary<string, ImmutableHashSet<string>>.Builder pathsByToken,
-        ImmutableDictionary<string, ImmutableHashSet<string>>.Builder tokensByPath)
+        ImmutableDictionary<string, ImmutableArray<string>>.Builder tokensByPath)
     {
         var childrenByPath = BuildChildrenByPath(items.Values, items.Keys);
         return new SearchState(
@@ -386,11 +406,40 @@ public sealed class SearchState
             .Select(group => group.Last())
             .ToArray();
 
-    private static ImmutableHashSet<string> Tokenize(
+    /// <summary>
+    /// Tokenizer aynı adda aynı token'ı birden çok kez üretebilir
+    /// (`rapor-rapor.txt`). Küme bunu kendiliğinden tekilleştiriyordu; dizide
+    /// benzersizlik doğrusal taramayla korunur. Öğe başına token sayısı küçük
+    /// olduğundan tarama ayrı bir küme tahsisinden ucuzdur.
+    /// </summary>
+    private static ImmutableArray<string> Tokenize(
         string value,
-        ITokenizer tokenizer) =>
-        tokenizer.Tokenize(value)
-            .ToImmutableHashSet(PathComparer);
+        ITokenizer tokenizer)
+    {
+        var tokens = new List<string>();
+        foreach (var token in tokenizer.Tokenize(value))
+        {
+            if (!ContainsToken(tokens, token))
+            {
+                tokens.Add(token);
+            }
+        }
+
+        return [.. tokens];
+    }
+
+    private static bool ContainsToken(List<string> tokens, string token)
+    {
+        for (var index = 0; index < tokens.Count; index++)
+        {
+            if (PathComparer.Equals(tokens[index], token))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }
 
 public sealed record SearchItem(

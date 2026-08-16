@@ -42,6 +42,12 @@ internal static class MeasurementCommand
         {
             Description = "A/B yerine yalnız SearchState canlı bellek dökümünü çıkarır."
         };
+        var tokenRepresentationOption = new Option<bool>("--token-repr")
+        {
+            Description =
+                "_tokensByPath değer temsillerini eşleştirilmiş karşılaştırır " +
+                "(hashset = legacy, array = üretim, pooled_array = aday)."
+        };
         var roundsOption = IntegerOption("--rounds", 2);
         var allocationBarOption = new Option<double>("--allocation-bar")
         {
@@ -57,6 +63,7 @@ internal static class MeasurementCommand
         command.Options.Add(yesOption);
         command.Options.Add(showPathsOption);
         command.Options.Add(breakdownOption);
+        command.Options.Add(tokenRepresentationOption);
         command.Options.Add(roundsOption);
         command.Options.Add(allocationBarOption);
         command.Options.Add(outputOption);
@@ -66,6 +73,7 @@ internal static class MeasurementCommand
             parseResult.GetValue(yesOption),
             parseResult.GetValue(showPathsOption),
             parseResult.GetValue(breakdownOption),
+            parseResult.GetValue(tokenRepresentationOption),
             parseResult.GetValue(roundsOption),
             parseResult.GetValue(allocationBarOption),
             parseResult.GetValue(outputOption),
@@ -79,6 +87,7 @@ internal static class MeasurementCommand
         bool assumeYes,
         bool showPaths,
         bool breakdownOnly,
+        bool tokenRepresentationOnly,
         int rounds,
         double allocationBarPercent,
         string? outputPath,
@@ -87,6 +96,12 @@ internal static class MeasurementCommand
         if (rounds is < 1 or > 8)
         {
             Console.Error.WriteLine("--rounds 1 ile 8 arasında olmalı.");
+            return 2;
+        }
+
+        if (breakdownOnly && tokenRepresentationOnly)
+        {
+            Console.Error.WriteLine("--breakdown ve --token-repr birlikte kullanılamaz.");
             return 2;
         }
 
@@ -140,6 +155,22 @@ internal static class MeasurementCommand
                 Console.Out.Write(MemoryBreakdownFormatter.Format(breakdown));
                 Console.Out.WriteLine("Bellek dökümü JSON çıktısı yazıldı (ad/path içermez).");
                 return 0;
+            }
+
+            if (tokenRepresentationOnly)
+            {
+                var representation = TokenRepresentationRunner.Run(
+                    nodes,
+                    rounds,
+                    enumerationMilliseconds,
+                    TimeSpan.FromSeconds(270),
+                    environmentCapture,
+                    cancellationToken);
+                var representationOutput = ResolveOutput(outputPath, "realtree", "token-repr");
+                await MeasurementJson.WriteAsync(representationOutput, representation, cancellationToken);
+                Console.Out.Write(TokenRepresentationSummaryFormatter.Format(representation));
+                Console.Out.WriteLine("Temsil karşılaştırması JSON çıktısı yazıldı (ad/path içermez).");
+                return representation.AcceptanceFailures.Count == 0 ? 0 : 5;
             }
 
             var comparison = RealTreeComparisonRunner.Run(

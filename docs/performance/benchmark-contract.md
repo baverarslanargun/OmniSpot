@@ -84,11 +84,27 @@ güncel source ve yakın testlerden doğrulanmıştır.
 ikinci proje açılmaz.
 
 `realtree`, gerçek kullanıcı ağacını **yalnız bellekte** okuyup aday/baseline
-temsilleri eşleştirilmiş (ABBA) karşılaştırır ve `--breakdown` ile yayımlanan
-`SearchState`'in canlı ayak izini bileşenlerine ayırır. `§4` gizlilik
-sözleşmesinin tamamına tabidir: kök onayı zorunlu, yollar varsayılan olarak
-maskeli, kalıcı çıktıda ad/token/path yok, hata metinleri path taşımaz.
-Sonuçları tek makineye özeldir ve paylaşılabilir baseline sayılmaz.
+temsilleri eşleştirilmiş (ABBA) karşılaştırır; `--breakdown` ile yayımlanan
+`SearchState`'in canlı ayak izini bileşenlerine ayırır, `--token-repr` ile
+`_tokensByPath` değer temsillerinin marjinal kalıcı maliyetini eşleştirilmiş
+karşılaştırır. İki mod birlikte verilemez. `§4` gizlilik sözleşmesinin tamamına
+tabidir: kök onayı zorunlu, yollar varsayılan olarak maskeli, kalıcı çıktıda
+ad/token/path yok, hata metinleri path taşımaz. Sonuçları tek makineye özeldir
+ve paylaşılabilir baseline sayılmaz.
+
+`--token-repr` üç temsili karşılaştırır: `hashset` legacy baseline (dizi
+temsilinden önceki üretim), `array` **üretimin bugünkü şekli**
+(`ImmutableArray<string>`), `pooled_array` ise henüz uygulanmamış token
+tekilleştirme adayı. Sayı üretmeden önce doğruluk kapısı çalışır: her temsil
+legacy `hashset` referansının `OrdinalIgnoreCase` benzersiz küme semantiğini öğe
+öğe korumazsa sonuç kabul edilmez. Ölçülemeyen temsilin medyanı `null`'dır,
+yüzde değişimi üretilmez ve bu bir kabul hatası olarak raporlanır.
+
+`realtree --breakdown` ve `phases` replikaları üretimin veri şeklini yansıtır.
+Replika üretimden ayrışırsa araç üretimi değil kendini ölçer; `--breakdown`
+çapraz denetimi bunu sapma olarak yakalar.
+`RealTreeComparisonRunner`'ın `legacy` tarafı bu kuralın dışındadır — o
+bilinçli olarak `R5` öncesi kodun tarihsel baseline'ıdır.
 
 ## 4. Gerçek ağaç profili gizlilik sözleşmesi
 
