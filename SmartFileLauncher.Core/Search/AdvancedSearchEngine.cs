@@ -321,34 +321,49 @@ public class AdvancedSearchEngine
         SearchState state,
         CancellationToken cancellationToken)
     {
-        var tokens = _tokenizer.Tokenize(searchTerm.Text)
+        // Tokenizer bir kelime için aslını ve —farklıysa— aksansız biçimini
+        // üretir. Bunlar aynı kelimenin **alternatifleridir**; terimdeki ayrı
+        // kelimeler ise birlikte aranmalıdır. Aksansız biçim iki alternatifte
+        // de ortak olduğundan gruplama anahtarı odur: grup içi birleşim (VEYA),
+        // gruplar arası kesişim (VE). Gruplanmazsa `görüşme` sorgusu
+        // `gorusme.txt`'yi hiç bulamaz.
+        var alternativeGroups = _tokenizer.Tokenize(searchTerm.Text)
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .GroupBy(SearchTextNormalizer.Fold, StringComparer.OrdinalIgnoreCase)
             .ToArray();
         Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>? termMatches = null;
-        foreach (var token in tokens)
+        foreach (var group in alternativeGroups)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var tokenMatches = GetTokenMatches(token, searchTerm.Weight, state, cancellationToken);
-            if (tokenMatches.Count == 0)
+            Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> groupMatches =
+                new(StringComparer.OrdinalIgnoreCase);
+            foreach (var token in group)
+            {
+                MergeCandidateUnion(
+                    groupMatches,
+                    GetTokenMatches(token, searchTerm.Weight, state, cancellationToken));
+            }
+
+            if (groupMatches.Count == 0)
             {
                 return [];
             }
 
             if (termMatches == null)
             {
-                termMatches = tokenMatches;
+                termMatches = groupMatches;
                 continue;
             }
 
             foreach (var path in termMatches.Keys.ToArray())
             {
-                if (!tokenMatches.TryGetValue(path, out var tokenMatch))
+                if (!groupMatches.TryGetValue(path, out var groupMatch))
                 {
                     termMatches.Remove(path);
                     continue;
                 }
 
-                MergeContributions(termMatches[path].matches, tokenMatch.matches);
+                MergeContributions(termMatches[path].matches, groupMatch.matches);
             }
         }
 
