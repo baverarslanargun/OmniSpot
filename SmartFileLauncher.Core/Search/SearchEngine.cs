@@ -90,7 +90,7 @@ public class SearchEngine
             }
         }
 
-        var pq = new PriorityQueue<SearchResult, double>();
+        var pq = new PriorityQueue<SearchResult, SearchResult>(SearchResultOrder.Instance);
         foreach (var (_, candidate) in nodeMatches)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -104,13 +104,14 @@ public class SearchEngine
                 matchedTokens,
                 cancellationToken);
 
-            pq.Enqueue(new SearchResult
+            var result = new SearchResult
             {
                 Name = node.Name,
                 FullPath = node.FullPath,
                 Score = score,
                 IsDirectory = node.IsDirectory
-            }, -score);
+            };
+            pq.Enqueue(result, result);
         }
 
         return DequeueResults(pq, maxResults, cancellationToken);
@@ -140,7 +141,7 @@ public class SearchEngine
             }
         }
 
-        var pq = new PriorityQueue<SearchResult, double>();
+        var pq = new PriorityQueue<SearchResult, SearchResult>(SearchResultOrder.Instance);
         foreach (var (_, candidate) in itemMatches)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -153,13 +154,14 @@ public class SearchEngine
                 candidate.matchedTokens,
                 cancellationToken);
 
-            pq.Enqueue(new SearchResult
+            var result = new SearchResult
             {
                 Name = item.Name,
                 FullPath = item.FullPath,
                 Score = score,
                 IsDirectory = item.IsDirectory
-            }, -score);
+            };
+            pq.Enqueue(result, result);
         }
 
         return DequeueResults(pq, maxResults, cancellationToken);
@@ -199,7 +201,7 @@ public class SearchEngine
     }
 
     private static IReadOnlyList<SearchResult> DequeueResults(
-        PriorityQueue<SearchResult, double> pq,
+        PriorityQueue<SearchResult, SearchResult> pq,
         int maxResults,
         CancellationToken cancellationToken)
     {

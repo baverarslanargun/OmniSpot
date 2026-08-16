@@ -212,11 +212,11 @@ public class AdvancedSearchEngine
             });
         }
 
-        var queue = new PriorityQueue<SearchResult, double>();
+        var queue = new PriorityQueue<SearchResult, SearchResult>(SearchResultOrder.Instance);
         foreach (var result in scoredResults)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            queue.Enqueue(result, -result.Score);
+            queue.Enqueue(result, result);
         }
 
         var results = new List<SearchResult>(Math.Min(maxResults, queue.Count));
