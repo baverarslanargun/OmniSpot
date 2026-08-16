@@ -48,15 +48,19 @@ internal sealed record TokenRepresentationComparison(
     IReadOnlyList<string> AcceptanceFailures);
 
 /// <summary>
-/// `_tokensByPath` değerlerinin temsilini eşleştirilmiş (ABBA) ölçer. Üç aday
+/// `_tokensByPath` değerlerinin temsilini eşleştirilmiş (ABBA) ölçer. Üç temsil
 /// aynı `SearchItem` dizisi canlı tutularak, her biri kendi token string'lerini
 /// üreterek kurulur; ölçülen şey her temsilin **marjinal** kalıcı maliyetidir ve
 /// `realtree --breakdown` içindeki `token_sets` aşamasıyla aynı muhasebeyi
 /// kullanır.
 ///
-/// Ölçümden önce doğruluk kapısı çalışır: aday temsiller, üretimin
-/// `OrdinalIgnoreCase` benzersiz küme semantiğini öğe öğe korumak zorundadır.
-/// Kapı düşerse sayılar üretilir ama kabul edilmez.
+/// Roller: `hashset` legacy baseline (dizi temsilinden önceki üretim),
+/// `array` **üretimin bugünkü şekli**, `pooled_array` ise henüz uygulanmamış
+/// token tekilleştirme adayı.
+///
+/// Ölçümden önce doğruluk kapısı çalışır: her temsil legacy `hashset`
+/// referansının `OrdinalIgnoreCase` benzersiz küme semantiğini öğe öğe
+/// korumak zorundadır. Kapı düşerse sayılar üretilir ama kabul edilmez.
 /// </summary>
 internal static class TokenRepresentationRunner
 {
@@ -118,11 +122,11 @@ internal static class TokenRepresentationRunner
 
         var variants = new[]
         {
-            Summarize(HashSetVariant, "ImmutableHashSet<string> (üretim)", samples),
-            Summarize(ArrayVariant, "string[] (OrdinalIgnoreCase benzersiz)", samples),
+            Summarize(HashSetVariant, "ImmutableHashSet<string> (legacy baseline)", samples),
+            Summarize(ArrayVariant, "ImmutableArray<string> (üretim)", samples),
             Summarize(
                 PooledArrayVariant,
-                "string[] + paylaşılan token havuzu (bilgi amaçlı)",
+                "üretim + paylaşılan token havuzu (aday, uygulanmadı)",
                 samples)
         };
 
@@ -148,9 +152,10 @@ internal static class TokenRepresentationRunner
             MeasurementConstants.ContractVersion,
             MeasurementConstants.ToolVersion,
             "instrumented_profiler",
-            "Gerçek ağaç, bellek içi, eşleştirilmiş ABBA. Üç temsil aynı öğe " +
-            "dizisi üzerinde kendi token string'lerini üretir; ölçülen marjinal " +
-            "kalıcı maliyettir. Ad/token/path diske yazılmaz.",
+            "Gerçek ağaç, bellek içi, eşleştirilmiş ABBA. hashset = legacy " +
+            "baseline, array = üretim, pooled_array = uygulanmamış aday. Üç " +
+            "temsil aynı öğe dizisi üzerinde kendi token string'lerini üretir; " +
+            "ölçülen marjinal kalıcı maliyettir. Ad/token/path diske yazılmaz.",
             started.ToUnixTimeSeconds(),
             DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             rounds,
@@ -337,7 +342,7 @@ internal static class TokenRepresentationRunner
         return (facts, failures);
     }
 
-    private static bool SetEquals(ImmutableHashSet<string> expected, string[] actual)
+    private static bool SetEquals(ImmutableHashSet<string> expected, ImmutableArray<string> actual)
     {
         if (expected.Count != actual.Length)
         {
@@ -355,7 +360,7 @@ internal static class TokenRepresentationRunner
         return true;
     }
 
-    private static bool HasDuplicate(string[] tokens)
+    private static bool HasDuplicate(ImmutableArray<string> tokens)
     {
         for (var left = 0; left < tokens.Length; left++)
         {
@@ -385,12 +390,13 @@ internal static class TokenRepresentationRunner
     }
 
     /// <summary>
-    /// Öğe başına token sayısı küçüktür (B-1: medyan `2`, `p99 = 10`), bu yüzden
+    /// Üretimin `SearchState.Tokenize` şeklinin birebir replikasıdır. Öğe başına
+    /// token sayısı küçüktür (B-1: medyan `2`, `p99 = 10`), bu yüzden
     /// benzersizlik ayrı bir küme tahsis etmeden doğrusal taramayla korunur.
     /// </summary>
-    private static string[][] BuildArrays(SearchItem[] items, ITokenizer tokenizer)
+    private static ImmutableArray<string>[] BuildArrays(SearchItem[] items, ITokenizer tokenizer)
     {
-        var arrays = new string[items.Length][];
+        var arrays = new ImmutableArray<string>[items.Length];
         var buffer = new List<string>();
         for (var index = 0; index < items.Length; index++)
         {
@@ -413,7 +419,7 @@ internal static class TokenRepresentationRunner
                 }
             }
 
-            arrays[index] = buffer.ToArray();
+            arrays[index] = [.. buffer];
         }
 
         return arrays;
@@ -425,13 +431,13 @@ internal static class TokenRepresentationRunner
     /// `_pathsByToken` anahtarlarıyla paylaşılacağı için gerçek marjinal kazanç
     /// burada ölçülenden **daha büyüktür**, küçük değil.
     /// </summary>
-    private static string[][] BuildPooledArrays(
+    private static ImmutableArray<string>[] BuildPooledArrays(
         SearchItem[] items,
         ITokenizer tokenizer,
         out Dictionary<string, string> pool)
     {
         pool = new Dictionary<string, string>(TokenComparer);
-        var arrays = new string[items.Length][];
+        var arrays = new ImmutableArray<string>[items.Length];
         var buffer = new List<string>();
         for (var index = 0; index < items.Length; index++)
         {
@@ -450,7 +456,7 @@ internal static class TokenRepresentationRunner
                 }
             }
 
-            arrays[index] = buffer.ToArray();
+            arrays[index] = [.. buffer];
         }
 
         return arrays;

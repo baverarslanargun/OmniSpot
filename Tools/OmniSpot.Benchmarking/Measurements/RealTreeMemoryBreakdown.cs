@@ -71,7 +71,7 @@ internal static class RealTreeMemoryBreakdown
         var tokenSets = MeasureStage(
             stages,
             "token_sets",
-            "öğe başına ImmutableHashSet<string> token kümeleri",
+            "öğe başına ImmutableArray<string> token dizileri",
             () => BuildTokenSets(items, tokenizer));
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -84,7 +84,7 @@ internal static class RealTreeMemoryBreakdown
         MeasureStage(
             stages,
             "tokens_by_path",
-            "_tokensByPath sözlük düğümleri (token kümeleri hariç)",
+            "_tokensByPath sözlük düğümleri (token dizileri hariç)",
             () => BuildTokensByPath(items, tokenSets));
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -197,14 +197,39 @@ internal static class RealTreeMemoryBreakdown
             .Select(group => group.Last())
             .ToArray();
 
-    private static ImmutableHashSet<string>[] BuildTokenSets(
+    /// <summary>
+    /// Üretimin `SearchState.Tokenize` şeklini birebir yansıtır: dizi,
+    /// `OrdinalIgnoreCase` benzersiz, tokenizer sırası korunur. Replika
+    /// üretimden ayrışırsa döküm üretimi değil kendini ölçmeye başlar.
+    /// </summary>
+    private static ImmutableArray<string>[] BuildTokenSets(
         SearchItem[] items,
         ITokenizer tokenizer)
     {
-        var sets = new ImmutableHashSet<string>[items.Length];
+        var sets = new ImmutableArray<string>[items.Length];
+        var buffer = new List<string>();
         for (var index = 0; index < items.Length; index++)
         {
-            sets[index] = tokenizer.Tokenize(items[index].Name).ToImmutableHashSet(PathComparer);
+            buffer.Clear();
+            foreach (var token in tokenizer.Tokenize(items[index].Name))
+            {
+                var seen = false;
+                for (var existing = 0; existing < buffer.Count; existing++)
+                {
+                    if (PathComparer.Equals(buffer[existing], token))
+                    {
+                        seen = true;
+                        break;
+                    }
+                }
+
+                if (!seen)
+                {
+                    buffer.Add(token);
+                }
+            }
+
+            sets[index] = [.. buffer];
         }
 
         return sets;
@@ -221,11 +246,11 @@ internal static class RealTreeMemoryBreakdown
         return builder.ToImmutable();
     }
 
-    private static ImmutableDictionary<string, ImmutableHashSet<string>> BuildTokensByPath(
+    private static ImmutableDictionary<string, ImmutableArray<string>> BuildTokensByPath(
         SearchItem[] items,
-        ImmutableHashSet<string>[] tokenSets)
+        ImmutableArray<string>[] tokenSets)
     {
-        var builder = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        var builder = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(PathComparer);
         for (var index = 0; index < items.Length; index++)
         {
             builder[items[index].FullPath] = tokenSets[index];
@@ -236,7 +261,7 @@ internal static class RealTreeMemoryBreakdown
 
     private static ImmutableDictionary<string, ImmutableHashSet<string>> BuildPathsByToken(
         SearchItem[] items,
-        ImmutableHashSet<string>[] tokenSets)
+        ImmutableArray<string>[] tokenSets)
     {
         var pathBuildersByToken = new Dictionary<string, ImmutableHashSet<string>.Builder>(PathComparer);
         for (var index = 0; index < items.Length; index++)

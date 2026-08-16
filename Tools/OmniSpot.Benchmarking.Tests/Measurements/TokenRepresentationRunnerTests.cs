@@ -32,6 +32,27 @@ public sealed class TokenRepresentationRunnerTests
             Assert.False(string.IsNullOrWhiteSpace(variant.Scope)));
     }
 
+    // Roller üretimle birlikte kayar: `array` üretim şekli olduktan sonra
+    // `hashset`'i hâlâ "üretim" diye etiketlemek okuyucuyu yanıltır. Üretim
+    // temsili yeniden değişirse bu test kırılıp etiketlerin güncellenmesini
+    // zorlar.
+    [Fact]
+    public void Run_LabelsArrayAsTheProductionRepresentation()
+    {
+        var comparison = RunComparison();
+
+        var scopes = comparison.Variants.ToDictionary(
+            variant => variant.Variant,
+            variant => variant.Scope,
+            StringComparer.Ordinal);
+        Assert.Contains("üretim", scopes["array"], StringComparison.Ordinal);
+        Assert.Contains("ImmutableArray", scopes["array"], StringComparison.Ordinal);
+        Assert.Contains("legacy", scopes["hashset"], StringComparison.Ordinal);
+        Assert.DoesNotContain("üretim", scopes["hashset"], StringComparison.Ordinal);
+        Assert.Contains("aday", scopes["pooled_array"], StringComparison.Ordinal);
+        Assert.Equal(scopes.Values.Distinct(StringComparer.Ordinal).Count(), scopes.Count);
+    }
+
     // Eşleştirme ancak sıra dengeliyse anlamlıdır: her temsil aynı sayıda
     // örnek almalı ve hiçbiri sistematik olarak ilk sırada olmamalı.
     [Fact]

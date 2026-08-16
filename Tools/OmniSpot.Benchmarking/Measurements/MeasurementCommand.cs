@@ -44,7 +44,9 @@ internal static class MeasurementCommand
         };
         var tokenRepresentationOption = new Option<bool>("--token-repr")
         {
-            Description = "_tokensByPath değer temsillerini eşleştirilmiş karşılaştırır."
+            Description =
+                "_tokensByPath değer temsillerini eşleştirilmiş karşılaştırır " +
+                "(hashset = legacy, array = üretim, pooled_array = aday)."
         };
         var roundsOption = IntegerOption("--rounds", 2);
         var allocationBarOption = new Option<double>("--allocation-bar")
