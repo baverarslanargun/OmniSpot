@@ -510,6 +510,7 @@ public sealed class SearchBehaviorTests
         Assert.Equal(2, results.Count);
         Assert.Equal(summerTicket.FullPath, results[0].FullPath);
         Assert.Equal(ticket.FullPath, results[1].FullPath);
+        Assert.True(results[0].Score > results[1].Score);
         Assert.DoesNotContain(results, result => result.FullPath == summerNoise.FullPath);
         Assert.DoesNotContain(results, result => result.FullPath == subtitleNoise.FullPath);
         Assert.DoesNotContain(results, result => result.FullPath == earlyTicket.FullPath);
