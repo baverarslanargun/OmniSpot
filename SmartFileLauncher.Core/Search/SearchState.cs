@@ -131,7 +131,7 @@ public sealed class SearchState
 
         var sourceItems = ToDistinctItems(nodes);
         var items = ImmutableDictionary.CreateBuilder<string, SearchItem>(PathComparer);
-        var pathsByToken = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        var pathBuildersByToken = new Dictionary<string, ImmutableHashSet<string>.Builder>(PathComparer);
         var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
 
         foreach (var item in sourceItems)
@@ -142,10 +142,20 @@ public sealed class SearchState
 
             foreach (var token in tokens)
             {
-                pathsByToken.TryGetValue(token, out var paths);
-                pathsByToken[token] = (paths ?? ImmutableHashSet.Create<string>(PathComparer))
-                    .Add(item.FullPath);
+                if (!pathBuildersByToken.TryGetValue(token, out var paths))
+                {
+                    paths = ImmutableHashSet.CreateBuilder<string>(PathComparer);
+                    pathBuildersByToken[token] = paths;
+                }
+
+                paths.Add(item.FullPath);
             }
+        }
+
+        var pathsByToken = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        foreach (var (token, paths) in pathBuildersByToken)
+        {
+            pathsByToken[token] = paths.ToImmutable();
         }
 
         return Create(items, pathsByToken, tokensByPath);

@@ -272,13 +272,10 @@ internal static class PhaseSplitRunner
                 state.ItemCount.ToString(CultureInfo.InvariantCulture));
         }
 
-        var tokens = replica.PathsByToken.Keys.Order(StringComparer.Ordinal).ToArray();
-        var step = Math.Max(1, tokens.Length / 200);
         var mismatchCount = 0;
-        for (var index = 0; index < tokens.Length; index += step)
+        foreach (var (token, paths) in replica.PathsByToken)
         {
-            var token = tokens[index];
-            if (state.Get(token).Count != replica.PathsByToken[token].Count)
+            if (!PostingsEqual(paths, state.Get(token)))
             {
                 mismatchCount++;
             }
@@ -287,20 +284,40 @@ internal static class PhaseSplitRunner
         if (mismatchCount > 0)
         {
             failures.Add(
-                "Örneklenen token'ların " +
-                mismatchCount.ToString(CultureInfo.InvariantCulture) +
-                " tanesinde replika ve üretim posting sayısı farklı.");
+                "Replika ile üretimin posting kümesi uyuşmayan token sayısı: " +
+                mismatchCount.ToString(CultureInfo.InvariantCulture));
         }
 
-        var paths = replica.Items.Keys.ToHashSet(PathComparer);
+        var itemPaths = replica.Items.Keys.ToHashSet(PathComparer);
         var parentLinkedItemCount = replica.Items.Values
-            .Count(item => item.ParentPath != null && paths.Contains(item.ParentPath));
+            .Count(item => item.ParentPath != null && itemPaths.Contains(item.ParentPath));
         var facts = new PhaseFixtureFacts(
             replica.Items.Count,
             replica.PathsByToken.Count,
             replica.PathsByToken.Values.Sum(set => (long)set.Count),
             parentLinkedItemCount);
         return (facts, failures);
+    }
+
+    private static bool PostingsEqual(
+        ImmutableHashSet<string> expected,
+        IReadOnlyCollection<SearchItem> actual)
+    {
+        if (expected.Count != actual.Count)
+        {
+            return false;
+        }
+
+        var seen = new HashSet<string>(PathComparer);
+        foreach (var item in actual)
+        {
+            if (!expected.Contains(item.FullPath) || !seen.Add(item.FullPath))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private static SearchItem ToItem(FileSystemNode node)
@@ -369,7 +386,7 @@ internal static class PhaseSplitRunner
     {
         var sourceItems = RunDistinct(nodes);
         var items = ImmutableDictionary.CreateBuilder<string, SearchItem>(PathComparer);
-        var pathsByToken = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        var pathBuildersByToken = new Dictionary<string, ImmutableHashSet<string>.Builder>(PathComparer);
         var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
         foreach (var item in sourceItems)
         {
@@ -378,10 +395,20 @@ internal static class PhaseSplitRunner
             tokensByPath[item.FullPath] = tokens;
             foreach (var token in tokens)
             {
-                pathsByToken.TryGetValue(token, out var paths);
-                pathsByToken[token] = (paths ?? ImmutableHashSet.Create<string>(PathComparer))
-                    .Add(item.FullPath);
+                if (!pathBuildersByToken.TryGetValue(token, out var paths))
+                {
+                    paths = ImmutableHashSet.CreateBuilder<string>(PathComparer);
+                    pathBuildersByToken[token] = paths;
+                }
+
+                paths.Add(item.FullPath);
             }
+        }
+
+        var pathsByToken = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
+        foreach (var (token, paths) in pathBuildersByToken)
+        {
+            pathsByToken[token] = paths.ToImmutable();
         }
 
         return new PostingsReplica(items, pathsByToken, tokensByPath);

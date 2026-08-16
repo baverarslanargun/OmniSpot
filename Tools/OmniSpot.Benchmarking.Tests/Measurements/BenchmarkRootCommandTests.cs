@@ -12,6 +12,8 @@ public sealed class BenchmarkRootCommandTests
             .Select(command => command.Name)
             .ToArray();
 
-        Assert.Equal(["profile", "pilot", "measure", "compare", "phases"], commandNames);
+        Assert.Equal(
+            ["profile", "pilot", "measure", "compare", "phases", "realtree"],
+            commandNames);
     }
 }
