@@ -9,9 +9,9 @@ namespace OmniSpot.Benchmarking.Measurements;
 internal static class MeasurementConstants
 {
     internal const int SchemaMajor = 1;
-    internal const int SchemaMinor = 1;
+    internal const int SchemaMinor = 2;
     internal const string ContractVersion = "0.1";
-    internal const string ToolVersion = "0.2.0";
+    internal const string ToolVersion = "0.3.0";
     internal const string FixtureGeneratorVersion = "1.0";
     internal const string MetricName = "publish.create.public";
     internal const string PercentileMethod = "nearest_rank";

@@ -84,11 +84,18 @@ güncel source ve yakın testlerden doğrulanmıştır.
 ikinci proje açılmaz.
 
 `realtree`, gerçek kullanıcı ağacını **yalnız bellekte** okuyup aday/baseline
-temsilleri eşleştirilmiş (ABBA) karşılaştırır ve `--breakdown` ile yayımlanan
-`SearchState`'in canlı ayak izini bileşenlerine ayırır. `§4` gizlilik
-sözleşmesinin tamamına tabidir: kök onayı zorunlu, yollar varsayılan olarak
-maskeli, kalıcı çıktıda ad/token/path yok, hata metinleri path taşımaz.
-Sonuçları tek makineye özeldir ve paylaşılabilir baseline sayılmaz.
+temsilleri eşleştirilmiş (ABBA) karşılaştırır; `--breakdown` ile yayımlanan
+`SearchState`'in canlı ayak izini bileşenlerine ayırır, `--token-repr` ile
+`_tokensByPath` değer temsillerinin marjinal kalıcı maliyetini eşleştirilmiş
+karşılaştırır. İki mod birlikte verilemez. `§4` gizlilik sözleşmesinin tamamına
+tabidir: kök onayı zorunlu, yollar varsayılan olarak maskeli, kalıcı çıktıda
+ad/token/path yok, hata metinleri path taşımaz. Sonuçları tek makineye özeldir
+ve paylaşılabilir baseline sayılmaz.
+
+`--token-repr` sayı üretmeden önce doğruluk kapısı çalıştırır: aday temsiller
+üretimin `OrdinalIgnoreCase` benzersiz küme semantiğini öğe öğe korumazsa sonuç
+kabul edilmez. Ölçülemeyen temsilin medyanı `null`'dır, yüzde değişimi
+üretilmez ve bu bir kabul hatası olarak raporlanır.
 
 ## 4. Gerçek ağaç profili gizlilik sözleşmesi
 
