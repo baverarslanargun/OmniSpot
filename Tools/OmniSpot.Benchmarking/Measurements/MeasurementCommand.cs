@@ -13,6 +13,176 @@ internal static class MeasurementCommand
         rootCommand.Subcommands.Add(CreateMeasureCommand());
         rootCommand.Subcommands.Add(CreateCompareCommand());
         rootCommand.Subcommands.Add(CreatePhasesCommand());
+        rootCommand.Subcommands.Add(CreateRealTreeCommand());
+    }
+
+    private static Command CreateRealTreeCommand()
+    {
+        var command = new Command(
+            "realtree",
+            "Gerçek ağaçta legacy/builder eşleştirilmiş karşılaştırması yapar; ad ve path yazmaz.");
+        var omnispotRootsOption = new Option<bool>("--omnispot-roots")
+        {
+            Description = "OmniSpot production kök seçimini kullanır."
+        };
+        var customRootsOption = new Option<string[]>("--root")
+        {
+            Description = "Taranacak custom kök. Birden çok kez verilebilir.",
+            AllowMultipleArgumentsPerToken = true
+        };
+        var yesOption = new Option<bool>("--yes")
+        {
+            Description = "Kök onayını etkileşimsiz kabul eder."
+        };
+        var showPathsOption = new Option<bool>("--show-paths")
+        {
+            Description = "Kök yollarını terminalde açık gösterir."
+        };
+        var breakdownOption = new Option<bool>("--breakdown")
+        {
+            Description = "A/B yerine yalnız SearchState canlı bellek dökümünü çıkarır."
+        };
+        var roundsOption = IntegerOption("--rounds", 2);
+        var allocationBarOption = new Option<double>("--allocation-bar")
+        {
+            Description = "Kapı: allocation en az bu yüzde kadar düşmeli.",
+            DefaultValueFactory = _ => 50d
+        };
+        var outputOption = new Option<string?>("--output")
+        {
+            Description = "Karşılaştırma JSON çıktı yolu."
+        };
+        command.Options.Add(omnispotRootsOption);
+        command.Options.Add(customRootsOption);
+        command.Options.Add(yesOption);
+        command.Options.Add(showPathsOption);
+        command.Options.Add(breakdownOption);
+        command.Options.Add(roundsOption);
+        command.Options.Add(allocationBarOption);
+        command.Options.Add(outputOption);
+        command.SetAction((parseResult, cancellationToken) => RunRealTreeAsync(
+            parseResult.GetValue(omnispotRootsOption),
+            parseResult.GetValue(customRootsOption) ?? Array.Empty<string>(),
+            parseResult.GetValue(yesOption),
+            parseResult.GetValue(showPathsOption),
+            parseResult.GetValue(breakdownOption),
+            parseResult.GetValue(roundsOption),
+            parseResult.GetValue(allocationBarOption),
+            parseResult.GetValue(outputOption),
+            cancellationToken));
+        return command;
+    }
+
+    private static async Task<int> RunRealTreeAsync(
+        bool includeOmniSpotRoots,
+        IReadOnlyList<string> customRoots,
+        bool assumeYes,
+        bool showPaths,
+        bool breakdownOnly,
+        int rounds,
+        double allocationBarPercent,
+        string? outputPath,
+        CancellationToken cancellationToken)
+    {
+        if (rounds is < 1 or > 8)
+        {
+            Console.Error.WriteLine("--rounds 1 ile 8 arasında olmalı.");
+            return 2;
+        }
+
+        IReadOnlyList<ProfileRootRequest> roots;
+        try
+        {
+            roots = ProfileRootResolver.Resolve(includeOmniSpotRoots, customRoots);
+        }
+        catch (ArgumentException)
+        {
+            Console.Error.WriteLine("En az bir kök geçerli değil.");
+            return 2;
+        }
+
+        if (roots.Count == 0)
+        {
+            Console.Error.WriteLine("--omnispot-roots veya en az bir --root gerekli.");
+            return 2;
+        }
+
+        Console.Out.Write(ProfileCommand.FormatRootPreview(roots, showPaths));
+        if (!assumeYes && !ConfirmRealTree())
+        {
+            Console.Error.WriteLine("Gerçek ağaç karşılaştırması başlatılmadı.");
+            return 3;
+        }
+
+        var environmentCapture = BeginEnvironmentCapture();
+        if (!ValidateProfilerLaneEnvironment(environmentCapture.StartEnvironment))
+        {
+            return 3;
+        }
+
+        try
+        {
+            var (nodes, enumerationMilliseconds) = RealTreeLoader.Load(roots, cancellationToken);
+            if (nodes.Count == 0)
+            {
+                Console.Error.WriteLine("Kökler altında hiç öğe bulunamadı.");
+                return 4;
+            }
+
+            if (breakdownOnly)
+            {
+                var breakdown = RealTreeMemoryBreakdown.Run(
+                    nodes,
+                    environmentCapture,
+                    cancellationToken);
+                var breakdownOutput = ResolveOutput(outputPath, "realtree", "memory");
+                await MeasurementJson.WriteAsync(breakdownOutput, breakdown, cancellationToken);
+                Console.Out.Write(MemoryBreakdownFormatter.Format(breakdown));
+                Console.Out.WriteLine("Bellek dökümü JSON çıktısı yazıldı (ad/path içermez).");
+                return 0;
+            }
+
+            var comparison = RealTreeComparisonRunner.Run(
+                nodes,
+                rounds,
+                allocationBarPercent,
+                enumerationMilliseconds,
+                TimeSpan.FromSeconds(270),
+                environmentCapture,
+                cancellationToken);
+            var resolvedOutput = ResolveOutput(outputPath, "realtree", "realtree");
+            await MeasurementJson.WriteAsync(resolvedOutput, comparison, cancellationToken);
+            Console.Out.Write(RealTreeSummaryFormatter.Format(comparison));
+            Console.Out.WriteLine("Karşılaştırma JSON çıktısı yazıldı (ad/path içermez).");
+            return comparison.AcceptanceFailures.Count == 0 ? 0 : 5;
+        }
+        catch (OperationCanceledException)
+        {
+            Console.Error.WriteLine("Gerçek ağaç karşılaştırması iptal edildi.");
+            return 130;
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            Console.Error.WriteLine(
+                "Gerçek ağaç karşılaştırması tamamlanamadı. Hata sınıfı: " +
+                exception.GetType().Name + ". Ayrıntı, path içerebileceği için yazılmadı.");
+            return 4;
+        }
+    }
+
+    private static bool ConfirmRealTree()
+    {
+        if (Console.IsInputRedirected)
+        {
+            Console.Error.WriteLine("Etkileşimsiz çalıştırmada açık onay için --yes kullanın.");
+            return false;
+        }
+
+        Console.Out.Write("Gerçek ağaç bellekte okunacak, hiçbir ad yazılmayacak. Başlayayım mı? [e/H] ");
+        var answer = Console.ReadLine();
+        return string.Equals(answer, "e", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(answer, "evet", StringComparison.OrdinalIgnoreCase);
     }
 
     private static Command CreatePhasesCommand()

@@ -79,9 +79,16 @@ güncel source ve yakın testlerden doğrulanmıştır.
   kullanıcı tarafından seçilen geçici dizin.
 
 İlk uygulama tek executable ve alt komutlardan oluşur: `profile`, `pilot`,
-`measure`, `compare`, `phases`, `corpus`, `run` ve `verify`. Mikro ölçüm
-`measure` komutunun içindedir; gerçek bir izolasyon sorunu ölçülmeden ikinci
-proje açılmaz.
+`measure`, `compare`, `phases`, `realtree`, `corpus`, `run` ve `verify`. Mikro
+ölçüm `measure` komutunun içindedir; gerçek bir izolasyon sorunu ölçülmeden
+ikinci proje açılmaz.
+
+`realtree`, gerçek kullanıcı ağacını **yalnız bellekte** okuyup aday/baseline
+temsilleri eşleştirilmiş (ABBA) karşılaştırır ve `--breakdown` ile yayımlanan
+`SearchState`'in canlı ayak izini bileşenlerine ayırır. `§4` gizlilik
+sözleşmesinin tamamına tabidir: kök onayı zorunlu, yollar varsayılan olarak
+maskeli, kalıcı çıktıda ad/token/path yok, hata metinleri path taşımaz.
+Sonuçları tek makineye özeldir ve paylaşılabilir baseline sayılmaz.
 
 ## 4. Gerçek ağaç profili gizlilik sözleşmesi
 

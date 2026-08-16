@@ -44,7 +44,7 @@ internal sealed class ProfileTestFixture : IDisposable
         }
     }
 
-    private static ProfileEnvironment CreateEnvironment() =>
+    internal static ProfileEnvironment CreateEnvironment(IReadOnlyList<string>? labels = null) =>
         new(
             "test-os",
             "test-framework",
@@ -71,5 +71,5 @@ internal sealed class ProfileTestFixture : IDisposable
             ProcessorFrequencyStartMhz: 3120,
             ProcessorFrequencyEndMhz: 3130,
             ProcessorFrequencyDriftPercent: 0.32,
-            Labels: Array.Empty<string>());
+            Labels: labels ?? Array.Empty<string>());
 }
