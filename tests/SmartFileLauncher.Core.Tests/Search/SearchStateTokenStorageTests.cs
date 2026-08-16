@@ -58,22 +58,23 @@ public sealed class SearchStateTokenStorageTests
     }
 
     /// <summary>
-    /// **Bilinen boşluk, düzeltme `R8`'dedir.** İndeksleme `tr-TR` ile küçültür
-    /// (`I` → `ı`), arama ise `OrdinalIgnoreCase` ile karşılaştırır ve bu
-    /// karşılaştırma `ı` ile `i`'yi eşitlemez. Sonuç: `ISTANBUL-RAPOR.txt`
-    /// "istanbul" aranınca **bulunmaz**, yalnız noktasız "ıstanbul" bulur.
-    /// Sözleşme `§2` bunu açık test boşluğu olarak kaydetmişti; test o boşluğu
-    /// mevcut davranışa sabitler, doğru davranış olduğu için değil. `R8` bunu
-    /// düzelttiğinde bu test bilerek kırılmalı ve güncellenmelidir.
+    /// Eskiden bilinen boşluktu: indeksleme `tr-TR` ile küçültüyor (`I` → `ı`),
+    /// arama `OrdinalIgnoreCase` ile karşılaştırıyor ve o `ı` ile `i`'yi
+    /// eşitlemiyordu; `ISTANBUL-RAPOR.txt` "istanbul" aranınca bulunmuyordu.
+    /// Katlama bunu kapattı: aksansız biçim **aslının yanına** ikinci token
+    /// olarak yazılıyor, bu yüzden her iki yazım da dosyayı buluyor ve
+    /// noktasız arama hâlâ yalnız kendi aslını hedefleyebiliyor.
     /// </summary>
     [Fact]
-    public void TurkishDottedAndDotlessIStayDistinctTokens_KnownGap()
+    public void TurkishDottedAndDotlessIBothResolveToTheSameFile()
     {
         var state = CreateState();
 
+        // Noktalı arama artık iki dosyayı da buluyor — asıl düzeltme bu.
         Assert.Equal(
-            [@"C:\Data\Arsiv\istanbul-rapor.txt"],
+            [@"C:\Data\Arsiv\istanbul-rapor.txt", @"C:\Data\ISTANBUL-RAPOR.txt"],
             Sorted(state.Get("istanbul").Select(item => item.FullPath)));
+        // Aslı silinmedi: noktasız biçim yalnız kendi dosyasını hedefliyor.
         Assert.Equal(
             [@"C:\Data\ISTANBUL-RAPOR.txt"],
             Sorted(state.Get("\u0131stanbul").Select(item => item.FullPath)));
