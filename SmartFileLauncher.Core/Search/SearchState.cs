@@ -289,7 +289,7 @@ public sealed class SearchState
         }
 
         var childrenByPath = _childrenByPath;
-        if (item.ParentPath != null && items.ContainsKey(item.ParentPath))
+        if (item.ParentPath != null)
         {
             childrenByPath.TryGetValue(item.ParentPath, out var children);
             childrenByPath = childrenByPath.SetItem(
@@ -371,7 +371,7 @@ public sealed class SearchState
         ImmutableDictionary<string, ImmutableHashSet<string>>.Builder pathsByToken,
         ImmutableDictionary<string, ImmutableArray<string>>.Builder tokensByPath)
     {
-        var childrenByPath = BuildChildrenByPath(items.Values, items.Keys);
+        var childrenByPath = BuildChildrenByPath(items.Values);
         return new SearchState(
             items.ToImmutable(),
             pathsByToken.ToImmutable(),
@@ -380,14 +380,12 @@ public sealed class SearchState
     }
 
     private static ImmutableDictionary<string, ImmutableHashSet<string>> BuildChildrenByPath(
-        IEnumerable<SearchItem> items,
-        IEnumerable<string> itemPaths)
+        IEnumerable<SearchItem> items)
     {
-        var paths = itemPaths.ToHashSet(PathComparer);
         var childrenByPath = ImmutableDictionary.CreateBuilder<string, ImmutableHashSet<string>>(PathComparer);
         foreach (var item in items)
         {
-            if (item.ParentPath == null || !paths.Contains(item.ParentPath))
+            if (item.ParentPath == null)
             {
                 continue;
             }
