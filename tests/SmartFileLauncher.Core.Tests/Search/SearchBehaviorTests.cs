@@ -686,6 +686,69 @@ public sealed class SearchBehaviorTests
         Assert.Contains(query.SearchTerms, term => term.Text == "bütçe");
     }
 
+    [Fact]
+    public void AdvancedSearchAppliesExactFolderHintAndContextSignalsTogether()
+    {
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var hintedExact = new FileSystemNode(
+            "bilet.pdf",
+            @"C:\Root\downloads\bilet.pdf",
+            false);
+        var plainExact = new FileSystemNode(
+            "bilet.pdf",
+            @"C:\Root\arsiv\bilet.pdf",
+            false);
+        var contextPartial = new FileSystemNode(
+            "bilet-yaz.pdf",
+            @"C:\Root\arsiv\bilet-yaz.pdf",
+            false);
+        var plainPartial = new FileSystemNode(
+            "bilet-kis.pdf",
+            @"C:\Root\arsiv\bilet-kis.pdf",
+            false);
+        var engine = CreateAdvancedEngine(
+            root,
+            hintedExact,
+            plainExact,
+            contextPartial,
+            plainPartial);
+        var query = new StructuredQuery
+        {
+            SearchTerms =
+            [
+                new()
+                {
+                    Text = "bilet",
+                    Category = SearchTermCategory.Exact,
+                    Role = SearchTermRole.Anchor,
+                    AnchorGroup = 0,
+                    Weight = 1
+                },
+                new()
+                {
+                    Text = "yaz",
+                    Category = SearchTermCategory.Related,
+                    Role = SearchTermRole.Context,
+                    AnchorGroup = -1,
+                    Weight = 0.4
+                }
+            ],
+            FolderHints = new List<FolderHint>
+            {
+                new() { Name = "Downloads", Weight = 1.4 }
+            }
+        };
+
+        var results = engine.Search(query);
+
+        double ScoreOf(FileSystemNode node) =>
+            results.Single(result => result.FullPath == node.FullPath).Score;
+
+        Assert.Equal(100, ScoreOf(hintedExact) - ScoreOf(plainExact), 6);
+        Assert.Equal(75, ScoreOf(plainExact) - ScoreOf(plainPartial), 6);
+        Assert.Equal(12, ScoreOf(contextPartial) - ScoreOf(plainPartial), 6);
+    }
+
     private static void AddToIndex(
         InvertedIndex index,
         ITokenizer tokenizer,

@@ -199,6 +199,7 @@ public class AdvancedSearchEngine
             finalResults = ApplySizeFilter(finalResults, query.SizeFilter, cancellationToken);
         }
 
+        var scoringContext = CreateScoringContext(query, searchTerms);
         var scoredResults = new List<SearchResult>(finalResults.Count);
         foreach (var (node, matches) in finalResults)
         {
@@ -207,7 +208,7 @@ public class AdvancedSearchEngine
             {
                 Name = node.Name,
                 FullPath = node.FullPath,
-                Score = CalculateScore(query, node, matches, searchTerms, cancellationToken),
+                Score = CalculateScore(query, node, matches, scoringContext, cancellationToken),
                 IsDirectory = node.IsDirectory
             });
         }
@@ -593,11 +594,46 @@ public class AdvancedSearchEngine
                    (!filter.MaxMb.HasValue || sizeMb <= filter.MaxMb.Value);
         }).ToList();
 
+    private sealed record QueryScoringContext(
+        IReadOnlyList<(string Normalized, double Weight)> ExactAndPhraseTerms,
+        IReadOnlyList<(string Lowered, double Weight)> FolderHints,
+        Dictionary<string, double> ContextTokenWeights);
+
+    private QueryScoringContext CreateScoringContext(
+        StructuredQuery query,
+        IReadOnlyList<SearchTerm> searchTerms)
+    {
+        var exactAndPhraseTerms = searchTerms
+            .Where(term =>
+                term.Role == SearchTermRole.Phrase ||
+                (term.Role == SearchTermRole.Anchor && term.Category == SearchTermCategory.Exact))
+            .Select(term => (Normalized: NormalizeForComparison(term.Text), term.Weight))
+            .ToList();
+
+        var folderHints = query.FolderHints
+            .Select(hint => (Lowered: hint.Name.ToLowerInvariant(), Weight: Math.Clamp(hint.Weight, 0, 1)))
+            .ToList();
+
+        var contextTokenWeights = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        foreach (var term in searchTerms.Where(term => term.Role == SearchTermRole.Context))
+        {
+            foreach (var token in _tokenizer.Tokenize(term.Text))
+            {
+                if (!contextTokenWeights.TryGetValue(token, out var current) || term.Weight > current)
+                {
+                    contextTokenWeights[token] = term.Weight;
+                }
+            }
+        }
+
+        return new QueryScoringContext(exactAndPhraseTerms, folderHints, contextTokenWeights);
+    }
+
     private double CalculateScore(
         StructuredQuery query,
         SearchItem node,
         Dictionary<string, double> matches,
-        IReadOnlyList<SearchTerm> searchTerms,
+        QueryScoringContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -611,15 +647,15 @@ public class AdvancedSearchEngine
                 .Sum(match => match.Value * 60);
         }
 
-        if (query.FolderHints.Any())
+        if (context.FolderHints.Count > 0)
         {
             var pathLower = node.FullPath.ToLowerInvariant();
-            foreach (var hint in query.FolderHints)
+            foreach (var (lowered, weight) in context.FolderHints)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (pathLower.Contains(hint.Name.ToLowerInvariant()))
+                if (pathLower.Contains(lowered))
                 {
-                    score += 100 * Math.Clamp(hint.Weight, 0, 1);
+                    score += 100 * weight;
                 }
             }
         }
@@ -651,38 +687,27 @@ public class AdvancedSearchEngine
 
         var fileName = Path.GetFileNameWithoutExtension(node.Name);
         var normalizedName = NormalizeForComparison(fileName);
-        foreach (var term in searchTerms.Where(term =>
-                     term.Role == SearchTermRole.Phrase ||
-                     (term.Role == SearchTermRole.Anchor && term.Category == SearchTermCategory.Exact)))
+        foreach (var (normalizedTerm, weight) in context.ExactAndPhraseTerms)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var normalizedTerm = NormalizeForComparison(term.Text);
             if (normalizedName == normalizedTerm)
             {
-                score += 150 * term.Weight;
+                score += 150 * weight;
             }
             else if (normalizedTerm.Length > 1 && normalizedName.Contains(normalizedTerm))
             {
-                score += 75 * term.Weight;
+                score += 75 * weight;
             }
         }
 
-        var nameTokens = _tokenizer.Tokenize(fileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var contextTokenWeights = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        foreach (var term in searchTerms.Where(term => term.Role == SearchTermRole.Context))
+        if (context.ContextTokenWeights.Count > 0)
         {
-            foreach (var token in _tokenizer.Tokenize(term.Text))
-            {
-                if (!contextTokenWeights.TryGetValue(token, out var current) || term.Weight > current)
-                {
-                    contextTokenWeights[token] = term.Weight;
-                }
-            }
+            var nameTokens = _tokenizer.Tokenize(fileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            score += context.ContextTokenWeights
+                .Where(item => nameTokens.Contains(item.Key))
+                .Sum(item => item.Value * 30);
         }
 
-        score += contextTokenWeights
-            .Where(item => nameTokens.Contains(item.Key))
-            .Sum(item => item.Value * 30);
         return score + node.OpenCount * 2;
     }
 
