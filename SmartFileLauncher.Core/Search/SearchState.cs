@@ -21,23 +21,30 @@ public sealed class SearchState
     private readonly ImmutableDictionary<string, ImmutableArray<string>> _tokensByPath;
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _childrenByPath;
 
+    private readonly int _missingParentCount;
+
     private SearchState(
         ImmutableDictionary<string, SearchItem> itemsByPath,
         ImmutableDictionary<string, ImmutableHashSet<string>> pathsByToken,
         ImmutableDictionary<string, ImmutableArray<string>> tokensByPath,
-        ImmutableDictionary<string, ImmutableHashSet<string>> childrenByPath)
+        ImmutableDictionary<string, ImmutableHashSet<string>> childrenByPath,
+        int missingParentCount)
     {
         _itemsByPath = itemsByPath;
         _pathsByToken = pathsByToken;
         _tokensByPath = tokensByPath;
         _childrenByPath = childrenByPath;
+        _missingParentCount = missingParentCount;
     }
 
     public static SearchState Empty { get; } = new(
         ImmutableDictionary.Create<string, SearchItem>(PathComparer),
         ImmutableDictionary.Create<string, ImmutableHashSet<string>>(PathComparer),
         ImmutableDictionary.Create<string, ImmutableArray<string>>(PathComparer),
-        ImmutableDictionary.Create<string, ImmutableHashSet<string>>(PathComparer));
+        ImmutableDictionary.Create<string, ImmutableHashSet<string>>(PathComparer),
+        0);
+
+    internal int MissingParentCount => _missingParentCount;
 
     public int ItemCount => _itemsByPath.Count;
 
@@ -255,15 +262,10 @@ public sealed class SearchState
                              string.Equals(path, pathRoot, StringComparison.OrdinalIgnoreCase)
             ? pathRoot
             : path.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var descendantPrefix = normalizedPath + Path.DirectorySeparatorChar;
-        var alternateDescendantPrefix = normalizedPath + Path.AltDirectorySeparatorChar;
-        var pathsToRemove = _itemsByPath.Keys
-            .Where(candidate =>
-                string.Equals(candidate, normalizedPath, StringComparison.OrdinalIgnoreCase) ||
-                candidate.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase) ||
-                candidate.StartsWith(alternateDescendantPrefix, StringComparison.OrdinalIgnoreCase))
-            .OrderByDescending(candidate => candidate.Length)
-            .ToArray();
+
+        var pathsToRemove = _missingParentCount == 0
+            ? CollectSubtreeByWalk(normalizedPath)
+            : CollectSubtreeByScan(normalizedPath);
 
         var state = this;
         foreach (var pathToRemove in pathsToRemove)
@@ -272,6 +274,57 @@ public sealed class SearchState
         }
 
         return state;
+    }
+
+    private List<string> CollectSubtreeByWalk(string normalizedPath)
+    {
+        var pending = new Stack<string>();
+        var visited = new HashSet<string>(PathComparer);
+        var pathsToRemove = new List<string>();
+        pending.Push(normalizedPath);
+        while (pending.Count > 0)
+        {
+            var candidate = pending.Pop();
+            if (!visited.Add(candidate))
+            {
+                continue;
+            }
+
+            if (_itemsByPath.ContainsKey(candidate))
+            {
+                pathsToRemove.Add(candidate);
+            }
+
+            foreach (var childPath in GetChildren(candidate))
+            {
+                pending.Push(childPath);
+            }
+        }
+
+        pathsToRemove.Reverse();
+        return pathsToRemove;
+    }
+
+    private List<string> CollectSubtreeByScan(string normalizedPath)
+    {
+        var endsWithSeparator =
+            normalizedPath.EndsWith(Path.DirectorySeparatorChar) ||
+            normalizedPath.EndsWith(Path.AltDirectorySeparatorChar);
+        var descendantPrefix = endsWithSeparator
+            ? normalizedPath
+            : normalizedPath + Path.DirectorySeparatorChar;
+        var alternateDescendantPrefix = endsWithSeparator
+            ? null
+            : normalizedPath + Path.AltDirectorySeparatorChar;
+
+        return _itemsByPath.Keys
+            .Where(candidate =>
+                string.Equals(candidate, normalizedPath, StringComparison.OrdinalIgnoreCase) ||
+                candidate.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase) ||
+                (alternateDescendantPrefix != null &&
+                 candidate.StartsWith(alternateDescendantPrefix, StringComparison.OrdinalIgnoreCase)))
+            .OrderByDescending(candidate => candidate.Length)
+            .ToList();
     }
 
     private SearchState WithItem(
@@ -297,11 +350,30 @@ public sealed class SearchState
                 (children ?? ImmutableHashSet.Create<string>(PathComparer)).Add(item.FullPath));
         }
 
+        var missingParentCount = _missingParentCount;
+        if (_itemsByPath.TryGetValue(item.FullPath, out var previous))
+        {
+            if (previous.ParentPath != null && !_itemsByPath.ContainsKey(previous.ParentPath))
+            {
+                missingParentCount--;
+            }
+        }
+        else if (_childrenByPath.TryGetValue(item.FullPath, out var waiting))
+        {
+            missingParentCount -= waiting.Count;
+        }
+
+        if (item.ParentPath != null && !items.ContainsKey(item.ParentPath))
+        {
+            missingParentCount++;
+        }
+
         return new SearchState(
             items,
             pathsByToken,
             _tokensByPath.SetItem(item.FullPath, tokens),
-            childrenByPath);
+            childrenByPath,
+            missingParentCount);
     }
 
     private SearchState WithoutPath(string path)
@@ -337,11 +409,23 @@ public sealed class SearchState
                 : childrenByPath.SetItem(item.ParentPath, updatedChildren);
         }
 
+        var missingParentCount = _missingParentCount;
+        if (item.ParentPath != null && !_itemsByPath.ContainsKey(item.ParentPath))
+        {
+            missingParentCount--;
+        }
+
+        if (_childrenByPath.TryGetValue(path, out var orphaned))
+        {
+            missingParentCount += orphaned.Count;
+        }
+
         return new SearchState(
             _itemsByPath.Remove(path),
             pathsByToken,
             _tokensByPath.Remove(path),
-            childrenByPath);
+            childrenByPath,
+            missingParentCount);
     }
 
     private IReadOnlyCollection<SearchItem> GetItemsForPaths(
@@ -372,11 +456,21 @@ public sealed class SearchState
         ImmutableDictionary<string, ImmutableArray<string>>.Builder tokensByPath)
     {
         var childrenByPath = BuildChildrenByPath(items.Values);
+        var missingParentCount = 0;
+        foreach (var (parentPath, children) in childrenByPath)
+        {
+            if (!items.ContainsKey(parentPath))
+            {
+                missingParentCount += children.Count;
+            }
+        }
+
         return new SearchState(
             items.ToImmutable(),
             pathsByToken.ToImmutable(),
             tokensByPath.ToImmutable(),
-            childrenByPath);
+            childrenByPath,
+            missingParentCount);
     }
 
     private static ImmutableDictionary<string, ImmutableHashSet<string>> BuildChildrenByPath(
