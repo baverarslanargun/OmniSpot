@@ -84,6 +84,13 @@ public class IndexManager : IDisposable
 
     public InvertedIndex InvertedIndex => _invertedIndex;
     public SearchState CurrentSearchState => Volatile.Read(ref _publishedSearchState);
+    internal IReadOnlyList<KeyValuePair<string, FileSystemNode>> IndexedEntries {
+        get {
+            lock (_lock) {
+                return _pathToNode.ToList();
+            }
+        }
+    }
     public IReadOnlyDictionary<string, FileMetadata> MetadataMap {
         get {
             lock (_lock) {
@@ -151,12 +158,14 @@ public class IndexManager : IDisposable
                        cachedRoot.Equals(newRootsKey, StringComparison.OrdinalIgnoreCase) &&
                        _db.GetFileCount() > 0;
 
+        var loadedFromCache = false;
         if (hasCache)
         {
             ReportProgress("Önbellekten yükleniyor...", 0, 0, 0);
-            await LoadFromCacheMultiAsync(paths, ct);
+            loadedFromCache = await LoadFromCacheMultiAsync(paths, ct);
         }
-        else
+
+        if (!loadedFromCache)
         {
             ReportProgress("İlk kurulum - dosyalar taranıyor...", 0, 0, 0);
             await BootstrapScanMultiAsync(paths, ct);
@@ -604,7 +613,7 @@ public class IndexManager : IDisposable
         ReportProgress("Önbellek yüklendi", 100, _invertedIndex.NodeCount, sw.ElapsedMilliseconds);
     }
 
-    private async Task LoadFromCacheMultiAsync(List<string> rootPaths, CancellationToken ct)
+    private async Task<bool> LoadFromCacheMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
         var sw = Stopwatch.StartNew();
 
@@ -613,7 +622,7 @@ public class IndexManager : IDisposable
             ResetInMemoryIndex();
         }
 
-        await Task.Run(() =>
+        var accepted = await Task.Run(() =>
         {
             _rootNode = new FileSystemNode("Root", "", true);
 
@@ -636,6 +645,8 @@ public class IndexManager : IDisposable
             foreach (var dir in _db.GetAllDirectories())
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (!IsCanonicalIndexedPath(dir.FullPath)) return false;
 
                 if (rootPathNodes.TryGetValue(dir.FullPath, out var existingRootNode))
                 {
@@ -680,6 +691,8 @@ public class IndexManager : IDisposable
             foreach (var file in _db.GetAllFiles())
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (!IsCanonicalIndexedPath(file.FullPath)) return false;
 
                 var node = new FileSystemNode(file.FileName, file.FullPath, false)
                 {
@@ -728,10 +741,24 @@ public class IndexManager : IDisposable
                     ReportProgress($"Önbellek yükleniyor: {fileCount}/{totalFiles}", pct, fileCount, 0);
                 }
             }
+
+            return true;
         }, ct);
 
         sw.Stop();
+
+        if (!accepted)
+        {
+            lock (_lock)
+            {
+                ResetInMemoryIndex();
+            }
+
+            return false;
+        }
+
         ReportProgress("Önbellek yüklendi", 100, _invertedIndex.NodeCount, sw.ElapsedMilliseconds);
+        return true;
     }
 
     #endregion
@@ -1817,8 +1844,7 @@ public class IndexManager : IDisposable
         var nodesToRemove = _pathToNode.Values
             .Where(node =>
                 ReferenceEquals(node, rootNode) ||
-                NormalizeIndexedPath(node.FullPath)
-                    .StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
+                node.FullPath.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
             .OrderByDescending(node => node.FullPath.Length)
             .ToList();
 
@@ -2000,6 +2026,11 @@ public class IndexManager : IDisposable
         }
 
         GC.SuppressFinalize(this);
+    }
+
+    internal static bool IsCanonicalIndexedPath(string path)
+    {
+        return string.Equals(path, NormalizeIndexedPath(path), StringComparison.Ordinal);
     }
 
     private static string NormalizeIndexedPath(string path)

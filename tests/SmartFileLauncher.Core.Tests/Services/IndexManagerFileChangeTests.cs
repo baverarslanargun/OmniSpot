@@ -325,4 +325,67 @@ public sealed class IndexManagerFileChangeTests
             manager.Dispose();
         }
     }
+
+    [Fact]
+    public async Task DeletedSubtreeClearsEveryLayerAndKeepsPrefixSibling()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        var target = workspace.CreateDirectory(Path.Combine("root", "alpha-target"));
+        var nested = workspace.CreateDirectory(Path.Combine("root", "alpha-target", "deep"));
+        var targetFile = workspace.CreateFile(Path.Combine("root", "alpha-target", "zetamark-one.txt"));
+        var nestedFile = workspace.CreateFile(
+            Path.Combine("root", "alpha-target", "deep", "zetamark-two.txt"));
+        var siblingFile = workspace.CreateFile(
+            Path.Combine("root", "alpha-target-sibling", "zetamark-keep.txt"));
+
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1);
+        var manager = new IndexManager(database, watcher);
+
+        try
+        {
+            await manager.InitializeAsync(root);
+            watcher.Stop();
+
+            var before = manager.CreateSearchState();
+            Assert.Equal(3, before.Get("zetamark").Count);
+
+            Directory.Delete(target, recursive: true);
+            manager.ApplyFileChange(new FileChangeEvent
+            {
+                ChangeType = FileChangeType.Deleted,
+                FullPath = target,
+                IsDirectory = true
+            });
+
+            Assert.Null(manager.GetNode(target));
+            Assert.Null(manager.GetNode(nested));
+            Assert.Null(manager.GetNode(targetFile));
+            Assert.Null(manager.GetNode(nestedFile));
+
+            Assert.False(manager.MetadataMap.ContainsKey(targetFile));
+            Assert.False(manager.MetadataMap.ContainsKey(nestedFile));
+            Assert.False(manager.InvertedIndex.Contains(targetFile));
+            Assert.False(manager.InvertedIndex.Contains(nestedFile));
+
+            Assert.Null(database.GetDirectoryByPath(target));
+            Assert.Null(database.GetDirectoryByPath(nested));
+            Assert.Null(database.GetFileByPath(targetFile));
+            Assert.Null(database.GetFileByPath(nestedFile));
+
+            var after = manager.CurrentSearchState;
+            var survivors = after.Get("zetamark");
+            Assert.Single(survivors);
+            Assert.Contains(survivors, item =>
+                string.Equals(item.FullPath, siblingFile, StringComparison.OrdinalIgnoreCase));
+
+            Assert.NotNull(manager.GetNode(siblingFile));
+            Assert.NotNull(database.GetFileByPath(siblingFile));
+        }
+        finally
+        {
+            manager.Dispose();
+        }
+    }
 }
