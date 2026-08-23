@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices;
 using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Utilities;
@@ -45,6 +46,9 @@ public sealed class SearchState
         0);
 
     internal int MissingParentCount => _missingParentCount;
+
+    internal ImmutableArray<string> TokensFor(string path) =>
+        _tokensByPath.TryGetValue(path, out var tokens) ? tokens : ImmutableArray<string>.Empty;
 
     public int ItemCount => _itemsByPath.Count;
 
@@ -138,7 +142,13 @@ public sealed class SearchState
 
     public static SearchState Create(
         IEnumerable<FileSystemNode> nodes,
-        ITokenizer tokenizer)
+        ITokenizer tokenizer) =>
+        Create(nodes, tokenizer, shareTokens: true);
+
+    internal static SearchState Create(
+        IEnumerable<FileSystemNode> nodes,
+        ITokenizer tokenizer,
+        bool shareTokens)
     {
         ArgumentNullException.ThrowIfNull(nodes);
         ArgumentNullException.ThrowIfNull(tokenizer);
@@ -146,11 +156,14 @@ public sealed class SearchState
         var sourceItems = ToDistinctItems(nodes);
         var items = ImmutableDictionary.CreateBuilder<string, SearchItem>(PathComparer);
         var pathBuildersByToken = new Dictionary<string, ImmutableHashSet<string>.Builder>(PathComparer);
+        var canonicalTokens = shareTokens
+            ? new Dictionary<string, string>(PathComparer)
+            : null;
         var tokensByPath = ImmutableDictionary.CreateBuilder<string, ImmutableArray<string>>(PathComparer);
 
         foreach (var item in sourceItems)
         {
-            var tokens = Tokenize(item.Name, tokenizer);
+            var tokens = Tokenize(item.Name, tokenizer, canonicalTokens);
             items[item.FullPath] = item;
             tokensByPath[item.FullPath] = tokens;
 
@@ -333,12 +346,34 @@ public sealed class SearchState
     {
         var items = _itemsByPath.SetItem(item.FullPath, item);
         var pathsByToken = _pathsByToken;
-        foreach (var token in tokens)
+        var canonicalTokens = tokens;
+        string[]? rewritten = null;
+
+        for (var index = 0; index < tokens.Length; index++)
         {
+            var token = tokens[index];
+            if (pathsByToken.TryGetKey(token, out var canonical) &&
+                !ReferenceEquals(canonical, token))
+            {
+                if (rewritten == null)
+                {
+                    rewritten = new string[tokens.Length];
+                    tokens.CopyTo(rewritten);
+                }
+
+                rewritten[index] = canonical;
+                token = canonical;
+            }
+
             pathsByToken.TryGetValue(token, out var paths);
             pathsByToken = pathsByToken.SetItem(
                 token,
                 (paths ?? ImmutableHashSet.Create<string>(PathComparer)).Add(item.FullPath));
+        }
+
+        if (rewritten != null)
+        {
+            canonicalTokens = ImmutableCollectionsMarshal.AsImmutableArray(rewritten);
         }
 
         var childrenByPath = _childrenByPath;
@@ -371,7 +406,7 @@ public sealed class SearchState
         return new SearchState(
             items,
             pathsByToken,
-            _tokensByPath.SetItem(item.FullPath, tokens),
+            _tokensByPath.SetItem(item.FullPath, canonicalTokens),
             childrenByPath,
             missingParentCount);
     }
@@ -506,14 +541,28 @@ public sealed class SearchState
     /// </summary>
     private static ImmutableArray<string> Tokenize(
         string value,
-        ITokenizer tokenizer)
+        ITokenizer tokenizer,
+        Dictionary<string, string>? canonicalTokens = null)
     {
         var tokens = new List<string>();
         foreach (var token in tokenizer.Tokenize(value))
         {
-            if (!ContainsToken(tokens, token))
+            var canonical = token;
+            if (canonicalTokens != null)
             {
-                tokens.Add(token);
+                if (canonicalTokens.TryGetValue(token, out var existing))
+                {
+                    canonical = existing;
+                }
+                else
+                {
+                    canonicalTokens[token] = token;
+                }
+            }
+
+            if (!ContainsToken(tokens, canonical))
+            {
+                tokens.Add(canonical);
             }
         }
 

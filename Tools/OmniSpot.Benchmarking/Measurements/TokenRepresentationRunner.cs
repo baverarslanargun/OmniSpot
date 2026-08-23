@@ -55,8 +55,8 @@ internal sealed record TokenRepresentationComparison(
 /// kullanır.
 ///
 /// Roller: `hashset` legacy baseline (dizi temsilinden önceki üretim),
-/// `array` **üretimin bugünkü şekli**, `pooled_array` ise henüz uygulanmamış
-/// token tekilleştirme adayı.
+/// `array` token tekilleştirmesinden önceki üretim, `pooled_array`
+/// **üretimin bugünkü şekli**.
 ///
 /// Ölçümden önce doğruluk kapısı çalışır: her temsil legacy `hashset`
 /// referansının `OrdinalIgnoreCase` benzersiz küme semantiğini öğe öğe
@@ -123,10 +123,10 @@ internal static class TokenRepresentationRunner
         var variants = new[]
         {
             Summarize(HashSetVariant, "ImmutableHashSet<string> (legacy baseline)", samples),
-            Summarize(ArrayVariant, "ImmutableArray<string> (üretim)", samples),
+            Summarize(ArrayVariant, "ImmutableArray<string> (tekilleştirme öncesi)", samples),
             Summarize(
                 PooledArrayVariant,
-                "üretim + paylaşılan token havuzu (aday, uygulanmadı)",
+                "dizi + paylaşılan token havuzu (üretim)",
                 samples)
         };
 
@@ -153,7 +153,7 @@ internal static class TokenRepresentationRunner
             MeasurementConstants.ToolVersion,
             "instrumented_profiler",
             "Gerçek ağaç, bellek içi, eşleştirilmiş ABBA. hashset = legacy " +
-            "baseline, array = üretim, pooled_array = uygulanmamış aday. Üç " +
+            "baseline, array = tekilleştirme öncesi, pooled_array = üretim. Üç " +
             "temsil aynı öğe dizisi üzerinde kendi token string'lerini üretir; " +
             "ölçülen marjinal kalıcı maliyettir. Ad/token/path diske yazılmaz.",
             started.ToUnixTimeSeconds(),
