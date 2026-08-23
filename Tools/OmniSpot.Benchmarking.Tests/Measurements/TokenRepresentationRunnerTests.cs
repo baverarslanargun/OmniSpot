@@ -37,7 +37,7 @@ public sealed class TokenRepresentationRunnerTests
     // temsili yeniden değişirse bu test kırılıp etiketlerin güncellenmesini
     // zorlar.
     [Fact]
-    public void Run_LabelsArrayAsTheProductionRepresentation()
+    public void Run_LabelsPooledArrayAsTheProductionRepresentation()
     {
         var comparison = RunComparison();
 
@@ -45,11 +45,12 @@ public sealed class TokenRepresentationRunnerTests
             variant => variant.Variant,
             variant => variant.Scope,
             StringComparer.Ordinal);
-        Assert.Contains("üretim", scopes["array"], StringComparison.Ordinal);
+        Assert.Contains("üretim", scopes["pooled_array"], StringComparison.Ordinal);
+        Assert.Contains("havuz", scopes["pooled_array"], StringComparison.Ordinal);
         Assert.Contains("ImmutableArray", scopes["array"], StringComparison.Ordinal);
+        Assert.DoesNotContain("üretim", scopes["array"], StringComparison.Ordinal);
         Assert.Contains("legacy", scopes["hashset"], StringComparison.Ordinal);
         Assert.DoesNotContain("üretim", scopes["hashset"], StringComparison.Ordinal);
-        Assert.Contains("aday", scopes["pooled_array"], StringComparison.Ordinal);
         Assert.Equal(scopes.Values.Distinct(StringComparer.Ordinal).Count(), scopes.Count);
     }
 

@@ -46,7 +46,7 @@ internal static class MeasurementCommand
         {
             Description =
                 "_tokensByPath değer temsillerini eşleştirilmiş karşılaştırır " +
-                "(hashset = legacy, array = üretim, pooled_array = aday)."
+                "(hashset = legacy, array = tekilleştirme öncesi, pooled_array = üretim)."
         };
         var roundsOption = IntegerOption("--rounds", 2);
         var allocationBarOption = new Option<double>("--allocation-bar")
