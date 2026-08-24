@@ -50,7 +50,6 @@ public class IndexDatabase : IDisposable
         {
             DataSource = _dbPath,
             Mode = SqliteOpenMode.ReadWriteCreate,
-            Cache = SqliteCacheMode.Shared,
             Pooling = false
         }.ToString();
 
