@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Services;
 using SmartFileLauncher.Core.Tests.TestInfrastructure;
@@ -64,13 +65,14 @@ public sealed class IndexManagerPathInvariantTests
         var database = new IndexDatabase(databasePath);
         var watcher = new FileWatcherService(debounceMs: 1);
         var manager = new IndexManager(database, watcher);
-        var statuses = new List<string>();
-        manager.OnProgress += progress => statuses.Add(progress.Status);
+        var statuses = new ConcurrentQueue<string>();
+        manager.OnProgress += progress => statuses.Enqueue(progress.Status);
 
         try
         {
             await manager.InitializeAsync(root);
             watcher.Stop();
+            await manager.QueuedNotifications.WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.Contains(statuses, status => status.Contains("Önbellekten"));
             Assert.DoesNotContain(statuses, status => status.Contains("İlk kurulum"));
@@ -149,13 +151,14 @@ public sealed class IndexManagerPathInvariantTests
         var database = new IndexDatabase(databasePath);
         var watcher = new FileWatcherService(debounceMs: 1);
         var manager = new IndexManager(database, watcher);
-        var statuses = new List<string>();
-        manager.OnProgress += progress => statuses.Add(progress.Status);
+        var statuses = new ConcurrentQueue<string>();
+        manager.OnProgress += progress => statuses.Enqueue(progress.Status);
 
         try
         {
             await manager.InitializeAsync(root);
             watcher.Stop();
+            await manager.QueuedNotifications.WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.Contains(statuses, status => status.Contains("İlk kurulum"));
             Assert.Null(manager.GetNode(nonCanonicalPath));
@@ -195,13 +198,14 @@ public sealed class IndexManagerPathInvariantTests
         var database = new IndexDatabase(databasePath);
         var watcher = new FileWatcherService(debounceMs: 1);
         var manager = new IndexManager(database, watcher);
-        var statuses = new List<string>();
-        manager.OnProgress += progress => statuses.Add(progress.Status);
+        var statuses = new ConcurrentQueue<string>();
+        manager.OnProgress += progress => statuses.Enqueue(progress.Status);
 
         try
         {
             await manager.InitializeAsync(root);
             watcher.Stop();
+            await manager.QueuedNotifications.WaitAsync(TimeSpan.FromSeconds(10));
 
             Assert.Contains(statuses, status => status.Contains("İlk kurulum"));
             Assert.Null(database.GetDirectoryByPath(nonCanonicalPath));
