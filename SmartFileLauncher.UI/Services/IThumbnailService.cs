@@ -12,7 +12,13 @@ public sealed record ThumbnailDiagnostics(
     long Failures,
     int LastDecodedPixelWidth,
     int LastDecodedPixelHeight,
-    long DecodedBytes);
+    long DecodedBytes,
+    int ActiveGenerations,
+    int QueuedGenerations,
+    long Evictions,
+    int DiskCacheFileCount,
+    long DiskCacheBytes,
+    DateTime? DiskCacheMeasuredAt);
 
 public interface IThumbnailService
 {
@@ -22,4 +28,6 @@ public interface IThumbnailService
         CancellationToken token = default);
 
     ThumbnailDiagnostics GetDiagnostics();
+
+    Task RefreshDiskCacheStatsAsync(CancellationToken token = default);
 }

@@ -58,6 +58,12 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
             _indexManager.DeltaSyncProcessed,
             _indexManager.DeltaSyncTotal);
 
+    public IndexDiagnosticsReport GetDiagnosticsReport()
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        return _indexManager.GetDiagnosticsReport();
+    }
+
     public async Task<IndexStartupResult> InitializeAsync(
         CancellationToken cancellationToken = default)
     {

@@ -13,7 +13,7 @@ public sealed class BenchmarkRootCommandTests
             .ToArray();
 
         Assert.Equal(
-            ["profile", "pilot", "measure", "compare", "phases", "realtree"],
+            ["profile", "diag", "pilot", "measure", "compare", "phases", "realtree"],
             commandNames);
     }
 }

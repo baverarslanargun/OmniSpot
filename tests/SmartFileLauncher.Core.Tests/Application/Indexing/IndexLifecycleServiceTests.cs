@@ -51,6 +51,7 @@ public sealed class IndexLifecycleServiceTests
         service.Dispose();
 
         Assert.Throws<ObjectDisposedException>(() => service.GetStats());
+        Assert.Throws<ObjectDisposedException>(() => service.GetDiagnosticsReport());
     }
 
     private sealed class StaticLocationProvider(string root) : IIndexedLocationProvider

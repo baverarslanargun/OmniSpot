@@ -1,4 +1,5 @@
 using System.Reflection;
+using SmartFileLauncher.Core.Diagnostics;
 using SmartFileLauncher.UI.Services;
 
 namespace SmartFileLauncher.UI.Views;
@@ -15,17 +16,28 @@ public partial class MainWindow {
                 _thumbnailService,
                 THUMBNAIL_SIZE,
                 MAX_FOLDER_ITEMS),
+            _indexLifecycle,
+            _thumbnailService,
             _appSettings.DiagnosticsMetricIntervalSeconds);
 
     private void InitializeDiagnostics() {
-        var directory = _appSettings.DiagnosticsLogDirectory;
-        if (string.IsNullOrWhiteSpace(directory)) return;
-        if (!_appSettings.DiagnosticsLoggingEnabled
-            && !_appSettings.DiagnosticsMetricLoggingEnabled) {
-            return;
+        var startup = DiagnosticsStartupOptions.Parse(Environment.GetCommandLineArgs());
+        if (startup.Error != null) {
+            Log($"⚠️ {startup.Error}");
         }
 
-        if (_appSettings.DiagnosticsLoggingEnabled) {
+        var directory = startup.Directory ?? _appSettings.DiagnosticsLogDirectory;
+        if (string.IsNullOrWhiteSpace(directory)) return;
+
+        var writeLog = startup.IsRequested || _appSettings.DiagnosticsLoggingEnabled;
+        var writeMetrics = startup.IsRequested || _appSettings.DiagnosticsMetricLoggingEnabled;
+        if (!writeLog && !writeMetrics) return;
+
+        if (startup.IsRequested) {
+            Log($"🔬 Tanılama komut satırından açıldı: {directory}");
+        }
+
+        if (writeLog) {
             if (Diagnostics.StartFileLogging(directory, BuildDiagnosticsStamps())) {
                 Log($"📝 Tanılama günlüğü: {Diagnostics.FileLog.CurrentFilePath}");
             } else {
@@ -33,7 +45,7 @@ public partial class MainWindow {
             }
         }
 
-        if (_appSettings.DiagnosticsMetricLoggingEnabled) {
+        if (writeMetrics) {
             if (Diagnostics.StartMetricLogging(directory)) {
                 Log($"📈 Sayaç günlüğü: {Diagnostics.MetricLog.CurrentFilePath}");
             } else {
@@ -69,13 +81,21 @@ public partial class MainWindow {
             _settingsApplication,
             BuildDiagnosticsStamps);
 
-        window.Closed += (_, __) => _diagnosticsWindow = null;
+        window.Closed += (_, __) => {
+            _diagnosticsWindow = null;
+            _diagnostics?.SetLiveViewActive(false);
+        };
         _diagnosticsWindow = window;
+        Diagnostics.SetLiveViewActive(true);
         window.Show();
     }
 
     private void RecordFolderMetrics(string folderPath, int itemCount, bool truncated) {
         Diagnostics.RecordFolder(folderPath, itemCount, truncated);
+    }
+
+    private void RecordSearchMetrics(int queryLength, TimeSpan duration, int resultCount) {
+        Diagnostics.RecordSearch(queryLength, duration, resultCount);
     }
 
     private void ShutdownDiagnostics() {

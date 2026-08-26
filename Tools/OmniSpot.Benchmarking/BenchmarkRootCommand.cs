@@ -1,4 +1,5 @@
 using System.CommandLine;
+using OmniSpot.Benchmarking.Diagnostics;
 using OmniSpot.Benchmarking.Measurements;
 using OmniSpot.Benchmarking.Profiling;
 
@@ -10,6 +11,7 @@ internal static class BenchmarkRootCommand
     {
         var rootCommand = new RootCommand("OmniSpot yerel benchmark yardımcı araçları.");
         rootCommand.Subcommands.Add(ProfileCommand.CreateCommand());
+        rootCommand.Subcommands.Add(DiagnosticsCommand.CreateCommand());
         MeasurementCommand.AddTo(rootCommand);
         return rootCommand;
     }

@@ -22,8 +22,15 @@ public class ThumbnailService : IThumbnailService
     private long _diskHits;
     private long _shellGenerated;
     private long _failures;
+    private long _evictions;
     private int _lastDecodedPixelWidth;
     private int _lastDecodedPixelHeight;
+    private int _activeGenerations;
+    private int _queuedGenerations;
+    private int _diskCacheScanGate;
+    private DiskCacheStats? _diskCacheStats;
+
+    private sealed record DiskCacheStats(int FileCount, long Bytes, DateTime MeasuredAt);
 
     public ThumbnailService(Action<string> log)
     {
@@ -87,7 +94,17 @@ public class ThumbnailService : IThumbnailService
             }
 
             // 3. Generate thumbnail (with concurrency control)
-            await _semaphore.WaitAsync(token);
+            Interlocked.Increment(ref _queuedGenerations);
+            try
+            {
+                await _semaphore.WaitAsync(token);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref _queuedGenerations);
+            }
+
+            Interlocked.Increment(ref _activeGenerations);
             try
             {
                 // Double-check memory cache (race condition protection)
@@ -128,6 +145,7 @@ public class ThumbnailService : IThumbnailService
             }
             finally
             {
+                Interlocked.Decrement(ref _activeGenerations);
                 _semaphore.Release();
             }
         }
@@ -135,6 +153,55 @@ public class ThumbnailService : IThumbnailService
         {
             return null;
         }
+    }
+
+    public async Task RefreshDiskCacheStatsAsync(CancellationToken token = default)
+    {
+        if (Interlocked.CompareExchange(ref _diskCacheScanGate, 1, 0) != 0) return;
+
+        try
+        {
+            var stats = await Task.Run(() => ScanDiskCache(token), token).ConfigureAwait(false);
+            if (stats != null)
+            {
+                Volatile.Write(ref _diskCacheStats, stats);
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _diskCacheScanGate, 0);
+        }
+    }
+
+    private DiskCacheStats? ScanDiskCache(CancellationToken token)
+    {
+        var count = 0;
+        var bytes = 0L;
+
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(_diskCachePath))
+            {
+                token.ThrowIfCancellationRequested();
+                try
+                {
+                    bytes += new FileInfo(file).Length;
+                    count++;
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
+        }
+
+        return new DiskCacheStats(count, bytes, DateTime.Now);
     }
 
     private BitmapSource? GenerateShellThumbnail(string path, int size)
@@ -178,6 +245,7 @@ public class ThumbnailService : IThumbnailService
             {
                 var firstKey = _memoryCache.Keys.First();
                 _memoryCache.Remove(firstKey);
+                Interlocked.Increment(ref _evictions);
                 _log($"🗑️ Memory cache evicted: {Path.GetFileName(firstKey.Path)}");
             }
             
@@ -275,6 +343,8 @@ public class ThumbnailService : IThumbnailService
             }
         }
 
+        var diskCache = Volatile.Read(ref _diskCacheStats);
+
         return new ThumbnailDiagnostics(
             count,
             _maxMemoryCacheCount,
@@ -285,6 +355,12 @@ public class ThumbnailService : IThumbnailService
             Interlocked.Read(ref _failures),
             Volatile.Read(ref _lastDecodedPixelWidth),
             Volatile.Read(ref _lastDecodedPixelHeight),
-            decodedBytes);
+            decodedBytes,
+            Volatile.Read(ref _activeGenerations),
+            Volatile.Read(ref _queuedGenerations),
+            Interlocked.Read(ref _evictions),
+            diskCache?.FileCount ?? 0,
+            diskCache?.Bytes ?? 0,
+            diskCache?.MeasuredAt);
     }
 }

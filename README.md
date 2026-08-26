@@ -85,13 +85,29 @@ alır:
 
 | Bölüm | İçerik |
 |---|---|
-| `SÜREÇ` | private / working set belleği, iş parçacığı, handle, yönetilen yığın, GC sayaçları |
-| `İNDEKS` | indekslenen dosya ve dizin sayısı, token sayısı, uzlaştırma durumu |
-| `KÜÇÜK RESİM` | önbellek doluluğu ve boyutu, istek sayısı ve kaynağı (bellek / disk / kabuk), çözülen bitmap boyutu |
+| `SÜREÇ` | private / working set / tepe working set belleği, iş parçacığı, handle, çalışma süresi, toplam CPU ve anlık CPU yüzdesi |
+| `BELLEK` | yönetilen yığın, son GC'deki yığın ve ayrılmış bayt, parçalanma, GC duraklama yüzdesi, GC sayaçları, süreç başından beri toplam ayrılan bayt ve ayırma hızı |
+| `G/Ç` | okuma / yazma / diğer işlem sayıları, okunan ve yazılan bayt, okuma işlemi ve bayt hızı |
+| `İNDEKS` | indekslenen dosya, dizin ve token sayısı, uzlaştırma durumu; son turun zamanı, bulduğu değişiklik sayısı, tarama ve tur süresi; yeniden yayım sayısı ve süresi; yayımlanan arama durumundaki girdi sayısı |
+| `KÜÇÜK RESİM` | bellek önbelleği doluluğu, boyutu ve tahliye sayısı, istek sayısı ve kaynağı (bellek / disk / kabuk), işlemdeki ve kuyruktaki üretim sayısı, çözülen bitmap boyutu, disk önbelleğinin dosya sayısı ve boyutu |
+| `ARAMA` | sorgu sayısı, son sorgunun uzunluğu, süresi ve sonuç sayısı |
 | `SON KLASÖR` | açılan klasör, listelenen öğe sayısı, kesme sınırına takılıp takılmadığı |
 
 Eşik aşan değerler renk değiştirir; örneğin çözülen küçük resim istenen boyuttan
 büyükse sarıya döner.
+
+**Türev sayaçlar.** `ayırma hızı`, `CPU %` ve `okuma hızı` iki örnek arasındaki
+farktan hesaplanır ve **gerçek geçen süreye** bölünür; tazeleme aralığı düzensiz
+olduğu için sabit aralık varsayılmaz. İlk örnekte, sayaç sıfırlandığında veya
+aralık çok kısa olduğunda değer üretilmez.
+
+**Son GC değerleri.** `BELLEK` bölümündeki `yığın`, `ayrılmış` ve `parçalanma`
+satırları anlık değil, **en son çöp toplamada** ölçülen değerlerdir; GC arasında
+sabit kalırlar.
+
+`toplam ayrılan` ise monoton artan bir sayaçtır: iki örnek arasındaki fark, o
+pencerede ayrılan bayttır. `working set` bunu göstermez — GC toplayıp serbest
+bırakırsa iz kalmaz.
 
 **Dosyaya yazma.** İki bağımsız anahtar var; ikisi de aynı dizini kullanır ve
 aynı oturum damgasını taşıdıkları için dosyalar eşleşir.
@@ -109,15 +125,46 @@ Sayaç dosyası **uzun biçim** CSV'dir — `zaman;bölüm;etiket;değer;sayısa
 Her okuma ayrı bir satırdır; böylece çalışma sırasında yeni metrik eklendiğinde
 sabit başlıklı bir tabloda kaybolmaz. `değer` ekranda görünen metin
 (`878,4 MB`), `sayısal` ise birimsiz ham değerdir (`921010176`, ondalık nokta).
-Varsayılan `5` saniyede bir örnek alınır; ayrıca klasör açma gibi olaylar
-`OLAY` bölümünde ayrı satır olarak işaretlenir, böylece bir sıçramanın
-kullanıcı eylemine mi arka plan işine mi denk geldiği sonradan ayırt edilebilir.
+Varsayılan `5` saniyede bir örnek alınır; ayrıca olaylar `OLAY` bölümünde ayrı
+satır olarak işaretlenir, böylece bir sıçramanın kullanıcı eylemine mi arka plan
+işine mi denk geldiği sonradan ayırt edilebilir:
+
+| Olay | Ne zaman | Ayrıntı alanı |
+|---|---|---|
+| `klasör açıldı` | klasöre girildiğinde | klasör adı, öğe sayısı |
+| `arama` | her tamamlanan aramada | sorgu uzunluğu, sonuç sayısı, süre |
+| `uzlaştırma başladı` | arka plan uzlaştırması başlarken | — |
+| `uzlaştırma bitti` | uzlaştırma biterken | bulunan değişiklik sayısı, yeniden yayım süresi |
+
+Uzlaştırma işaretçileri, bir bellek sıçramasının kullanıcı eyleminden mi arka
+plan taramasından mı geldiğini ayırmak için vardır; ikisi karıştığında ölçüm
+yanlış atfedilir.
 
 Dosyalar yazılırken de okunabilir; uygulama açıkken inceleyebilirsiniz.
 `Dizin seç…` ile hedef klasör seçilir, `Dizini hatırla` işaretliyse seçim
 ayarlarda saklanır ve sonraki açılışta yazma kaldığı yerden sürer. Her iki
 dosya da dosya adları ve gezilen klasör yolları içerebilir; paylaşmadan önce
-göz atın.
+göz atın. Arama sorgusunun **metni** kaydedilmez, yalnız karakter sayısı yazılır.
+
+**Komut satırından açma.** Düğmelere dokunmadan, ayarları değiştirmeden bir
+ölçüm turu başlatmak için:
+
+```powershell
+OmniSpot.exe --tanila "C:\olcum\tur-3"
+```
+
+Her iki dosya da o dizine yazılır. `--tanila=C:\olcum\tur-3` biçimi de kabul
+edilir; dizin verilmezse uygulama günlüğüne uyarı düşer ve yazma başlamaz.
+
+**Sayaç dosyasını okuma.** CSV'yi elle ayrıştırmak yerine:
+
+```powershell
+dotnet run --project Tools\OmniSpot.Benchmarking -- diag --file "C:\olcum\tur-3\omnispot-20260827-010000-metrik.csv"
+```
+
+Çıktı; oturum kapsamını, `OLAY` zincirini ve her olay penceresi arasında en çok
+değişen sayaçları verir. `atlanan satır` sıfır değilse dosyada bozuk satır var
+demektir. `--output` ile JSON, `--top` ile pencere başına satır sayısı.
 
 `Kopyala` düğmesi damgaları, bütün sayaçları ve ekrandaki günlüğü tek seferde
 panoya alır.
