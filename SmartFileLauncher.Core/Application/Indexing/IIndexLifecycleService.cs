@@ -30,5 +30,6 @@ public interface IIndexLifecycleService : IDisposable
     SearchSnapshot CreateSearchSnapshot(
         CancellationToken cancellationToken = default);
     IndexStats GetStats();
+    IndexDiagnosticsReport GetDiagnosticsReport();
     void RecordOpened(string path);
 }

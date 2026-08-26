@@ -43,6 +43,14 @@ public class IndexManager : IDisposable
     private volatile int _deltaSyncProcessed = 0;
     private IReadOnlyList<string> _activeRootPaths = Array.Empty<string>();
     private long _reconciliationRunCount;
+    private long _lastReconciliationAtTicks;
+    private long _lastReconciliationDurationTicks;
+    private long _lastReconciliationScanDurationTicks;
+    private int _lastReconciliationChanges;
+    private int _lastReconciliationRepublished;
+    private long _republishCount;
+    private long _lastRepublishAtTicks;
+    private long _lastRepublishDurationTicks;
 
     public event Action<IndexProgress>? OnProgress;
 
@@ -118,6 +126,24 @@ public class IndexManager : IDisposable
     public int DeltaSyncProcessed => _deltaSyncProcessed;
     public int DeltaSyncTotal => _deltaSyncTotal;
     internal long ReconciliationRunCount => Interlocked.Read(ref _reconciliationRunCount);
+
+    public IndexDiagnosticsReport GetDiagnosticsReport()
+    {
+        var reconciliationAt = Interlocked.Read(ref _lastReconciliationAtTicks);
+        var republishAt = Interlocked.Read(ref _lastRepublishAtTicks);
+
+        return new IndexDiagnosticsReport(
+            Interlocked.Read(ref _reconciliationRunCount),
+            reconciliationAt == 0 ? null : new DateTime(reconciliationAt),
+            TimeSpan.FromTicks(Interlocked.Read(ref _lastReconciliationDurationTicks)),
+            TimeSpan.FromTicks(Interlocked.Read(ref _lastReconciliationScanDurationTicks)),
+            Interlocked.CompareExchange(ref _lastReconciliationChanges, 0, 0),
+            Interlocked.CompareExchange(ref _lastReconciliationRepublished, 0, 0) != 0,
+            Interlocked.Read(ref _republishCount),
+            republishAt == 0 ? null : new DateTime(republishAt),
+            TimeSpan.FromTicks(Interlocked.Read(ref _lastRepublishDurationTicks)),
+            CurrentSearchState.ItemCount);
+    }
 
     internal Task QueuedNotifications
     {
@@ -823,10 +849,15 @@ public class IndexManager : IDisposable
             _deltaSyncTotal = 0;
             NotifyDeltaSyncStateChanged(isRunning: true);
 
+            var startedAt = DateTime.Now;
+            var runTimestamp = Stopwatch.GetTimestamp();
+
             var snapshot = await Task.Run(
                     () => CaptureDiskSnapshot(normalizedRoots, ct),
                     ct)
                 .ConfigureAwait(false);
+
+            var scanElapsed = Stopwatch.GetElapsedTime(runTimestamp);
 
             _deltaSyncTotal = snapshot.Entries.Count;
             var changes = ApplyReconciliationSnapshot(
@@ -837,6 +868,15 @@ public class IndexManager : IDisposable
             _deltaSyncProcessed = _deltaSyncTotal;
             _deltaSyncProgress = 100;
             Interlocked.Increment(ref _reconciliationRunCount);
+            Interlocked.Exchange(ref _lastReconciliationChanges, changes);
+            Interlocked.Exchange(ref _lastReconciliationRepublished, 0);
+            Interlocked.Exchange(ref _lastReconciliationAtTicks, startedAt.Ticks);
+            Interlocked.Exchange(
+                ref _lastReconciliationScanDurationTicks,
+                scanElapsed.Ticks);
+            Interlocked.Exchange(
+                ref _lastReconciliationDurationTicks,
+                Stopwatch.GetElapsedTime(runTimestamp).Ticks);
             NotifyDeltaSyncProgress(
                 _deltaSyncProcessed,
                 _deltaSyncTotal,
@@ -849,6 +889,7 @@ public class IndexManager : IDisposable
                     PublishSearchStateFromCurrentIndex();
                     InvalidateSearchSnapshot();
                 }
+                Interlocked.Exchange(ref _lastReconciliationRepublished, 1);
                 ReportProgress(
                     $"İndeks uzlaştırıldı: {changes} değişiklik.",
                     100,
@@ -1609,11 +1650,20 @@ public class IndexManager : IDisposable
 
     private void PublishSearchStateFromCurrentIndex()
     {
+        var startedAt = DateTime.Now;
+        var timestamp = Stopwatch.GetTimestamp();
+
         Volatile.Write(
             ref _publishedSearchState,
             SearchState.Create(
                 _pathToNode.Values.Where(node => !ReferenceEquals(node, _rootNode)),
                 _tokenizer));
+
+        Interlocked.Increment(ref _republishCount);
+        Interlocked.Exchange(ref _lastRepublishAtTicks, startedAt.Ticks);
+        Interlocked.Exchange(
+            ref _lastRepublishDurationTicks,
+            Stopwatch.GetElapsedTime(timestamp).Ticks);
     }
 
     private void PublishSearchStateForFileChange(FileChangeEvent evt)

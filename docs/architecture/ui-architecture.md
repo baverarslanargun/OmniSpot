@@ -35,13 +35,33 @@ Tamamen lokal çalışan WPF tam ekran overlay uygulaması. Core katmanı dosya 
   kadar yok); sabit başlıklı geniş tabloda sonradan gelen sütunlar kaybolurdu.
   `değer` ekrandaki metin, `sayısal` birimsiz ham değer (invariant ondalık) —
   ikisi ayrı çünkü gösterim birimi eşik geçtikçe değişiyor.
-- `UI/Services/DiagnosticsCollector` — süreç, indeks ve küçük resim
-  sayaçlarını toplayıp `DiagnosticsMetrics`'e yazar.
-- `UI/Services/DiagnosticsSession` — iki günlüğü, toplayıcıyı ve örnekleme
-  zamanlayıcısını birlikte tutar. Zamanlayıcı burada olduğu için günlükleme
-  tanılama penceresi kapatılınca durmaz; yazma bir **ayar**, pencere yalnız
-  görüntüleyici. `RecordFolder` hem sayaçları tazeler hem `OLAY` işaretçisi
-  düşer.
+- `Core/Diagnostics/DiagnosticsRateTracker` — kümülatif sayaçlardan türev
+  üretir. Farkı **gerçek geçen süreye** böler; `Refresh()` üç ayrı yerden
+  (pencere `1` s, metrik zamanlayıcı, olay işaretçileri) düzensiz aralıkla
+  çağrıldığı için sabit aralık varsayılamaz. İlk gözlemde, sayaç geriye
+  gittiğinde (süreç/sayaç sıfırlanması) ve aralık asgari eşiğin altındaysa
+  yeni değer üretmez — sonuncusunda son bilinen hızı döndürür ki `1` s
+  tazelemede gösterim titremesin.
+- `Core/Services/IndexDiagnosticsReport` — uzlaştırma ve yeniden yayım
+  sayaçları. `changes` daha önce yalnız yerel değişkendi; pahalı yeniden
+  yayımı tetikleyen koşul o olduğu için (`if (changes > 0)`) rapora alındı.
+  Tarama süresi ile tur süresi ayrı tutulur, yeniden yayım süresi üçüncü bir
+  ölçüdür — üçü tek sayıda toplanırsa maliyetin nereden geldiği kaybolur.
+- `UI/Services/ProcessIoCounters` — `GetProcessIoCounters` P/Invoke sarmalayıcı.
+  Süreç G/Ç sayaçları .NET `Process` sınıfında yoktur; harici örnekleyiciye
+  gerek kalmaması için buradan okunur.
+- `UI/Services/DiagnosticsCollector` — süreç, bellek, G/Ç, indeks, küçük resim
+  ve arama sayaçlarını toplayıp `DiagnosticsMetrics`'e yazar. `BELLEK`
+  bölümündeki `yığın`/`ayrılmış`/`parçalanma` **son GC'ye ait** değerlerdir,
+  anlık değil; `toplam ayrılan` ise monoton sayaçtır ve pencere farkı doğrudan
+  o aralıkta ayrılan bayttır.
+- `UI/Services/DiagnosticsSession` — iki günlüğü, toplayıcıyı ve zamanlayıcıları
+  birlikte tutar. Zamanlayıcı burada olduğu için günlükleme tanılama penceresi
+  kapatılınca durmaz; yazma bir **ayar**, pencere yalnız görüntüleyici.
+  `RecordFolder`, `RecordSearch` ve uzlaştırma durum aboneliği `OLAY` işaretçisi
+  düşürür. Disk önbelleği ölçümü ayrı ve yavaş bir zamanlayıcıdadır (`60` s) ve
+  yalnız pencere açıkken veya sayaç günlüğü yazarken çalışır: `thumbcache`
+  altında on binlerce dosya olabildiği için her tazelemede sayılamaz.
 - `UI/Views/DiagnosticsWindow` — ayrı pencere; solda `ApplicationLog` akışı,
   sağda metrikler. Ana pencereyi kapatmadığı için uygulama kullanılırken
   sayaçlar izlenebilir.

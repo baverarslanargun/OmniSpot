@@ -1197,16 +1197,19 @@ public partial class MainWindow : Window {
         }
 
         try {
+            var searchTimestamp = Stopwatch.GetTimestamp();
             var outcome = await _searchService.SearchAsync(
                 new SearchRequest(
                     query,
                     _isNaturalLanguageMode,
                     _connectivityMonitor.IsConnected),
                 cancellationToken);
+            var searchElapsed = Stopwatch.GetElapsedTime(searchTimestamp);
 
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(searchVersion)) return;
 
+            RecordSearchMetrics(query.Length, searchElapsed, outcome.Results.Count);
             LogSearchOutcome(outcome);
 
             if (!string.IsNullOrEmpty(outcome.AutoOpenPath)) {
