@@ -1,0 +1,146 @@
+﻿<Window x:Class="SmartFileLauncher.UI.Views.DiagnosticsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="OmniSpot · Tanılama"
+        Height="720"
+        Width="1120"
+        MinHeight="360"
+        MinWidth="720"
+        Background="#1D1D1F"
+        WindowStartupLocation="CenterScreen">
+    <Window.Resources>
+        <Style x:Key="HeaderAction" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Foreground" Value="#86868B"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Foreground" Value="#0A84FF"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="#48484A"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="DarkCheck" TargetType="CheckBox">
+            <Setter Property="Foreground" Value="#86868B"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Style.Triggers>
+                <Trigger Property="IsChecked" Value="True">
+                    <Setter Property="Foreground" Value="#E5E5EA"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="Mono" TargetType="TextBlock">
+            <Setter Property="FontFamily" Value="Consolas"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Foreground" Value="#86868B"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <Border Grid.Row="0" Background="#2C2C2E" Padding="16,10">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBlock Text="Tanılama"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="#E5E5EA"
+                               VerticalAlignment="Center"/>
+                    <TextBlock x:Name="UpdatedText"
+                               Style="{StaticResource Mono}"
+                               Margin="14,0,0,0"/>
+                </StackPanel>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Button x:Name="CopyButton"
+                            Content="Kopyala"
+                            Style="{StaticResource HeaderAction}"/>
+                    <Button x:Name="ClearButton"
+                            Content="Temizle"
+                            Style="{StaticResource HeaderAction}"/>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <Border Grid.Row="1"
+                Background="#242426"
+                BorderBrush="#3A3A3C"
+                BorderThickness="0,0,0,1"
+                Padding="16,9">
+            <StackPanel Orientation="Horizontal">
+                <CheckBox x:Name="FileLoggingCheck"
+                          Content="Günlüğü yaz"
+                          Style="{StaticResource DarkCheck}"/>
+                <CheckBox x:Name="MetricLoggingCheck"
+                          Content="Sayaçları yaz"
+                          Style="{StaticResource DarkCheck}"
+                          Margin="14,0,0,0"/>
+                <Button x:Name="ChooseDirectoryButton"
+                        Content="Dizin seç…"
+                        Style="{StaticResource HeaderAction}"
+                        Margin="16,0,0,0"/>
+                <CheckBox x:Name="RememberDirectoryCheck"
+                          Content="Dizini hatırla"
+                          Style="{StaticResource DarkCheck}"
+                          Margin="10,0,0,0"/>
+                <TextBlock x:Name="LogStatusText"
+                           Style="{StaticResource Mono}"
+                           Margin="18,0,0,0"
+                           TextTrimming="CharacterEllipsis"/>
+            </StackPanel>
+        </Border>
+
+        <Grid Grid.Row="2">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="1"/>
+                <ColumnDefinition Width="360"/>
+            </Grid.ColumnDefinitions>
+
+            <ScrollViewer x:Name="LogScroll"
+                          Grid.Column="0"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled"
+                          Padding="16,12">
+                <TextBlock x:Name="LogText"
+                           FontFamily="Consolas"
+                           FontSize="11"
+                           Foreground="#E5E5EA"
+                           TextWrapping="Wrap"/>
+            </ScrollViewer>
+
+            <Rectangle Grid.Column="1" Fill="#3A3A3C"/>
+
+            <ScrollViewer Grid.Column="2"
+                          VerticalScrollBarVisibility="Auto"
+                          Padding="16,12">
+                <StackPanel x:Name="MetricsStack"/>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Window>

@@ -17,6 +17,14 @@ public class ThumbnailService : IThumbnailService
     private readonly string _diskCachePath;
     private readonly Action<string> _log;
 
+    private long _requests;
+    private long _memoryHits;
+    private long _diskHits;
+    private long _shellGenerated;
+    private long _failures;
+    private int _lastDecodedPixelWidth;
+    private int _lastDecodedPixelHeight;
+
     public ThumbnailService(Action<string> log)
     {
         _log = log;
@@ -35,11 +43,13 @@ public class ThumbnailService : IThumbnailService
         int size,
         CancellationToken token = default)
     {
+        Interlocked.Increment(ref _requests);
         try
         {
             // Path validation
             if (!File.Exists(path) && !Directory.Exists(path))
             {
+                Interlocked.Increment(ref _failures);
                 return null;
             }
 
@@ -51,6 +61,7 @@ public class ThumbnailService : IThumbnailService
             {
                 if (_memoryCache.TryGetValue(key, out var cachedImage))
                 {
+                    Interlocked.Increment(ref _memoryHits);
                     return cachedImage;
                 }
             }
@@ -64,6 +75,7 @@ public class ThumbnailService : IThumbnailService
                     var diskImage = LoadFromDiskCache(diskCachePath);
                     if (diskImage != null)
                     {
+                        Interlocked.Increment(ref _diskHits);
                         AddToMemoryCache(key, diskImage);
                         return diskImage;
                     }
@@ -96,14 +108,20 @@ public class ThumbnailService : IThumbnailService
                         {
                             // Freeze for cross-thread access
                             thumbnail.Freeze();
-                            
+
+                            Interlocked.Increment(ref _shellGenerated);
                             AddToMemoryCache(key, thumbnail);
                             SaveToDiskCache(diskCachePath, thumbnail);
+                        }
+                        else
+                        {
+                            Interlocked.Increment(ref _failures);
                         }
                         return thumbnail;
                     }
                     catch
                     {
+                        Interlocked.Increment(ref _failures);
                         return null;
                     }
                 }, token);
@@ -147,6 +165,12 @@ public class ThumbnailService : IThumbnailService
 
     private void AddToMemoryCache(ThumbnailKey key, ImageSource image)
     {
+        if (image is BitmapSource bitmap)
+        {
+            Volatile.Write(ref _lastDecodedPixelWidth, bitmap.PixelWidth);
+            Volatile.Write(ref _lastDecodedPixelHeight, bitmap.PixelHeight);
+        }
+
         lock (_memoryCache)
         {
             // Simple eviction: remove first item if cache is full
@@ -230,5 +254,37 @@ public class ThumbnailService : IThumbnailService
         {
             return (_memoryCache.Count, _maxMemoryCacheCount);
         }
+    }
+
+    public ThumbnailDiagnostics GetDiagnostics()
+    {
+        int count;
+        long decodedBytes = 0;
+        lock (_memoryCache)
+        {
+            count = _memoryCache.Count;
+            foreach (var image in _memoryCache.Values)
+            {
+                if (image is BitmapSource bitmap)
+                {
+                    decodedBytes += (long)bitmap.PixelWidth
+                        * bitmap.PixelHeight
+                        * bitmap.Format.BitsPerPixel
+                        / 8;
+                }
+            }
+        }
+
+        return new ThumbnailDiagnostics(
+            count,
+            _maxMemoryCacheCount,
+            Interlocked.Read(ref _requests),
+            Interlocked.Read(ref _memoryHits),
+            Interlocked.Read(ref _diskHits),
+            Interlocked.Read(ref _shellGenerated),
+            Interlocked.Read(ref _failures),
+            Volatile.Read(ref _lastDecodedPixelWidth),
+            Volatile.Read(ref _lastDecodedPixelHeight),
+            decodedBytes);
     }
 }
