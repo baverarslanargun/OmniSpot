@@ -137,11 +137,6 @@ public partial class MainWindow : Window {
         DataContext = _viewModel;
         InitializeComponent();
 
-        _applicationLog.MessageWritten += HandleApplicationLogMessage;
-        foreach (var message in _applicationLog.GetSnapshot()) {
-            AppendLogMessage(message);
-        }
-
         _indexLifecycle.ProgressChanged += HandleIndexProgress;
         _indexLifecycle.Error += HandleIndexError;
         _indexLifecycle.FileChanged += HandleFileSystemChange;
@@ -162,8 +157,8 @@ public partial class MainWindow : Window {
         };
         SearchBox.KeyDown += SearchBox_KeyDown;
         ResultsList.MouseDoubleClick += (_, __) => OpenSelected();
-        ConsoleToggleButton.Click += (_, __) => ToggleConsole();
-        ClearConsoleButton.Click += (_, __) => ClearConsole();
+        ConsoleToggleButton.Click += (_, __) => ToggleDiagnosticsWindow();
+        InitializeDiagnostics();
         NaturalLanguageToggle.Checked += (_, __) => EnableNaturalLanguageMode();
         NaturalLanguageToggle.Unchecked += (_, __) => DisableNaturalLanguageMode();
         ViewModeToggle.Checked += (_, __) => EnableGridView();
@@ -330,7 +325,7 @@ public partial class MainWindow : Window {
             folderCancellation?.Dispose();
         }
 
-        _applicationLog.MessageWritten -= HandleApplicationLogMessage;
+        ShutdownDiagnostics();
         _indexLifecycle.ProgressChanged -= HandleIndexProgress;
         _indexLifecycle.Error -= HandleIndexError;
         _indexLifecycle.FileChanged -= HandleFileSystemChange;
@@ -393,35 +388,8 @@ public partial class MainWindow : Window {
         }
     }
     
-    private const int MaxConsoleLines = 200; // Maximum log lines before auto-clear
-    private int _consoleLineCount = 0;
-    
     private void Log(string message) {
         _applicationLog.Write(message);
-    }
-
-    private void HandleApplicationLogMessage(string message) {
-        if (_isPreparedForShutdown) return;
-
-        if (Dispatcher.CheckAccess()) {
-            AppendLogMessage(message);
-            return;
-        }
-
-        Dispatcher.BeginInvoke(new Action(() => AppendLogMessage(message)));
-    }
-
-    private void AppendLogMessage(string message) {
-        var timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
-        var logLine = $"[{timestamp}] {message}\n";
-        _consoleLineCount++;
-
-        if (_consoleLineCount > MaxConsoleLines) {
-            ConsoleOutput.Text = $"[{timestamp}] 🧹 Konsol otomatik temizlendi ({MaxConsoleLines} satır aşıldı)\n";
-            _consoleLineCount = 1;
-        }
-
-        ConsoleOutput.Text += logLine;
     }
 
     private void HandleIndexProgress(IndexProgress progress) {
@@ -459,18 +427,6 @@ public partial class MainWindow : Window {
         if (_isPreparedForShutdown) return;
 
         Dispatcher.BeginInvoke(new Action(() => UpdateDeltaSyncState(isRunning)));
-    }
-    
-    private void ToggleConsole() {
-        ConsolePanel.Visibility = ConsolePanel.Visibility == Visibility.Visible 
-            ? Visibility.Collapsed 
-            : Visibility.Visible;
-    }
-    
-    private void ClearConsole() {
-        ConsoleOutput.Text = "";
-        _consoleLineCount = 0;
-        Log("Konsol temizlendi");
     }
     
     private void EnableNaturalLanguageMode() {
@@ -1804,6 +1760,7 @@ public partial class MainWindow : Window {
                 EmptyFolderTitle.Text = $"'{folderName}' klasörü boş";
                 EmptyFolderPanel.Visibility = Visibility.Visible;
                 Log("   📂 Klasör boş");
+                RecordFolderMetrics(folderPath, 0, page.IsTruncated);
             } else {
                 foreach (var item in items) {
                     _desktopIcons.Add(item);
@@ -1811,6 +1768,7 @@ public partial class MainWindow : Window {
 
                 Log($"   📊 {_desktopIcons.Count} öğe yüklendi" +
                     (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
+                RecordFolderMetrics(folderPath, items.Count, page.IsTruncated);
                 _ = LoadThumbnailsInBatchesAsync(items);
             }
 

@@ -15,6 +15,44 @@ Tamamen lokal çalışan WPF tam ekran overlay uygulaması. Core katmanı dosya 
 3. Tokenizasyon + indeks sorgusu + skor + sonuç listesi.
 4. Çift tıklama ile dosya varsayılan uygulamada açılır, kullanım frekansı artar.
 
+## Tanılama Yüzeyi
+
+Ölçüm ve hata ayıklama için ana pencereden bağımsız bir yüzey. Dört parça:
+
+- `Core/Diagnostics/DiagnosticsMetrics` — bölüm/etiket sırası korunan, iş
+  parçacığı güvenli metrik deposu. `Revision` yalnız **yeni** bir metrik
+  eklendiğinde artar; gösterim katmanı bunu görsel ağacı ne zaman yeniden
+  kuracağına karar vermek için kullanır, böylece saniyelik tazelemede kaydırma
+  konumu bozulmaz.
+- `Core/Diagnostics/DiagnosticsFileLog` — oturum başına tek dosya, başlıkta
+  damgalar. Satırlar tek bayt dizisi hâlinde tek `Write` çağrısıyla yazılır;
+  `StreamWriter` üstüne `FileStream` yığmak eşzamanlı yazarlarda satırları
+  yırtıyordu (`ConcurrentWritersLoseNoLines` bunu yakalıyor). Satır başına
+  `Flush` çökme dayanıklılığı içindir ve **test tarafından kanıtlanmamıştır**.
+- `Core/Diagnostics/DiagnosticsMetricLog` — sayaçların zaman serisi,
+  `zaman;bölüm;etiket;değer;sayısal` uzun biçim CSV. Uzun biçim seçildi çünkü
+  metrikler çalışma sırasında ekleniyor (`SON KLASÖR` bölümü klasör açılana
+  kadar yok); sabit başlıklı geniş tabloda sonradan gelen sütunlar kaybolurdu.
+  `değer` ekrandaki metin, `sayısal` birimsiz ham değer (invariant ondalık) —
+  ikisi ayrı çünkü gösterim birimi eşik geçtikçe değişiyor.
+- `UI/Services/DiagnosticsCollector` — süreç, indeks ve küçük resim
+  sayaçlarını toplayıp `DiagnosticsMetrics`'e yazar.
+- `UI/Services/DiagnosticsSession` — iki günlüğü, toplayıcıyı ve örnekleme
+  zamanlayıcısını birlikte tutar. Zamanlayıcı burada olduğu için günlükleme
+  tanılama penceresi kapatılınca durmaz; yazma bir **ayar**, pencere yalnız
+  görüntüleyici. `RecordFolder` hem sayaçları tazeler hem `OLAY` işaretçisi
+  düşer.
+- `UI/Views/DiagnosticsWindow` — ayrı pencere; solda `ApplicationLog` akışı,
+  sağda metrikler. Ana pencereyi kapatmadığı için uygulama kullanılırken
+  sayaçlar izlenebilir.
+
+Her iki günlük de `FileShare.ReadWrite` ile açılır; dosyalar yazılırken
+dışarıdan okunabilir.
+
+`ApplicationLog` damgayı tek yerde üretir (`[SS:dd:ss.fff]`), hem pencere hem
+dosya aynı satırı görür. Bellekte tuttuğu geçmiş `MaxRetainedMessages` ile
+sınırlıdır.
+
 ## Gelecek (TODO)
 - TF-IDF & gelişmiş skor: `IScoringStrategy`.
 - Türkçe morfoloji: yeni tokenizer implementasyonu.

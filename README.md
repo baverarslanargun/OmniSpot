@@ -19,6 +19,7 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 - ✅ **Thumbnail Önizleme**: Resim ve video önizlemeleri
 - ✅ **Renkli Klasörler**: Klasör türüne göre renk kodlaması
 - ✅ **Kalıcı Çoklu Dizin İndeksi**: Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini indeksleyin; sonraki açılışlarda kayıtlı indeksi kullanın
+- ✅ **Tanılama Penceresi**: Canlı bellek, indeks ve küçük resim sayaçları; isteğe bağlı dosyaya günlükleme
 
 ### Klavye Kısayolları
 | Kısayol | İşlem |
@@ -72,6 +73,54 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj -c Release -o .\
 ```
 
 Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
+
+### Tanılama Penceresi
+
+Arama çubuğunun sağındaki 🐞 düğmesi **ayrı bir tanılama penceresi** açar. Ana
+pencereden bağımsız olduğu için uygulamayı kullanırken sayaçları aynı anda
+izleyebilirsiniz.
+
+Pencerenin solunda uygulama günlüğü, sağında saniyede bir tazelenen sayaçlar yer
+alır:
+
+| Bölüm | İçerik |
+|---|---|
+| `SÜREÇ` | private / working set belleği, iş parçacığı, handle, yönetilen yığın, GC sayaçları |
+| `İNDEKS` | indekslenen dosya ve dizin sayısı, token sayısı, uzlaştırma durumu |
+| `KÜÇÜK RESİM` | önbellek doluluğu ve boyutu, istek sayısı ve kaynağı (bellek / disk / kabuk), çözülen bitmap boyutu |
+| `SON KLASÖR` | açılan klasör, listelenen öğe sayısı, kesme sınırına takılıp takılmadığı |
+
+Eşik aşan değerler renk değiştirir; örneğin çözülen küçük resim istenen boyuttan
+büyükse sarıya döner.
+
+**Dosyaya yazma.** İki bağımsız anahtar var; ikisi de aynı dizini kullanır ve
+aynı oturum damgasını taşıdıkları için dosyalar eşleşir.
+
+| Anahtar | Dosya | İçerik |
+|---|---|---|
+| `Günlüğü yaz` | `omnispot-YYYYAAGG-SSDDss.log` | soldaki olay akışı, düz metin |
+| `Sayaçları yaz` | `omnispot-YYYYAAGG-SSDDss-metrik.csv` | sağdaki sayaçların zaman serisi |
+
+Günlük dosyasının başına sürüm, işletim sistemi, çekirdek sayısı, süreç
+kimliği, veritabanı yolu ve yapılandırma damgaları yazılır; her satır zaman
+damgalıdır.
+
+Sayaç dosyası **uzun biçim** CSV'dir — `zaman;bölüm;etiket;değer;sayısal`.
+Her okuma ayrı bir satırdır; böylece çalışma sırasında yeni metrik eklendiğinde
+sabit başlıklı bir tabloda kaybolmaz. `değer` ekranda görünen metin
+(`878,4 MB`), `sayısal` ise birimsiz ham değerdir (`921010176`, ondalık nokta).
+Varsayılan `5` saniyede bir örnek alınır; ayrıca klasör açma gibi olaylar
+`OLAY` bölümünde ayrı satır olarak işaretlenir, böylece bir sıçramanın
+kullanıcı eylemine mi arka plan işine mi denk geldiği sonradan ayırt edilebilir.
+
+Dosyalar yazılırken de okunabilir; uygulama açıkken inceleyebilirsiniz.
+`Dizin seç…` ile hedef klasör seçilir, `Dizini hatırla` işaretliyse seçim
+ayarlarda saklanır ve sonraki açılışta yazma kaldığı yerden sürer. Her iki
+dosya da dosya adları ve gezilen klasör yolları içerebilir; paylaşmadan önce
+göz atın.
+
+`Kopyala` düğmesi damgaları, bütün sayaçları ve ekrandaki günlüğü tek seferde
+panoya alır.
 
 ### Sistem ve Güvenlik Davranışı
 

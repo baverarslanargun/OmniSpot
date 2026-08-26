@@ -2,8 +2,10 @@ namespace SmartFileLauncher.UI.Services;
 
 public sealed class ApplicationLog
 {
+    public const int MaxRetainedMessages = 5000;
+
     private readonly object _sync = new();
-    private readonly List<string> _messages = new();
+    private readonly Queue<string> _messages = new();
 
     public event Action<string>? MessageWritten;
 
@@ -11,9 +13,15 @@ public sealed class ApplicationLog
     {
         ArgumentNullException.ThrowIfNull(message);
 
+        message = $"[{DateTime.Now:HH:mm:ss.fff}] {message}";
+
         lock (_sync)
         {
-            _messages.Add(message);
+            _messages.Enqueue(message);
+            while (_messages.Count > MaxRetainedMessages)
+            {
+                _messages.Dequeue();
+            }
         }
 
         MessageWritten?.Invoke(message);
