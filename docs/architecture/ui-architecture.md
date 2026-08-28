@@ -69,6 +69,56 @@ Tamamen lokal çalışan WPF tam ekran overlay uygulaması. Core katmanı dosya 
 Her iki günlük de `FileShare.ReadWrite` ile açılır; dosyalar yazılırken
 dışarıdan okunabilir.
 
+### Kontrollü `bos-uretim` profili
+
+`App.OnStartup`, `--profil bos-uretim` seçeneğini production composition
+kurulmadan önce ayrıştırır. Profil geçerli bir `--tanila <koşum-dizini>` olmadan
+başlatılmaz. Koşum düzeni; settings, SQLite/WAL/SHM, thumbnail cache ve tek boş
+corpus kökünü `bos-uretim-data` altında oluşturur. Production APPDATA yollarıyla
+çakışma, relative/sürücü-kökü yol, reparse koşum dizini veya dolu managed data
+dizini fail-closed hata üretir; production profile sessiz fallback yapılmaz.
+Windows yolu gerçek disk hedefine çözülür; kısa yol/sürücü takma adıyla yapılan
+production çakışmaları ile herhangi bir üst klasördeki junction/symlink de
+reddedilir. Corpus içindeki ilk tarama, uzlaştırma, klasör gezgini ve dosya
+işlemleri reparse point üzerinden başka bir köke geçmez. UNC/device namespace
+koşumları kabul edilmez; yerel koşum `FileShare.None` sahiplik dosyasını süreç
+boyunca açık tutarak ikinci sürecin aynı data root'u paylaşmasını engeller.
+Doğrulama ile sonraki dosya işlemi atomik tek kernel işlemi değildir; profil
+hostile same-user sürece karşı sandbox güvenlik sınırı iddia etmez.
+
+`ApplicationCompositionRoot` aynı gerçek WPF pencere, arama, SQLite, watcher,
+uzlaştırma, thumbnail, tray ve hotkey servislerini kurar. Yalnız path/provider
+bağları ölçüm düzenine yönelir; Windows startup registration ve indeks rebuild
+ölçüm sırasında devre dışıdır. `bos-uretim` dosya işlemlerini
+`RootScopedFileOperationService` ile boş corpus köküne kapatır.
+`uretim-kopya`, normal `IndexedLocationProvider` ile gerçek kullanıcı
+köklerini okur; `ReadOnlyFileOperationService` tüm dosya eylemlerini inner
+production servise ulaştırmadan reddeder. Tanılama oturum başlığı profil ve bütün managed canonical
+yolları, `OLAY` zinciri ise `profil hazır` ve indeks başlangıç/bitiş fazlarını
+kaydeder.
+
+### Kontrollü `uretim-kopya` profili
+
+`App.OnStartup`, `--profil uretim-kopya` seçeneğini composition kurulmadan önce
+ayrıştırır ve `--tanila <koşum-dizini>` olmadan başlatmaz. Orkestratör,
+production kapalıyken ayrı snapshot aracı veya transactional SQLite backup ile
+hazırlanmış settings kopyasını (yoksa güvenli varsayılan) ve zorunlu,
+temiz/checkpoint edilmiş `index.db` dosyasını orkestratör
+`uretim-kopya-data/settings` ile `uretim-kopya-data/index` altına pre-seed
+eder; uygulama production verisini kopyalamaz. `index.db-wal` ve
+`index.db-shm` sidecar'ları reddedilir. `uretim-kopya-data/thumbcache`
+her turda boş ve izoledir; gerçek thumbnail cache okunmaz veya kopyalanmaz.
+`corpus` dizini bu profilde yoktur.
+
+İndeks yöneticisi bu profilde normal gerçek kullanıcı kökleriyle çalışır;
+reparse point'ler ilk tarama, watcher, klasör gezgini ve uzlaştırmada atlanır.
+Kopya SQLite dosyası schema/repair ve uzlaştırma yazılarının hedefidir.
+Kullanıcı dosyası değiştiren işlemler fail-closed adapter ile reddedilir;
+shell/process handoff dahil tüm dosya eylemleri engellenir. Koşum kökü, production APPDATA ve
+LOCALAPPDATA yollarının fiziksel çakışması, reparse/ancestor, beklenmeyen
+managed içerik ve eşzamanlı lease ihlali başlamadan reddedilir; hata halinde
+production'a sessiz fallback yapılmaz.
+
 `ApplicationLog` damgayı tek yerde üretir (`[SS:dd:ss.fff]`), hem pencere hem
 dosya aynı satırı görür. Bellekte tuttuğu geçmiş `MaxRetainedMessages` ile
 sınırlıdır.

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text;
 using System.Windows;
+using SmartFileLauncher.Core.Diagnostics;
 using SmartFileLauncher.UI.Composition;
 using SmartFileLauncher.UI.Services;
 using SmartFileLauncher.UI.Views;
@@ -10,13 +11,50 @@ namespace SmartFileLauncher.UI;
 
 public partial class App : System.Windows.Application 
 {
-	private static readonly string _logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot_crash.log");
+	private string _logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot_crash.log");
+	private bool _redactCrashPaths;
 	private ApplicationCompositionRoot? _compositionRoot;
 	private MainWindow? _mainWindow;
 
 	protected override void OnStartup(StartupEventArgs e)
 	{
 		base.OnStartup(e);
+		var startupOptions = ApplicationStartupOptions.Parse(e.Args);
+		if (startupOptions.Error != null)
+		{
+			System.Windows.MessageBox.Show(
+				startupOptions.Error,
+				"OmniSpot Ölçüm Profili",
+				MessageBoxButton.OK,
+				MessageBoxImage.Error);
+			Shutdown(2);
+			return;
+		}
+
+		MeasurementRunLayout? measurementRun = null;
+		if (startupOptions.IsMeasurement)
+		{
+			try
+			{
+				measurementRun = MeasurementRunLayout.Prepare(startupOptions);
+			}
+			catch (Exception ex)
+			{
+                System.Windows.MessageBox.Show(
+                    $"{startupOptions.ProfileName ?? "ölçüm"} profili başlatılamadı:{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+					"OmniSpot Ölçüm Profili",
+					MessageBoxButton.OK,
+					MessageBoxImage.Error);
+				Shutdown(2);
+				return;
+			}
+		}
+		if (measurementRun != null)
+		{
+			_logFile = Path.Combine(measurementRun.RunRoot, "omnispot_crash.log");
+			_redactCrashPaths = measurementRun.Profile == MeasurementProfile.ProductionCopy;
+		}
+
 		var indexRebuildFailed = e.Args.Any(argument =>
 			string.Equals(
 				argument,
@@ -25,7 +63,17 @@ public partial class App : System.Windows.Application
 		AppDomain.CurrentDomain.UnhandledException += CurrentDomain_UnhandledException;
 		DispatcherUnhandledException += App_DispatcherUnhandledException;
 
-		_compositionRoot = new ApplicationCompositionRoot();
+		try
+		{
+			_compositionRoot = new ApplicationCompositionRoot(
+				startupOptions,
+				measurementRun);
+		}
+		catch
+		{
+			measurementRun?.Dispose();
+			throw;
+		}
 		_mainWindow = _compositionRoot.CreateMainWindow();
 		MainWindow = _mainWindow;
 		_mainWindow.Show();
@@ -64,15 +112,35 @@ public partial class App : System.Windows.Application
 		}
 	}
 
-	private static void LogCrash(string source, Exception ex)
+	private void LogCrash(string source, Exception ex)
 	{
 		try
 		{
-			var sb = new StringBuilder();
-			sb.AppendLine($"==== Crash {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} Source={source} ====");
-			sb.AppendLine(ex.ToString());
-			File.AppendAllText(_logFile, sb.ToString());
+			File.AppendAllText(
+				_logFile,
+				FormatCrash(source, ex, DateTime.Now, _redactCrashPaths));
 		}
 		catch { /* ignore logging failures */ }
+	}
+
+	internal static string FormatCrash(
+		string source,
+		Exception ex,
+		DateTime timestamp,
+		bool redactPaths)
+	{
+		ArgumentException.ThrowIfNullOrWhiteSpace(source);
+		ArgumentNullException.ThrowIfNull(ex);
+
+		var sb = new StringBuilder();
+		sb.AppendLine($"==== Crash {timestamp:yyyy-MM-dd HH:mm:ss.fff} Source={source} ====");
+		var exceptionText = ex.ToString();
+		if (redactPaths)
+		{
+			exceptionText = DiagnosticPathRedactor.Redact(exceptionText);
+		}
+
+		sb.AppendLine(exceptionText);
+		return sb.ToString();
 	}
 }

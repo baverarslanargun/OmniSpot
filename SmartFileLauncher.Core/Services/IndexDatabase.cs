@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.ExceptionServices;
+using System.Security.Cryptography;
 using Microsoft.Data.Sqlite;
+using SmartFileLauncher.Core.IO;
 using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Services;
@@ -38,6 +41,312 @@ public class IndexDatabase : IDisposable
     public bool IsOpen => _connection != null;
 
     #region Connection Management
+
+    public static void ValidateSeed(string databasePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
+        var pathGuard = FileSystemPathGuard.Default;
+        var canonicalDatabasePath = pathGuard.Canonicalize(databasePath);
+        if (!File.Exists(canonicalDatabasePath))
+        {
+            throw new InvalidDataException(
+                "Ölçüm index.db dosyası bulunamadı.");
+        }
+
+        if (File.Exists(canonicalDatabasePath + "-wal") ||
+            File.Exists(canonicalDatabasePath + "-shm"))
+        {
+            throw new InvalidDataException(
+                "Ölçüm index.db temiz ve checkpoint edilmiş olmalıdır; WAL/SHM sidecar kabul edilmez.");
+        }
+
+        try
+        {
+            if (pathGuard.FindReparsePointInExistingPath(canonicalDatabasePath) != null)
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db yeniden yönlendirilmiş bir dosya olamaz.");
+            }
+
+            var indexDirectory = Path.GetDirectoryName(canonicalDatabasePath);
+            if (string.IsNullOrWhiteSpace(indexDirectory))
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db doğrulama dizini bulunamadı.");
+            }
+
+            var before = CaptureSeedFingerprint(indexDirectory, pathGuard);
+            string? validationDirectory = null;
+            Exception? validationError = null;
+            Exception? cleanupError = null;
+            try
+            {
+                validationDirectory = CreateValidationDirectory(indexDirectory, pathGuard);
+                var clonePath = Path.Combine(validationDirectory, "index.db");
+                File.Copy(canonicalDatabasePath, clonePath);
+                ValidateClone(clonePath);
+            }
+            catch (Exception ex)
+            {
+                validationError = ex;
+            }
+            finally
+            {
+                if (validationDirectory != null)
+                {
+                    try
+                    {
+                        DeleteValidationDirectory(validationDirectory);
+                    }
+                    catch (Exception ex)
+                    {
+                        cleanupError = ex;
+                    }
+                }
+            }
+
+            var after = CaptureSeedFingerprint(indexDirectory, pathGuard);
+            if (!FingerprintsEqual(before, after))
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db doğrulaması sırasında seed değişti.");
+            }
+
+            if (cleanupError != null)
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db doğrulama geçici dizini temizlenemedi.",
+                    cleanupError);
+            }
+
+            if (validationError != null)
+            {
+                ExceptionDispatchInfo.Capture(validationError).Throw();
+            }
+        }
+        catch (InvalidDataException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is SqliteException or IOException or UnauthorizedAccessException or
+                InvalidOperationException)
+        {
+            throw new InvalidDataException(
+                "Ölçüm index.db geçerli ve doğrulanabilir bir SQLite dosyası değil.",
+                ex);
+        }
+    }
+
+    private static void ValidateClone(string clonePath)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = clonePath,
+                Mode = SqliteOpenMode.ReadWrite,
+                Pooling = false
+            }.ToString());
+        connection.Open();
+
+        ValidateCheck(connection, "quick_check");
+        ValidateCheck(connection, "integrity_check");
+        ValidateSchemaSignature(connection);
+    }
+
+    private static void ValidateSchemaSignature(SqliteConnection connection)
+    {
+        var requiredColumns = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Directories"] = new[]
+            {
+                "Id", "FullPath", "Name", "ParentId", "Depth",
+                "LastWriteTimeUtc", "LastIndexedTimeUtc", "IsHidden"
+            },
+            ["Files"] = new[]
+            {
+                "Id", "FullPath", "FileName", "Extension", "DirectoryId",
+                "SizeBytes", "CreatedTimeUtc", "LastWriteTimeUtc",
+                "LastIndexedTimeUtc", "OpenCount", "IsHidden", "IsSystem"
+            },
+            ["Tokens"] = new[] { "Id", "Token" },
+            ["FileTokens"] = new[] { "FileId", "TokenId" },
+            ["Metadata"] = new[] { "Key", "Value" },
+            ["ExcludedPaths"] = new[] { "Id", "Pattern", "IsRegex" }
+        };
+
+        foreach (var table in requiredColumns)
+        {
+            var foundColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using var command = connection.CreateCommand();
+            command.CommandText = $"PRAGMA table_info(\"{table.Key}\");";
+            using var reader = command.ExecuteReader();
+            while (reader.Read())
+            {
+                foundColumns.Add(reader.GetString(1));
+            }
+
+            if (!table.Value.All(foundColumns.Contains))
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db OmniSpot şema imzasını karşılamıyor.");
+            }
+        }
+
+        using var schemaVersionCommand = connection.CreateCommand();
+        schemaVersionCommand.CommandText =
+            "SELECT Value FROM Metadata WHERE Key = 'schema_version';";
+        var schemaVersion = schemaVersionCommand.ExecuteScalar()?.ToString();
+        if (!string.Equals(
+                schemaVersion,
+                CurrentSchemaVersion.ToString(),
+                StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                "Ölçüm index.db desteklenmeyen OmniSpot şema sürümünü kullanıyor.");
+        }
+    }
+
+    private static string CreateValidationDirectory(
+        string indexDirectory,
+        FileSystemPathGuard pathGuard)
+    {
+        var canonicalDirectory = pathGuard.Canonicalize(indexDirectory);
+        var physicalDirectory = pathGuard.ResolvePhysicalPath(canonicalDirectory);
+        for (var attempt = 0; attempt < 8; attempt++)
+        {
+            var candidate = Path.Combine(
+                canonicalDirectory,
+                ".validate-" + Guid.NewGuid().ToString("N"));
+            if (File.Exists(candidate) || Directory.Exists(candidate))
+            {
+                continue;
+            }
+
+            Directory.CreateDirectory(candidate);
+            if (pathGuard.FindReparsePointInExistingPath(candidate) != null ||
+                !IsSameOrDescendant(
+                    pathGuard.ResolvePhysicalPath(candidate),
+                    physicalDirectory))
+            {
+                DeleteValidationDirectory(candidate);
+                throw new InvalidDataException(
+                    "Ölçüm index.db doğrulama dizini fiziksel olarak içeride değil.");
+            }
+
+            return candidate;
+        }
+
+        throw new InvalidDataException(
+            "Ölçüm index.db doğrulama dizini oluşturulamadı.");
+    }
+
+    private static void DeleteValidationDirectory(string directory)
+    {
+        if (!Directory.Exists(directory) && !File.Exists(directory))
+        {
+            return;
+        }
+
+        if (File.Exists(directory))
+        {
+            throw new IOException("Doğrulama yolu dizin değil.");
+        }
+
+        Directory.Delete(directory, recursive: true);
+        if (Directory.Exists(directory) || File.Exists(directory))
+        {
+            throw new IOException("Doğrulama yolu silinemedi.");
+        }
+    }
+
+    private static SeedFingerprint CaptureSeedFingerprint(
+        string indexDirectory,
+        FileSystemPathGuard pathGuard)
+    {
+        var entries = new Dictionary<string, FileFingerprint>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in Directory.EnumerateFileSystemEntries(indexDirectory))
+        {
+            var canonicalEntry = pathGuard.Canonicalize(entry);
+            if (Directory.Exists(canonicalEntry))
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db dizininde beklenmeyen dizin var.");
+            }
+
+            if (!File.Exists(canonicalEntry))
+            {
+                throw new InvalidDataException(
+                    "Ölçüm index.db seed dosya kümesi okunamadı.");
+            }
+
+            entries.Add(
+                Path.GetFileName(canonicalEntry),
+                CaptureFileFingerprint(canonicalEntry, pathGuard));
+        }
+
+        return new SeedFingerprint(entries);
+    }
+
+    private static FileFingerprint CaptureFileFingerprint(
+        string path,
+        FileSystemPathGuard pathGuard)
+    {
+        var info = new FileInfo(path);
+        using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            bufferSize: 64 * 1024,
+            FileOptions.SequentialScan);
+        using var sha256 = SHA256.Create();
+        var hash = Convert.ToHexString(sha256.ComputeHash(stream));
+        return new FileFingerprint(
+            hash,
+            info.Length,
+            info.LastWriteTimeUtc,
+            pathGuard.GetFileIdentity(path));
+    }
+
+    private static bool FingerprintsEqual(
+        SeedFingerprint first,
+        SeedFingerprint second)
+    {
+        if (first.Files.Count != second.Files.Count)
+        {
+            return false;
+        }
+
+        foreach (var entry in first.Files)
+        {
+            if (!second.Files.TryGetValue(entry.Key, out var other) ||
+                entry.Value != other)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private sealed record SeedFingerprint(
+        IReadOnlyDictionary<string, FileFingerprint> Files);
+
+    private sealed record FileFingerprint(
+        string Hash,
+        long Length,
+        DateTime LastWriteUtc,
+        FileSystemPathGuard.FileIdentity Identity);
+
+    private static bool IsSameOrDescendant(string candidate, string root)
+    {
+        if (candidate.Equals(root, StringComparison.OrdinalIgnoreCase)) return true;
+
+        return candidate.StartsWith(
+            root + Path.DirectorySeparatorChar,
+            StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Opens the database connection and ensures schema exists.
@@ -552,6 +861,18 @@ public class IndexDatabase : IDisposable
     {
         using var cmd = CreateCommand(sql);
         cmd.ExecuteNonQuery();
+    }
+
+    private static void ValidateCheck(SqliteConnection connection, string check)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA {check};";
+        var result = command.ExecuteScalar()?.ToString();
+        if (!string.Equals(result, "ok", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException(
+                $"SQLite {check} doğrulaması başarısız.");
+        }
     }
 
     #endregion

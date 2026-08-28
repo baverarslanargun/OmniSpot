@@ -27,7 +27,9 @@ public sealed class DiagnosticsCollector
     private readonly Process _process = Process.GetCurrentProcess();
     private readonly DiagnosticsRateTracker _rates = new();
     private readonly Func<DateTime> _clock;
+    private readonly TimeSpan? _forcedLiveMemoryInterval;
 
+    private DateTime? _forcedLiveMemoryDueAt;
     private long _searchCount;
 
     public DiagnosticsCollector(
@@ -35,13 +37,20 @@ public sealed class DiagnosticsCollector
         IThumbnailService thumbnails,
         int requestedThumbnailSize,
         int folderItemLimit,
-        Func<DateTime>? clock = null)
+        Func<DateTime>? clock = null,
+        TimeSpan? forcedLiveMemoryInterval = null)
     {
         _indexLifecycle = indexLifecycle ?? throw new ArgumentNullException(nameof(indexLifecycle));
         _thumbnails = thumbnails ?? throw new ArgumentNullException(nameof(thumbnails));
         _requestedThumbnailSize = requestedThumbnailSize;
         _folderItemLimit = folderItemLimit;
         _clock = clock ?? (() => DateTime.Now);
+        if (forcedLiveMemoryInterval is { } interval)
+        {
+            if (interval <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(forcedLiveMemoryInterval));
+            _forcedLiveMemoryInterval = interval;
+        }
     }
 
     public DiagnosticsMetrics Metrics { get; } = new();
@@ -51,6 +60,7 @@ public sealed class DiagnosticsCollector
         var now = _clock();
         CollectProcess(now);
         CollectMemory(now);
+        CollectForcedLiveMemory(now);
         CollectIo(now);
         CollectIndex();
         CollectThumbnails();
@@ -143,10 +153,12 @@ public sealed class DiagnosticsCollector
                     percent >= 25d ? DiagnosticsSeverity.Warning : DiagnosticsSeverity.Normal,
                     percent);
             }
+
+            Metrics.Set(GroupProcess, "durum", "iyi", DiagnosticsSeverity.Good);
         }
         catch (Exception ex)
         {
-            Metrics.Set(GroupProcess, "private", ex.GetType().Name, DiagnosticsSeverity.Warning);
+            Metrics.Set(GroupProcess, "durum", ex.GetType().Name, DiagnosticsSeverity.Warning);
         }
     }
 
@@ -211,6 +223,60 @@ public sealed class DiagnosticsCollector
                 allocationRate.Value);
         }
     }
+    /// <summary>
+    /// `yönetilen yığın` toplama zorlamadan okunur; içindeki toplanmamış çöp
+    /// canlı veriden ayrılamaz. Bu ölçüm tam bir engelleyici toplama yapıp
+    /// kalanı yazar, böylece canlı/çöp ayrımı tek satırda görünür. Toplama
+    /// uygulamayı durdurduğu için yalnız açıkça bir aralık verildiğinde çalışır;
+    /// üretim varsayılanında kapalıdır ve hiçbir satır yazmaz.
+    /// </summary>
+    private void CollectForcedLiveMemory(DateTime now)
+    {
+        if (_forcedLiveMemoryInterval is not { } interval) return;
+
+        if (_forcedLiveMemoryDueAt is null)
+        {
+            _forcedLiveMemoryDueAt = now + interval;
+            Metrics.Set(
+                GroupMemory, "canlı yığın (zorlanmış)", "bekleniyor",
+                DiagnosticsSeverity.Normal);
+            return;
+        }
+
+        if (now < _forcedLiveMemoryDueAt.Value) return;
+
+        _forcedLiveMemoryDueAt = now + interval;
+
+        var before = GC.GetTotalMemory(false);
+        var stopwatch = Stopwatch.StartNew();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        GC.WaitForPendingFinalizers();
+        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+        stopwatch.Stop();
+        var live = GC.GetTotalMemory(false);
+        var reclaimed = before - live;
+
+        Metrics.Set(
+            GroupMemory, "canlı yığın (zorlanmış)", FormatBytes(live),
+            DiagnosticsSeverity.Normal, live);
+        Metrics.Set(
+            GroupMemory,
+            "  toplanan",
+            before <= 0
+                ? FormatBytes(reclaimed)
+                : $"{FormatBytes(reclaimed)} (%{(double)reclaimed / before * 100d:N1})",
+            DiagnosticsSeverity.Normal,
+            reclaimed);
+        Metrics.Set(
+            GroupMemory,
+            "  toplama süresi",
+            $"{stopwatch.Elapsed.TotalMilliseconds:N0} ms",
+            stopwatch.Elapsed.TotalMilliseconds >= 500d
+                ? DiagnosticsSeverity.Warning
+                : DiagnosticsSeverity.Normal,
+            stopwatch.Elapsed.TotalMilliseconds);
+    }
+
 
     private void CollectIo(DateTime now)
     {
@@ -253,6 +319,8 @@ public sealed class DiagnosticsCollector
                 GroupIo, "okuma hızı", $"{FormatBytes((long)bytesRate.Value)}/sn",
                 DiagnosticsSeverity.Normal, bytesRate.Value);
         }
+
+        Metrics.Set(GroupIo, "durum", "okundu", DiagnosticsSeverity.Good);
     }
 
     private void CollectIndex()
@@ -329,6 +397,7 @@ public sealed class DiagnosticsCollector
             Metrics.Set(
                 GroupIndex, "yayımlanan girdi", report.SearchStateItemCount.ToString("N0"),
                 DiagnosticsSeverity.Normal, report.SearchStateItemCount);
+            Metrics.Set(GroupIndex, "durum", "iyi", DiagnosticsSeverity.Good);
         }
         catch (Exception ex)
         {

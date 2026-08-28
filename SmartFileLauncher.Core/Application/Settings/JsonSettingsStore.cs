@@ -36,6 +36,33 @@ public sealed class JsonSettingsStore : ISettingsStore
         }
     }
 
+    public AppSettings LoadStrict()
+    {
+        if (!File.Exists(_settingsPath))
+        {
+            return new AppSettings();
+        }
+
+        try
+        {
+            var json = File.ReadAllText(_settingsPath);
+            return JsonSerializer.Deserialize<AppSettings>(json)
+                ?? throw new InvalidDataException("Ayar dosyası JSON nesnesi içermiyor.");
+        }
+        catch (InvalidDataException)
+        {
+            throw;
+        }
+        catch (Exception ex) when (
+            ex is JsonException or IOException or UnauthorizedAccessException or
+                NotSupportedException)
+        {
+            throw new InvalidDataException(
+                "Ölçüm ayarları geçerli JSON olarak okunamadı.",
+                ex);
+        }
+    }
+
     public void Save(AppSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);

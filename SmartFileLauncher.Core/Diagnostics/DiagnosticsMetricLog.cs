@@ -15,6 +15,7 @@ public sealed class DiagnosticsMetricLog : IDisposable
 
     private readonly object _sync = new();
     private readonly Func<DateTime> _clock;
+    private readonly Func<string, string>? _sanitizeValue;
 
     private FileStream? _stream;
     private string? _currentFilePath;
@@ -22,9 +23,12 @@ public sealed class DiagnosticsMetricLog : IDisposable
     private string? _lastError;
     private bool _disposed;
 
-    public DiagnosticsMetricLog(Func<DateTime>? clock = null)
+    public DiagnosticsMetricLog(
+        Func<DateTime>? clock = null,
+        Func<string, string>? sanitizeValue = null)
     {
         _clock = clock ?? (() => DateTime.Now);
+        _sanitizeValue = sanitizeValue;
     }
 
     public bool IsWriting
@@ -177,7 +181,7 @@ public sealed class DiagnosticsMetricLog : IDisposable
         }
     }
 
-    private static void AppendRow(
+    private void AppendRow(
         StringBuilder builder,
         string stamp,
         string group,
@@ -193,9 +197,9 @@ public sealed class DiagnosticsMetricLog : IDisposable
             .Append(Environment.NewLine);
     }
 
-    private static string Sanitize(string value)
+    private string Sanitize(string value)
     {
-        return value
+        return (_sanitizeValue?.Invoke(value) ?? value)
             .Replace(';', ',')
             .Replace('\r', ' ')
             .Replace('\n', ' ')

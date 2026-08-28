@@ -1,10 +1,15 @@
 using System.Reflection;
+using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Diagnostics;
 using SmartFileLauncher.UI.Services;
 
 namespace SmartFileLauncher.UI.Views;
 
 public partial class MainWindow {
+    private static readonly TimeSpan ForcedLiveMemoryInterval = TimeSpan.FromSeconds(60);
+
+    private readonly ApplicationStartupOptions _startupOptions;
+    private readonly MeasurementRunLayout? _measurementRun;
     private DiagnosticsSession? _diagnostics;
     private DiagnosticsWindow? _diagnosticsWindow;
 
@@ -15,13 +20,19 @@ public partial class MainWindow {
                 _indexLifecycle,
                 _thumbnailService,
                 THUMBNAIL_SIZE,
-                MAX_FOLDER_ITEMS),
+                MAX_FOLDER_ITEMS,
+                forcedLiveMemoryInterval: _startupOptions.Profile is null
+                    ? null
+                    : ForcedLiveMemoryInterval),
             _indexLifecycle,
             _thumbnailService,
-            _appSettings.DiagnosticsMetricIntervalSeconds);
+            _appSettings.DiagnosticsMetricIntervalSeconds,
+            _startupOptions.Profile == MeasurementProfile.ProductionCopy
+                ? DiagnosticPathRedactor.Redact
+                : null);
 
     private void InitializeDiagnostics() {
-        var startup = DiagnosticsStartupOptions.Parse(Environment.GetCommandLineArgs());
+        var startup = _startupOptions.Diagnostics;
         if (startup.Error != null) {
             Log($"⚠️ {startup.Error}");
         }
@@ -52,11 +63,18 @@ public partial class MainWindow {
                 Log($"⚠️ Sayaç günlüğü açılamadı: {Diagnostics.MetricLog.LastError}");
             }
         }
+
+        if (_measurementRun != null) {
+            Log($"🧪 Ölçüm profili: {_startupOptions.ProfileName}");
+            Diagnostics.RecordEvent(
+                "profil hazır",
+                _startupOptions.ProfileName);
+        }
     }
 
     private IReadOnlyList<KeyValuePair<string, string>> BuildDiagnosticsStamps() {
         var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "bilinmiyor";
-        return new[] {
+        var stamps = new List<KeyValuePair<string, string>> {
             new KeyValuePair<string, string>("sürüm", version),
             new KeyValuePair<string, string>("işletim sistemi", Environment.OSVersion.VersionString),
             new KeyValuePair<string, string>("çekirdek", Environment.ProcessorCount.ToString()),
@@ -66,6 +84,54 @@ public partial class MainWindow {
             new KeyValuePair<string, string>("küçük resim", $"{THUMBNAIL_SIZE}×{THUMBNAIL_SIZE}"),
             new KeyValuePair<string, string>("klasör sınırı", MAX_FOLDER_ITEMS.ToString())
         };
+
+        if (_measurementRun != null) {
+            stamps.Add(new KeyValuePair<string, string>(
+                "ölçüm profili",
+                _startupOptions.ProfileName ?? "bilinmiyor"));
+            stamps.Add(new KeyValuePair<string, string>("koşum kökü", _measurementRun.RunRoot));
+            stamps.Add(new KeyValuePair<string, string>("veri kökü", _measurementRun.DataRoot));
+            stamps.Add(new KeyValuePair<string, string>("ayar dizini", _measurementRun.SettingsDirectory));
+            stamps.Add(new KeyValuePair<string, string>("ayar", _measurementRun.SettingsPath));
+            stamps.Add(new KeyValuePair<string, string>("indeks dizini", _measurementRun.IndexDirectory));
+            stamps.Add(new KeyValuePair<string, string>("index.db", _measurementRun.DatabasePath));
+            if (_startupOptions.Profile == MeasurementProfile.EmptyProduction)
+            {
+                stamps.Add(new KeyValuePair<string, string>("index.db-wal", _measurementRun.DatabaseWalPath));
+                stamps.Add(new KeyValuePair<string, string>("index.db-shm", _measurementRun.DatabaseShmPath));
+            }
+            if (_measurementRun.CorpusPath is { } corpusPath)
+            {
+                stamps.Add(new KeyValuePair<string, string>("corpus", corpusPath));
+            }
+            else
+            {
+                var indexedRootCount = new IndexedLocationProvider().Resolve().RootPaths.Count;
+                stamps.Add(new KeyValuePair<string, string>(
+                    "indexed roots",
+                    $"<gizli-path> ({indexedRootCount} kök)"));
+            }
+            stamps.Add(new KeyValuePair<string, string>(
+                "thumbnail cache",
+                _measurementRun.ThumbnailCachePath));
+            stamps.Add(new KeyValuePair<string, string>("sahiplik kilidi", _measurementRun.LeasePath));
+            stamps.Add(new KeyValuePair<string, string>(
+                "ölçüm yerleşimi",
+                _startupOptions.Profile == MeasurementProfile.ProductionCopy
+                    ? "preseeded production index/settings + fresh thumbnail cache"
+                    : "isolated empty corpus + fresh thumbnail cache"));
+        }
+
+        return stamps;
+    }
+
+    private void RecordMeasurementEvent(
+        string name,
+        string? detail = null,
+        double? numericValue = null) {
+        if (_measurementRun == null) return;
+
+        Diagnostics.RecordEvent(name, detail, numericValue);
     }
 
     private void ToggleDiagnosticsWindow() {
@@ -79,7 +145,10 @@ public partial class MainWindow {
             Diagnostics,
             _appSettings,
             _settingsApplication,
-            BuildDiagnosticsStamps);
+            BuildDiagnosticsStamps,
+            _startupOptions.Profile == MeasurementProfile.ProductionCopy
+                ? _measurementRun?.RunRoot
+                : null);
 
         window.Closed += (_, __) => {
             _diagnosticsWindow = null;
@@ -91,7 +160,12 @@ public partial class MainWindow {
     }
 
     private void RecordFolderMetrics(string folderPath, int itemCount, bool truncated) {
-        Diagnostics.RecordFolder(folderPath, itemCount, truncated);
+        Diagnostics.RecordFolder(
+            _startupOptions.Profile == MeasurementProfile.ProductionCopy
+                ? "<gizli-path>"
+                : folderPath,
+            itemCount,
+            truncated);
     }
 
     private void RecordSearchMetrics(int queryLength, TimeSpan duration, int resultCount) {

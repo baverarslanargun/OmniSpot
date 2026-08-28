@@ -40,6 +40,14 @@ jobs:
           --results-directory TestResults
           --collect "XPlat Code Coverage"
 
+      - name: Test UI
+        run: >-
+          dotnet test tests/SmartFileLauncher.UI.Tests/SmartFileLauncher.UI.Tests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=ui-tests.trx"
+          --results-directory TestResults
+
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
