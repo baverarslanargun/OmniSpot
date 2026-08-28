@@ -247,8 +247,8 @@ public sealed class IndexManagerLifecycleTests
             await manager.InitializeAsync(root);
             await manager.InitializeAsync(root);
 
-            Assert.Single(manager.InvertedIndex.Get("document"), node =>
-                string.Equals(node.FullPath, file, StringComparison.OrdinalIgnoreCase));
+            Assert.Single(manager.CurrentSearchState.Get("document"), item =>
+                string.Equals(item.FullPath, file, StringComparison.OrdinalIgnoreCase));
             Assert.Single(manager.MetadataMap, entry =>
                 string.Equals(entry.Key, file, StringComparison.OrdinalIgnoreCase));
             Assert.NotNull(manager.GetNode(file));

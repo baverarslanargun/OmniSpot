@@ -39,7 +39,7 @@ public sealed class IndexManagerFileChangeTests
             Assert.Null(manager.GetNode(nestedDirectory));
             Assert.Null(manager.GetNode(deletedFile));
             Assert.False(manager.MetadataMap.ContainsKey(deletedFile));
-            Assert.False(manager.InvertedIndex.Contains(deletedFile));
+            Assert.Empty(manager.CurrentSearchState.Get("ghost"));
             Assert.Null(database.GetDirectoryByPath(dottedDirectory));
             Assert.Null(database.GetDirectoryByPath(nestedDirectory));
             Assert.Null(database.GetFileByPath(deletedFile));
@@ -145,17 +145,14 @@ public sealed class IndexManagerFileChangeTests
             var rootNode = Assert.IsType<FileSystemNode>(manager.GetNode(root));
             Assert.Single(rootNode.Children, node =>
                 string.Equals(node.FullPath, newDirectory, StringComparison.OrdinalIgnoreCase));
-            Assert.Single(manager.InvertedIndex.Get("document"), node =>
-                string.Equals(node.FullPath, newFile, StringComparison.OrdinalIgnoreCase));
-            Assert.DoesNotContain(manager.InvertedIndex.Get("document"), node =>
-                string.Equals(node.FullPath, oldFile, StringComparison.OrdinalIgnoreCase));
-
             var searchState = manager.CreateSearchState();
             Assert.Empty(searchState.Get("old"));
             Assert.Contains(searchState.Get("new"), item =>
                 string.Equals(item.FullPath, newDirectory, StringComparison.OrdinalIgnoreCase));
-            Assert.Contains(searchState.Get("document"), item =>
+            Assert.Single(searchState.Get("document"), item =>
                 string.Equals(item.FullPath, newFile, StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(searchState.Get("document"), item =>
+                string.Equals(item.FullPath, oldFile, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -220,51 +217,10 @@ public sealed class IndexManagerFileChangeTests
 
             Assert.NotNull(manager.GetNode(file));
             Assert.True(manager.MetadataMap.ContainsKey(file));
-            Assert.True(manager.InvertedIndex.Contains(file));
             var stateAfterFailure = manager.CreateSearchState();
             Assert.NotSame(stateBeforeFailure, stateAfterFailure);
             Assert.Contains(stateAfterFailure.Get("document"), item =>
                 string.Equals(item.FullPath, file, StringComparison.OrdinalIgnoreCase));
-        }
-        finally
-        {
-            manager.Dispose();
-        }
-    }
-    [Fact]
-    public async Task SearchSnapshot_IsCachedUntilSearchableStateChanges()
-    {
-        using var workspace = new TemporaryDirectory();
-        var root = workspace.CreateDirectory("root");
-        var file = workspace.CreateFile(Path.Combine("root", "document.txt"));
-        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
-        var watcher = new FileWatcherService(debounceMs: 1);
-        var manager = new IndexManager(database, watcher);
-
-        try
-        {
-            await manager.InitializeAsync(root);
-            watcher.Stop();
-
-            var first = manager.CreateSearchSnapshot();
-            var second = manager.CreateSearchSnapshot();
-            Assert.Same(first, second);
-
-            manager.IncrementOpenCount(file);
-            var afterOpen = manager.CreateSearchSnapshot();
-            Assert.NotSame(first, afterOpen);
-
-            var addedFile = workspace.CreateFile(Path.Combine("root", "new-document.txt"));
-            manager.ApplyFileChange(new FileChangeEvent
-            {
-                ChangeType = FileChangeType.Created,
-                FullPath = addedFile,
-                IsDirectory = false
-            });
-            var afterCreate = manager.CreateSearchSnapshot();
-            Assert.NotSame(afterOpen, afterCreate);
-            Assert.Contains(afterCreate.InvertedIndex.Get("new"), node =>
-                string.Equals(node.FullPath, addedFile, StringComparison.OrdinalIgnoreCase));
         }
         finally
         {
@@ -366,9 +322,6 @@ public sealed class IndexManagerFileChangeTests
 
             Assert.False(manager.MetadataMap.ContainsKey(targetFile));
             Assert.False(manager.MetadataMap.ContainsKey(nestedFile));
-            Assert.False(manager.InvertedIndex.Contains(targetFile));
-            Assert.False(manager.InvertedIndex.Contains(nestedFile));
-
             Assert.Null(database.GetDirectoryByPath(target));
             Assert.Null(database.GetDirectoryByPath(nested));
             Assert.Null(database.GetFileByPath(targetFile));

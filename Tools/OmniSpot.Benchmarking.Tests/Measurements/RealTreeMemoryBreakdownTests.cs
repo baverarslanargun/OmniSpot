@@ -11,6 +11,14 @@ public sealed class RealTreeMemoryBreakdownTests
     private const int ItemCount = 2_000;
     private const int Seed = 1701;
 
+    private static readonly string[] ExpectedIndexStages =
+    [
+        "node_tree",
+        "node_metadata",
+        "path_to_node",
+        "metadata_map"
+    ];
+
     private static readonly string[] ExpectedStages =
     [
         "search_items",
@@ -98,6 +106,78 @@ public sealed class RealTreeMemoryBreakdownTests
         Assert.Equal(ItemCount, breakdown.DistinctItemCount);
         Assert.True(breakdown.UniqueTokenCount > 0);
         Assert.True(breakdown.TokenToItemLinkCount >= breakdown.UniqueTokenCount);
+    }
+
+    [Fact]
+    public void Run_ReportsEveryExpectedIndexStageOnce()
+    {
+        var breakdown = RunBreakdown();
+
+        Assert.Equal(
+            ExpectedIndexStages,
+            breakdown.IndexStages.Select(stage => stage.Stage).ToArray());
+        Assert.All(
+            breakdown.IndexStages,
+            stage => Assert.False(string.IsNullOrWhiteSpace(stage.Scope)));
+    }
+
+    [Fact]
+    public void Run_ReportsNullInsteadOfNegativeForUnmeasurableIndexStages()
+    {
+        var breakdown = RunBreakdown();
+
+        Assert.All(breakdown.IndexStages, stage =>
+        {
+            if (stage.Measurable)
+            {
+                Assert.NotNull(stage.RetainedBytes);
+                Assert.True(stage.RetainedBytes > 0);
+            }
+            else
+            {
+                Assert.Null(stage.RetainedBytes);
+            }
+        });
+    }
+
+    [Fact]
+    public void Run_SuppressesIndexTotalWhenAnyIndexStageIsUnmeasurable()
+    {
+        var breakdown = RunBreakdown();
+
+        if (breakdown.IndexStages.All(stage => stage.Measurable))
+        {
+            Assert.NotNull(breakdown.IndexStagesTotalBytes);
+            Assert.Equal(
+                breakdown.IndexStages.Sum(stage => stage.RetainedBytes!.Value),
+                breakdown.IndexStagesTotalBytes);
+        }
+        else
+        {
+            Assert.Null(breakdown.IndexStagesTotalBytes);
+        }
+    }
+
+    // Ölçülen her aşama artık üretimde boşta da bellekte duran bir yapı.
+    // Kararlı toplam, tam `SearchState` ile `IndexManager` aşamalarının
+    // toplamıdır; hiçbir aşama dışarıda bırakılmaz.
+    [Fact]
+    public void Run_SteadyManagedTotalIsFullCreatePlusEveryIndexStage()
+    {
+        var breakdown = RunBreakdown();
+
+        if (breakdown.FullCreateRetainedBytes is > 0 &&
+            breakdown.IndexStagesTotalBytes is not null)
+        {
+            Assert.Equal(
+                breakdown.FullCreateRetainedBytes!.Value +
+                    breakdown.IndexStagesTotalBytes!.Value,
+                breakdown.SteadyManagedTotalBytes);
+        }
+        else
+        {
+            Assert.Null(breakdown.SteadyManagedTotalBytes);
+        }
     }
 
     // Kalıcı çıktı sözleşmesi: ad, token ve path hiçbir alana sızmamalı.

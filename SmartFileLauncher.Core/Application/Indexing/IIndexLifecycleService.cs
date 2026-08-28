@@ -27,8 +27,6 @@ public interface IIndexLifecycleService : IDisposable
         CancellationToken cancellationToken = default);
     SearchState CreateSearchState(
         CancellationToken cancellationToken = default);
-    SearchSnapshot CreateSearchSnapshot(
-        CancellationToken cancellationToken = default);
     IndexStats GetStats();
     IndexDiagnosticsReport GetDiagnosticsReport();
     void RecordOpened(string path);
