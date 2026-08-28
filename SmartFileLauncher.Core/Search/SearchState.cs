@@ -52,6 +52,8 @@ public sealed class SearchState
 
     public int ItemCount => _itemsByPath.Count;
 
+    public int TokenCount => _pathsByToken.Count;
+
     public IReadOnlyCollection<SearchItem> Get(
         string token,
         CancellationToken cancellationToken = default) =>

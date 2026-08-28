@@ -56,8 +56,6 @@ internal sealed class FakeIndexLifecycle : IIndexLifecycleService
         => throw new NotSupportedException();
     public SearchState CreateSearchState(CancellationToken cancellationToken = default)
         => throw new NotSupportedException();
-    public SearchSnapshot CreateSearchSnapshot(CancellationToken cancellationToken = default)
-        => throw new NotSupportedException();
     public void RecordOpened(string path) => throw new NotSupportedException();
     public void Dispose() { }
 }

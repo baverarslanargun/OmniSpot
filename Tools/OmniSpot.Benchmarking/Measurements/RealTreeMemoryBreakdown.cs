@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using System.Text;
 using OmniSpot.Benchmarking.Profiling;
+using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Search;
 
@@ -34,7 +35,10 @@ internal sealed record MemoryBreakdown(
     long? FullCreateRetainedBytes,
     long? BreakdownTotalBytes,
     double? CrossCheckDeltaPercent,
-    IReadOnlyList<MemoryStage> Stages);
+    IReadOnlyList<MemoryStage> Stages,
+    IReadOnlyList<MemoryStage> IndexStages,
+    long? IndexStagesTotalBytes,
+    long? SteadyManagedTotalBytes);
 
 /// <summary>
 /// `SearchState`'in canlı ayak izini bileşenlerine ayırır. Dört sözlük private
@@ -42,6 +46,10 @@ internal sealed record MemoryBreakdown(
 /// **marjinal** maliyetiyle ölçülür. Toplam, aynı ağaçta ölçülen tam
 /// `SearchState.Create` ayak iziyle çapraz denetlenir; sapma büyükse döküm
 /// güvenilmezdir ve öyle raporlanır.
+///
+/// `IndexManager` aşamaları üretim **tipleriyle** kurulur, fakat kurulum
+/// mantığını yeniden uygular; `SearchState` gibi çapraz denetlenen bir
+/// karşılığı yoktur. Üretim kurulumu değişirse bu aşamalar sessizce ayrışır.
 /// </summary>
 internal static class RealTreeMemoryBreakdown
 {
@@ -105,15 +113,58 @@ internal static class RealTreeMemoryBreakdown
         long? breakdownTotal = stages.All(stage => stage.Measurable)
             ? stages.Sum(stage => stage.RetainedBytes!.Value)
             : null;
+
+        var indexStages = new List<MemoryStage>();
+        var clones = MeasureStage(
+            indexStages,
+            "node_tree",
+            "FileSystemNode nesneleri, ad ve tam yol string'leri, çocuk listeleri",
+            () => CloneNodeTree(nodes));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        MeasureStage(
+            indexStages,
+            "node_metadata",
+            "dosya düğümleri için FileMetadata nesneleri",
+            () => AttachMetadata(clones));
+
+        var pathToNode = MeasureStage(
+            indexStages,
+            "path_to_node",
+            "IndexManager._pathToNode sözlüğü (düğümler hariç)",
+            () => BuildPathToNode(clones));
+        cancellationToken.ThrowIfCancellationRequested();
+
+        MeasureStage(
+            indexStages,
+            "metadata_map",
+            "IndexManager._metadataMap sözlüğü (FileMetadata nesneleri hariç)",
+            () => BuildMetadataMap(clones));
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        GC.KeepAlive(pathToNode);
+        long? indexStagesTotal = indexStages.All(stage => stage.Measurable)
+            ? indexStages.Sum(stage => stage.RetainedBytes!.Value)
+            : null;
+        long? steadyManagedTotal =
+            fullCreateRetained is > 0 && indexStagesTotal is not null
+                ? fullCreateRetained.Value + indexStagesTotal.Value
+                : null;
+
         return new MemoryBreakdown(
             MeasurementConstants.SchemaMajor,
             MeasurementConstants.SchemaMinor,
             MeasurementConstants.ContractVersion,
             MeasurementConstants.ToolVersion,
             "Her bileşen, paylaşılan ön koşullar canlı tutularak marjinal " +
-            "maliyetiyle ölçüldü. Ad ve path string'leri düğüm listesinden geldiği " +
-            "için hiçbir aşamaya yazılmaz; token string'leri token_sets'e yazılır. " +
-            "Ölçülemeyen aşamada değer null'dır ve toplama katılmaz.",
+            "maliyetiyle ölçüldü. SearchState aşamalarında ad ve path string'leri " +
+            "düğüm listesinden geldiği için hiçbir aşamaya yazılmaz; token " +
+            "string'leri token_sets'e yazılır. IndexManager aşamaları ağacı üretim " +
+            "tipiyle yeniden kurar ve ad/tam yol string'lerini node_tree'ye yazar; kurulum " +
+            "mantığı yeniden uygulandığı için üretim değişirse sessizce ayrışabilir. " +
+            "Ölçülemeyen aşamada değer " +
+            "null'dır ve toplama katılmaz.",
             started.ToUnixTimeSeconds(),
             DateTimeOffset.UtcNow.ToUnixTimeSeconds(),
             environmentCapture.Complete(),
@@ -126,7 +177,10 @@ internal static class RealTreeMemoryBreakdown
             fullCreateRetained is > 0 && breakdownTotal is not null
                 ? (double)(breakdownTotal.Value - fullCreateRetained.Value) / fullCreateRetained.Value * 100d
                 : null,
-            stages);
+            stages,
+            indexStages,
+            indexStagesTotal,
+            steadyManagedTotal);
     }
 
     private static void Warmup(IReadOnlyList<FileSystemNode> nodes, ITokenizer tokenizer)
@@ -199,7 +253,8 @@ internal static class RealTreeMemoryBreakdown
 
     /// <summary>
     /// Üretimin `SearchState.Tokenize` şeklini birebir yansıtır: dizi,
-    /// `OrdinalIgnoreCase` benzersiz, tokenizer sırası korunur. Replika
+    /// `OrdinalIgnoreCase` benzersiz, tokenizer sırası korunur ve aynı token
+    /// metni `SearchState` genelinde tek kanonik örnekle paylaşılır. Replika
     /// üretimden ayrışırsa döküm üretimi değil kendini ölçmeye başlar.
     /// </summary>
     private static ImmutableArray<string>[] BuildTokenSets(
@@ -208,15 +263,26 @@ internal static class RealTreeMemoryBreakdown
     {
         var sets = new ImmutableArray<string>[items.Length];
         var buffer = new List<string>();
+        var canonicalTokens = new Dictionary<string, string>(PathComparer);
         for (var index = 0; index < items.Length; index++)
         {
             buffer.Clear();
             foreach (var token in tokenizer.Tokenize(items[index].Name))
             {
+                var canonical = token;
+                if (canonicalTokens.TryGetValue(token, out var shared))
+                {
+                    canonical = shared;
+                }
+                else
+                {
+                    canonicalTokens[token] = token;
+                }
+
                 var seen = false;
                 for (var existing = 0; existing < buffer.Count; existing++)
                 {
-                    if (PathComparer.Equals(buffer[existing], token))
+                    if (PathComparer.Equals(buffer[existing], canonical))
                     {
                         seen = true;
                         break;
@@ -225,7 +291,7 @@ internal static class RealTreeMemoryBreakdown
 
                 if (!seen)
                 {
-                    buffer.Add(token);
+                    buffer.Add(canonical);
                 }
             }
 
@@ -306,6 +372,94 @@ internal static class RealTreeMemoryBreakdown
 
         return builder.ToImmutable();
     }
+
+    /// <summary>
+    /// `IndexManager`'ın bellekte tuttuğu ağacı üretim tipiyle yeniden kurar.
+    /// Ad ve tam yol için taze kopya ayrılır: üretimde de her düğümün kendi
+    /// `Name` ve `FullPath` örneği vardır, sözlük anahtarları ve `SearchItem`
+    /// alanları bu aynı örneği paylaşır. Kaynak listedeki string'ler yeniden
+    /// kullanılsaydı ağacın en büyük kalemi hiçbir aşamaya yazılmazdı.
+    /// </summary>
+    private static FileSystemNode[] CloneNodeTree(IReadOnlyList<FileSystemNode> nodes)
+    {
+        var clones = new FileSystemNode[nodes.Count];
+        var byPath = new Dictionary<string, FileSystemNode>(nodes.Count, PathComparer);
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            var source = nodes[index];
+            var clone = new FileSystemNode(
+                new string(source.Name.AsSpan()),
+                new string(source.FullPath.AsSpan()),
+                source.IsDirectory);
+            clones[index] = clone;
+            byPath[clone.FullPath] = clone;
+        }
+
+        for (var index = 0; index < nodes.Count; index++)
+        {
+            var parentPath = nodes[index].Parent?.FullPath;
+            if (parentPath != null && byPath.TryGetValue(parentPath, out var parent))
+            {
+                parent.AddChild(clones[index]);
+            }
+        }
+
+        return clones;
+    }
+
+    /// <summary>
+    /// Üretim her dosya düğümü için tek `FileMetadata` ayırır ve aynı örneği
+    /// `_metadataMap` ile paylaşır. Nesneler klon düğümler üzerinden canlı
+    /// kaldığı için burada yalnız sayı döner; ek bir dizi tutulsaydı ölçüme
+    /// üretimde olmayan bir referans maliyeti eklenirdi.
+    /// </summary>
+    private static int AttachMetadata(FileSystemNode[] clones)
+    {
+        var count = 0;
+        foreach (var clone in clones)
+        {
+            if (clone.IsDirectory)
+            {
+                continue;
+            }
+
+            clone.Metadata = new FileMetadata
+            {
+                SizeBytes = 0L,
+                CreatedTime = DateTime.UnixEpoch,
+                LastWriteTime = DateTime.UnixEpoch,
+                OpenCount = 0
+            };
+            count++;
+        }
+
+        return count;
+    }
+
+    private static Dictionary<string, FileSystemNode> BuildPathToNode(FileSystemNode[] clones)
+    {
+        var pathToNode = new Dictionary<string, FileSystemNode>(PathComparer);
+        foreach (var clone in clones)
+        {
+            pathToNode[clone.FullPath] = clone;
+        }
+
+        return pathToNode;
+    }
+
+    private static Dictionary<string, FileMetadata> BuildMetadataMap(FileSystemNode[] clones)
+    {
+        var metadataMap = new Dictionary<string, FileMetadata>(PathComparer);
+        foreach (var clone in clones)
+        {
+            if (clone.Metadata is { } metadata)
+            {
+                metadataMap[clone.FullPath] = metadata;
+            }
+        }
+
+        return metadataMap;
+    }
 }
 
 internal static class MemoryBreakdownFormatter
@@ -365,6 +519,49 @@ internal static class MemoryBreakdownFormatter
                     (Math.Abs(breakdown.CrossCheckDeltaPercent.Value) <= 10
                         ? "  (kabul edilebilir)"
                         : "  (YÜKSEK — döküm güvenilmez)")));
+
+        if (breakdown.IndexStages.Count > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("IndexManager bellekte tuttukları");
+            builder.AppendLine("  bileşen                MiB   B/düğüm   kapsam");
+            foreach (var stage in breakdown.IndexStages)
+            {
+                if (!stage.Measurable)
+                {
+                    builder.AppendLine(
+                        "  " + stage.Stage.PadRight(20) +
+                        "ölçülemedi".PadLeft(8) + "         —   " + stage.Scope);
+                    continue;
+                }
+
+                var perNode = breakdown.NodeCount > 0
+                    ? (double)stage.RetainedBytes!.Value / breakdown.NodeCount
+                    : (double?)null;
+                builder.AppendLine(
+                    "  " + stage.Stage.PadRight(20) +
+                    Mib(stage.RetainedBytes!.Value).PadLeft(8) +
+                    (perNode is null
+                        ? "—".PadLeft(10)
+                        : perNode.Value.ToString("N0", CultureInfo.InvariantCulture).PadLeft(10)) +
+                    "   " + stage.Scope);
+            }
+
+            builder.AppendLine();
+            builder.AppendLine(
+                "  indeks aşamaları toplamı:" + Optional(breakdown.IndexStagesTotalBytes).PadLeft(8) + " MiB");
+            builder.AppendLine(
+                "  kararlı yönetilen toplam:" + Optional(breakdown.SteadyManagedTotalBytes).PadLeft(8) +
+                " MiB  (tam SearchState.Create + IndexManager aşamaları)");
+            if (breakdown.SteadyManagedTotalBytes is > 0 && breakdown.NodeCount > 0)
+            {
+                builder.AppendLine(
+                    "  kararlı toplam / düğüm:  " +
+                    ((double)breakdown.SteadyManagedTotalBytes.Value / breakdown.NodeCount)
+                        .ToString("N0", CultureInfo.InvariantCulture).PadLeft(8) + " B");
+            }
+        }
+
         return builder.ToString();
     }
 

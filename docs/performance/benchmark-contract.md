@@ -47,8 +47,7 @@ güncel source ve yakın testlerden doğrulanmıştır.
 - Production composition `BasicTokenizer`, `IndexManager`,
   `IndexedLocationProvider` ve `IndexLifecycleService` kullanır.
 - `IIndexLifecycleService`; `InitializeAsync`, `EnsureSyncedAsync`,
-  `GetIndexedRoots`, `CreateSearchState`, `CreateSearchSnapshot` ve
-  `GetStats` yüzeylerini sunar.
+  `GetIndexedRoots`, `CreateSearchState` ve `GetStats` yüzeylerini sunar.
 - `SearchState.Create(IEnumerable<FileSystemNode>, ITokenizer)`,
   `Get`, `GetPartial` ve `GetFuzzy` public ve headless ölçüme uygundur.
 - `SearchState.Create`, bir öğenin tokenlarını

@@ -112,13 +112,6 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         return _indexManager.CreateSearchState(cancellationToken);
     }
 
-    public SearchSnapshot CreateSearchSnapshot(
-        CancellationToken cancellationToken = default)
-    {
-        ObjectDisposedException.ThrowIf(_disposed, this);
-        return _indexManager.CreateSearchSnapshot(cancellationToken);
-    }
-
     public IndexStats GetStats()
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

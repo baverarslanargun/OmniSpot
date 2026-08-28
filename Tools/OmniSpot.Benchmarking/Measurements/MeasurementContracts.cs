@@ -9,7 +9,7 @@ namespace OmniSpot.Benchmarking.Measurements;
 internal static class MeasurementConstants
 {
     internal const int SchemaMajor = 1;
-    internal const int SchemaMinor = 2;
+    internal const int SchemaMinor = 4;
     internal const string ContractVersion = "0.1";
     internal const string ToolVersion = "0.3.1";
     internal const string FixtureGeneratorVersion = "1.0";
