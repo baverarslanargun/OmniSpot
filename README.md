@@ -156,6 +156,59 @@ OmniSpot.exe --tanila "C:\olcum\tur-3"
 Her iki dosya da o dizine yazılır. `--tanila=C:\olcum\tur-3` biçimi de kabul
 edilir; dizin verilmezse uygulama günlüğüne uyarı düşer ve yazma başlamaz.
 
+**Boş üretim profili.** Gerçek OmniSpot UI, SQLite, watcher, arama ve thumbnail
+servislerini sıfır kullanıcı dosyasıyla ölçmek için:
+
+```powershell
+OmniSpot.exe --tanila "C:\olcum\bos-uretim-tur-1" --profil bos-uretim
+```
+
+Profil değeri yalnız ASCII `bos-uretim` biçimindedir. Ayar, indeks, WAL/SHM,
+thumbnail cache ve izlenen boş corpus; koşum dizinindeki `bos-uretim-data`
+altında oluşturulur. Gerçek `%APPDATA%\OmniSpot`, `%LOCALAPPDATA%\OmniSpot` ve
+Windows kullanıcı klasörleri kullanılmaz. `bos-uretim-data` daha önceki bir
+koşumdan doluysa uygulama hiçbir şeyi silmez ve başlamayı reddeder; her ölçüm
+için yeni bir koşum dizini kullanın.
+
+Koşum yolu Windows'ta diskteki gerçek hedefe çözülür. Yolun herhangi bir üst
+klasörü junction/symlink ise, gerçek hedef production veri yoluyla çakışıyorsa
+veya corpus içindeki bir dosya işlemi yeniden yönlendirilmiş bir yoldan dışarı
+çıkabiliyorsa profil fail-closed biçimde işlemi reddeder. İlk tarama ve klasör
+gezgini de ölçüm profilinde reparse point'leri izlemez. Koşum dizini yalnız yerel
+bir Windows sürücüsünde olabilir ve uygulama açıkken özel bir sahiplik kilidiyle
+ikinci sürece kapatılır.
+
+Bu sınır, yanlış yol seçimi ve kazara yönlendirmeye karşı ölçüm izolasyonudur;
+aynı kullanıcı yetkisiyle çalışan düşmanca bir sürece karşı işletim sistemi
+sandbox'ı değildir.
+
+**Üretim kopyası profili.** Gerçek kullanıcı corpus'u üzerinde production
+index/settings kopyası, watcher ve uzlaştırma davranışını ölçmek için:
+
+~~~powershell
+OmniSpot.exe --tanila "C:\olcum\uretim-kopya-tur-1" --profil uretim-kopya
+~~~
+
+Orkestratör uygulama başlamadan önce yalnızca aşağıdaki exact yerleşimi pre-seed
+eder; uygulama production APPDATA/LOCALAPPDATA'dan hiçbir dosya kopyalamaz:
+`uretim-kopya-data/settings/settings.json` (isteğe bağlı),
+`uretim-kopya-data/index/index.db` (zorunlu, temiz/checkpoint edilmiş).
+`index.db-wal` ve `index.db-shm` sidecar'ları reddedilir.
+`uretim-kopya-data/thumbcache` her turda boş olmalıdır; production thumbnail
+cache kopyalanmaz ve `corpus` dizini yoktur.
+Bu seed, production kapalıyken ayrı snapshot aracı veya transactional SQLite
+backup ile hazırlanmalıdır; canlı production dosyalarında `File.Copy` yapılmaz.
+Normal
+`IndexedLocationProvider` gerçek Desktop, Documents, Downloads, Pictures,
+Music ve Videos köklerini okumaya ve watcher/uzlaştırmaya devam eder. Kullanıcı
+dosyalarını değiştiren kopyala/taşı/sil/yeniden adlandır/yapıştır işlemleri ve
+indeks yeniden oluşturma bu profilde fail-closed devre dışıdır; startup
+registration da uygulanmaz; watcher, ilk tarama, uzlaştırma ve klasör gezgini
+reparse point'leri izlemez. Production `index.db` yoksa, pre-seed yerleşimi
+beklenmeyen dosya içeriyorsa veya koşum yolu
+güvenlik doğrulamasından geçmezse uygulama production'a dönmeden başlamayı
+reddeder.
+
 **Sayaç dosyasını okuma.** CSV'yi elle ayrıştırmak yerine:
 
 ```powershell

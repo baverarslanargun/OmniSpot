@@ -1,7 +1,25 @@
+using SmartFileLauncher.Core.IO;
+
 namespace SmartFileLauncher.Core.Application.Files;
 
 public sealed class FolderBrowserService : IFolderBrowserService
 {
+    private readonly bool _skipReparsePoints;
+    private readonly FileSystemPathGuard _pathGuard;
+
+    public FolderBrowserService(bool skipReparsePoints = false)
+        : this(skipReparsePoints, FileSystemPathGuard.Default)
+    {
+    }
+
+    internal FolderBrowserService(
+        bool skipReparsePoints,
+        FileSystemPathGuard pathGuard)
+    {
+        _skipReparsePoints = skipReparsePoints;
+        _pathGuard = pathGuard ?? throw new ArgumentNullException(nameof(pathGuard));
+    }
+
     public Task<FolderPage> LoadAsync(
         string folderPath,
         int limit,
@@ -18,11 +36,17 @@ public sealed class FolderBrowserService : IFolderBrowserService
             cancellationToken);
     }
 
-    private static FolderPage Load(
+    private FolderPage Load(
         string folderPath,
         int limit,
         CancellationToken cancellationToken)
     {
+        if (ShouldSkip(folderPath))
+        {
+            throw new UnauthorizedAccessException(
+                "Ölçüm corpus'u yeniden yönlendirilmiş bir yoldan okunamaz.");
+        }
+
         var result = new List<FolderEntry>();
         var directory = new DirectoryInfo(folderPath);
 
@@ -38,6 +62,11 @@ public sealed class FolderBrowserService : IFolderBrowserService
 
             try
             {
+                if (ShouldSkip(childDirectory.FullName))
+                {
+                    continue;
+                }
+
                 if ((childDirectory.Attributes & FileAttributes.Hidden) != 0 ||
                     (childDirectory.Attributes & FileAttributes.System) != 0)
                 {
@@ -66,6 +95,11 @@ public sealed class FolderBrowserService : IFolderBrowserService
 
             try
             {
+                if (ShouldSkip(file.FullName))
+                {
+                    continue;
+                }
+
                 if ((file.Attributes & FileAttributes.Hidden) != 0)
                 {
                     continue;
@@ -82,5 +116,11 @@ public sealed class FolderBrowserService : IFolderBrowserService
         }
 
         return new FolderPage(result, result.Count >= limit);
+    }
+
+    private bool ShouldSkip(string path)
+    {
+        return _skipReparsePoints &&
+               _pathGuard.FindReparsePointInExistingPath(path) != null;
     }
 }

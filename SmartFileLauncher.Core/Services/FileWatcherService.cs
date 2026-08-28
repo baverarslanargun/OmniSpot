@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
+using SmartFileLauncher.Core.IO;
 using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Services;
@@ -19,6 +20,7 @@ public class FileWatcherService : IDisposable
     private readonly List<FileSystemWatcher> _watchers;
     private readonly CancellationTokenSource _cts;
     private readonly int _debounceMs;
+    private readonly FileSystemPathGuard? _pathGuard;
     private Task? _processorTask;
     private long _generation;
     private int _inFlightCallbacks;
@@ -30,7 +32,7 @@ public class FileWatcherService : IDisposable
 
     public event Action<Exception>? OnError;
 
-    public FileWatcherService(int debounceMs = 100)
+    public FileWatcherService(int debounceMs = 100, bool skipReparsePoints = false)
     {
         _eventQueue = new ConcurrentQueue<(FileChangeEvent Event, long Generation)>();
         _excludedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -38,6 +40,7 @@ public class FileWatcherService : IDisposable
         _watchers = new List<FileSystemWatcher>();
         _cts = new CancellationTokenSource();
         _debounceMs = debounceMs;
+        _pathGuard = skipReparsePoints ? FileSystemPathGuard.Default : null;
 
         AddExcludedPath(@"\$Recycle.Bin\");
         AddExcludedPath(@"\System Volume Information\");
@@ -107,6 +110,8 @@ public class FileWatcherService : IDisposable
         var fullPath = NormalizeDirectoryPath(path);
         if (!Directory.Exists(fullPath))
             throw new DirectoryNotFoundException($"Directory not found: {fullPath}");
+        if (ShouldSkipReparsePath(fullPath))
+            return;
 
         lock (_stateLock)
         {
@@ -274,22 +279,28 @@ public class FileWatcherService : IDisposable
 
     private void OnFileCreated(object sender, FileSystemEventArgs e)
     {
+        if (ShouldSkipReparsePath(e.FullPath)) return;
         EnqueueEvent(FileChangeType.Created, e.FullPath, null, IsDirectory(e.FullPath));
     }
 
     private void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
+        if (ShouldSkipReparsePath(e.FullPath)) return;
         bool isDir = string.IsNullOrEmpty(Path.GetExtension(e.FullPath));
         EnqueueEvent(FileChangeType.Deleted, e.FullPath, null, isDir);
     }
 
     private void OnFileRenamed(object sender, RenamedEventArgs e)
     {
+        if (ShouldSkipReparsePath(e.FullPath) ||
+            ShouldSkipReparsePath(e.OldFullPath))
+            return;
         EnqueueEvent(FileChangeType.Renamed, e.FullPath, e.OldFullPath, IsDirectory(e.FullPath));
     }
 
     private void OnFileChanged(object sender, FileSystemEventArgs e)
     {
+        if (ShouldSkipReparsePath(e.FullPath)) return;
         if (!IsDirectory(e.FullPath))
         {
             EnqueueEvent(FileChangeType.Modified, e.FullPath, null, false);
@@ -635,6 +646,12 @@ public class FileWatcherService : IDisposable
         return string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase)
             ? fullPath
             : fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+    }
+
+    private bool ShouldSkipReparsePath(string path)
+    {
+        return _pathGuard != null &&
+               _pathGuard.FindReparsePointInExistingPath(path) != null;
     }
 
     private void ThrowIfDisposed()

@@ -30,6 +30,7 @@ public partial class DiagnosticsWindow : Window
     private readonly AppSettings _settings;
     private readonly ISettingsApplicationService _settingsService;
     private readonly Func<IReadOnlyList<KeyValuePair<string, string>>> _stampProvider;
+    private readonly string? _fixedOutputDirectory;
 
     private readonly DispatcherTimer _timer = new();
     private readonly Queue<string> _lines = new();
@@ -43,15 +44,25 @@ public partial class DiagnosticsWindow : Window
         DiagnosticsSession session,
         AppSettings settings,
         ISettingsApplicationService settingsService,
-        Func<IReadOnlyList<KeyValuePair<string, string>>> stampProvider)
+        Func<IReadOnlyList<KeyValuePair<string, string>>> stampProvider,
+        string? fixedOutputDirectory = null)
     {
         _applicationLog = applicationLog ?? throw new ArgumentNullException(nameof(applicationLog));
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
         _settingsService = settingsService ?? throw new ArgumentNullException(nameof(settingsService));
         _stampProvider = stampProvider ?? throw new ArgumentNullException(nameof(stampProvider));
+        _fixedOutputDirectory = string.IsNullOrWhiteSpace(fixedOutputDirectory)
+            ? null
+            : Path.GetFullPath(fixedOutputDirectory);
 
         InitializeComponent();
+
+        if (_fixedOutputDirectory != null)
+        {
+            ChooseDirectoryButton.IsEnabled = false;
+            RememberDirectoryCheck.IsEnabled = false;
+        }
 
         foreach (var message in _applicationLog.GetSnapshot())
         {
@@ -171,7 +182,7 @@ public partial class DiagnosticsWindow : Window
             ? Path.GetDirectoryName(logPath)
             : _session.MetricLog.CurrentFilePath is { Length: > 0 } metricPath
                 ? Path.GetDirectoryName(metricPath)
-                : _settings.DiagnosticsLogDirectory;
+                : _fixedOutputDirectory ?? _settings.DiagnosticsLogDirectory;
 
         parts.Add(string.IsNullOrWhiteSpace(directory) ? "dizin seçilmedi" : directory);
 
@@ -257,6 +268,11 @@ public partial class DiagnosticsWindow : Window
 
     private string? ResolveDirectory()
     {
+        if (_fixedOutputDirectory != null)
+        {
+            return _fixedOutputDirectory;
+        }
+
         return string.IsNullOrWhiteSpace(_settings.DiagnosticsLogDirectory)
             ? PromptForDirectory()
             : _settings.DiagnosticsLogDirectory;
@@ -264,6 +280,8 @@ public partial class DiagnosticsWindow : Window
 
     private void RememberDirectory(string directory)
     {
+        if (_fixedOutputDirectory != null) return;
+
         if (_settings.RememberDiagnosticsLogDirectory)
         {
             _settings.DiagnosticsLogDirectory = directory;
@@ -279,6 +297,8 @@ public partial class DiagnosticsWindow : Window
 
     private void ChooseDirectory()
     {
+        if (_fixedOutputDirectory != null) return;
+
         var directory = PromptForDirectory();
         if (string.IsNullOrWhiteSpace(directory)) return;
 
@@ -300,6 +320,11 @@ public partial class DiagnosticsWindow : Window
 
     private string? PromptForDirectory()
     {
+        if (_fixedOutputDirectory != null)
+        {
+            return _fixedOutputDirectory;
+        }
+
         using var dialog = new System.Windows.Forms.FolderBrowserDialog
         {
             Description = "Tanılama dosyalarının yazılacağı dizin",
@@ -316,7 +341,7 @@ public partial class DiagnosticsWindow : Window
 
     private void PersistRememberChoice(bool remember)
     {
-        if (_suppressSettingChanges) return;
+        if (_suppressSettingChanges || _fixedOutputDirectory != null) return;
 
         _settings.RememberDiagnosticsLogDirectory = remember;
         if (!remember)

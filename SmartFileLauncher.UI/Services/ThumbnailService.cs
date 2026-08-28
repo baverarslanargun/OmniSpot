@@ -32,14 +32,24 @@ public class ThumbnailService : IThumbnailService
 
     private sealed record DiskCacheStats(int FileCount, long Bytes, DateTime MeasuredAt);
 
-    public ThumbnailService(Action<string> log)
+    public ThumbnailService(Action<string> log, string? diskCachePath = null)
     {
         _log = log;
-        _diskCachePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "OmniSpot",
-            "thumbcache"
-        );
+        if (diskCachePath != null && string.IsNullOrWhiteSpace(diskCachePath))
+        {
+            throw new ArgumentException(
+                "Thumbnail cache yolu boş olamaz.",
+                nameof(diskCachePath));
+        }
+
+        _diskCachePath = diskCachePath switch
+        {
+            null => Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OmniSpot",
+                "thumbcache"),
+            _ => Path.GetFullPath(diskCachePath)
+        };
         
         Directory.CreateDirectory(_diskCachePath);
         _log($"📁 Thumbnail cache: {_diskCachePath}");

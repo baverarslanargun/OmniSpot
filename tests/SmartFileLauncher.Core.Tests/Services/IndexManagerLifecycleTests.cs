@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.IO;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 using SmartFileLauncher.Core.Tests.TestInfrastructure;
@@ -9,6 +10,144 @@ namespace SmartFileLauncher.Core.Tests.Services;
 
 public sealed class IndexManagerLifecycleTests
 {
+    [Fact]
+    public void CreateWithDatabasePathUsesRequestedPath()
+    {
+        using var workspace = new TemporaryDirectory();
+        var databasePath = Path.Combine(workspace.Path, "measurement-index.db");
+
+        using var manager = IndexManager.CreateWithDatabasePath(databasePath);
+
+        Assert.Equal(databasePath, manager.DatabasePath);
+        Assert.False(File.Exists(databasePath));
+    }
+
+    [Fact]
+    public async Task MeasurementBootstrapSkipsReparsePaths()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        var skippedDirectory = workspace.CreateDirectory(Path.Combine("root", "linked"));
+        var skippedNestedFile = workspace.CreateFile(
+            Path.Combine("root", "linked", "outside-like.txt"));
+        var skippedFile = workspace.CreateFile(Path.Combine("root", "linked-file.txt"));
+        var includedFile = workspace.CreateFile(Path.Combine("root", "visible.txt"));
+        var skippedPaths = new HashSet<string>(
+            new[] { skippedDirectory, skippedFile },
+            StringComparer.OrdinalIgnoreCase);
+        var guard = new FileSystemPathGuard(
+            path =>
+            {
+                var attributes = ReadAttributes(path);
+                return attributes.HasValue && skippedPaths.Contains(path)
+                    ? attributes.Value | FileAttributes.ReparsePoint
+                    : attributes;
+            },
+            path => Directory.GetFileSystemEntries(path),
+            path => path);
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1);
+        using var manager = new IndexManager(
+            database,
+            watcher,
+            measurementPathGuard: guard);
+
+        await manager.InitializeAsync(root);
+
+        Assert.NotNull(manager.GetNode(includedFile));
+        Assert.Null(manager.GetNode(skippedDirectory));
+        Assert.Null(manager.GetNode(skippedNestedFile));
+        Assert.Null(manager.GetNode(skippedFile));
+        Assert.Equal(1, manager.GetStats().FileCount);
+    }
+
+    [Fact]
+    public async Task MeasurementBootstrapRejectsReparseRootBeforeWatcherSetup()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        var guard = new FileSystemPathGuard(
+            path =>
+            {
+                var attributes = ReadAttributes(path);
+                return attributes.HasValue && path.Equals(
+                    root,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? attributes.Value | FileAttributes.ReparsePoint
+                    : attributes;
+            },
+            path => Directory.GetFileSystemEntries(path),
+            path => path);
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1);
+        using var manager = new IndexManager(
+            database,
+            watcher,
+            measurementPathGuard: guard);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            manager.InitializeAsync(root));
+
+        Assert.Equal(0, watcher.WatchedPathCount);
+        Assert.Null(manager.GetNode(root));
+    }
+
+    [Fact]
+    public async Task MeasurementModeSkipsRealJunctionAndLoopDuringScanReconcileAndEvents()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        var target = workspace.CreateDirectory("outside");
+        var link = Path.Combine(root, "linked");
+        var loop = Path.Combine(root, "loop");
+        var outsideFile = workspace.CreateFile(Path.Combine("outside", "sentinel.txt"));
+        var linkedFile = Path.Combine(link, "sentinel.txt");
+        var visibleFile = workspace.CreateFile(Path.Combine("root", "visible.txt"));
+        WindowsDirectoryLink.CreateJunction(link, target);
+        WindowsDirectoryLink.CreateJunction(loop, root);
+
+        var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        var watcher = new FileWatcherService(debounceMs: 1, skipReparsePoints: true);
+        var manager = new IndexManager(
+            database,
+            watcher,
+            reconciliationInterval: TimeSpan.FromMilliseconds(20),
+            measurementPathGuard: FileSystemPathGuard.Default,
+            skipReparsePoints: true);
+
+        try
+        {
+            await manager.InitializeAsync(root);
+
+            Assert.NotNull(manager.GetNode(visibleFile));
+            Assert.Null(manager.GetNode(outsideFile));
+            Assert.Null(manager.GetNode(link));
+            Assert.Null(manager.GetNode(loop));
+
+            watcher.TriggerEvent(new FileChangeEvent
+            {
+                ChangeType = FileChangeType.Created,
+                FullPath = linkedFile,
+                IsDirectory = false,
+                Timestamp = DateTime.UtcNow
+            });
+            await Task.Delay(100);
+            Assert.Null(manager.GetNode(linkedFile));
+            Assert.True(SpinWait.SpinUntil(
+                () => manager.GetDiagnosticsReport().ReconciliationRuns > 0,
+                TimeSpan.FromSeconds(3)));
+            Assert.Null(manager.GetNode(linkedFile));
+        }
+        finally
+        {
+            manager.Dispose();
+            WindowsDirectoryLink.Delete(loop);
+            WindowsDirectoryLink.Delete(link);
+        }
+    }
+
     [Fact]
     public async Task MultiRootCacheReload_PreservesFilesAndWatcherCoverage()
     {
@@ -448,6 +587,22 @@ public sealed class IndexManagerLifecycleTests
         {
             Entered.Dispose();
             Release.Dispose();
+        }
+    }
+
+    private static FileAttributes? ReadAttributes(string path)
+    {
+        try
+        {
+            return File.GetAttributes(path);
+        }
+        catch (FileNotFoundException)
+        {
+            return null;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return null;
         }
     }
 }

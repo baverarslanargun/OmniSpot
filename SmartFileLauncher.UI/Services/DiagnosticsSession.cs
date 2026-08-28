@@ -12,6 +12,7 @@ public sealed class DiagnosticsSession : IDisposable
     private readonly ApplicationLog _applicationLog;
     private readonly IIndexLifecycleService _indexLifecycle;
     private readonly IThumbnailService _thumbnails;
+    private readonly Func<string, string>? _sanitizeDiagnosticValue;
     private readonly DispatcherTimer _sampleTimer = new();
     private readonly DispatcherTimer _diskCacheTimer = new();
     private readonly CancellationTokenSource _diskCacheCancellation = new();
@@ -24,12 +25,15 @@ public sealed class DiagnosticsSession : IDisposable
         DiagnosticsCollector collector,
         IIndexLifecycleService indexLifecycle,
         IThumbnailService thumbnails,
-        int sampleIntervalSeconds)
+        int sampleIntervalSeconds,
+        Func<string, string>? sanitizeDiagnosticValue = null)
     {
         _applicationLog = applicationLog ?? throw new ArgumentNullException(nameof(applicationLog));
         _indexLifecycle = indexLifecycle ?? throw new ArgumentNullException(nameof(indexLifecycle));
         _thumbnails = thumbnails ?? throw new ArgumentNullException(nameof(thumbnails));
+        _sanitizeDiagnosticValue = sanitizeDiagnosticValue;
         Collector = collector ?? throw new ArgumentNullException(nameof(collector));
+        MetricLog = new DiagnosticsMetricLog(sanitizeValue: _sanitizeDiagnosticValue);
 
         _applicationLog.MessageWritten += FileLog.Write;
         _indexLifecycle.ReconciliationStateChanged += HandleReconciliationStateChanged;
@@ -46,7 +50,7 @@ public sealed class DiagnosticsSession : IDisposable
 
     public DiagnosticsFileLog FileLog { get; } = new();
 
-    public DiagnosticsMetricLog MetricLog { get; } = new();
+    public DiagnosticsMetricLog MetricLog { get; }
 
     public bool StartFileLogging(
         string directory,
@@ -110,6 +114,18 @@ public sealed class DiagnosticsSession : IDisposable
             "arama",
             $"{queryLength} karakter · {resultCount} sonuç",
             duration.TotalMilliseconds);
+        MetricLog.WriteSample(Collector.Metrics.Snapshot());
+    }
+
+    public void RecordEvent(
+        string name,
+        string? detail = null,
+        double? numericValue = null)
+    {
+        if (!MetricLog.IsWriting) return;
+
+        Collector.Refresh();
+        MetricLog.WriteEvent(name, detail ?? string.Empty, numericValue);
         MetricLog.WriteSample(Collector.Metrics.Snapshot());
     }
 

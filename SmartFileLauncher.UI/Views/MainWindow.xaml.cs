@@ -14,6 +14,7 @@ using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Application.Refresh;
 using SmartFileLauncher.Core.Application.Search;
 using SmartFileLauncher.Core.Application.Settings;
+using SmartFileLauncher.Core.Diagnostics;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 using SmartFileLauncher.Core.Models;
@@ -119,7 +120,9 @@ public partial class MainWindow : Window {
         IConnectivityMonitor connectivityMonitor,
         IFileOperationService fileOperations,
         IApplicationShellService shellService,
-        ApplicationLog applicationLog) {
+        ApplicationLog applicationLog,
+        ApplicationStartupOptions startupOptions,
+        MeasurementRunLayout? measurementRun) {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         _settingsApplication = settingsApplication ?? throw new ArgumentNullException(nameof(settingsApplication));
@@ -133,6 +136,8 @@ public partial class MainWindow : Window {
         _fileOperations = fileOperations ?? throw new ArgumentNullException(nameof(fileOperations));
         _shellService = shellService ?? throw new ArgumentNullException(nameof(shellService));
         _applicationLog = applicationLog ?? throw new ArgumentNullException(nameof(applicationLog));
+        _startupOptions = startupOptions ?? throw new ArgumentNullException(nameof(startupOptions));
+        _measurementRun = measurementRun;
 
         DataContext = _viewModel;
         InitializeComponent();
@@ -314,6 +319,8 @@ public partial class MainWindow : Window {
         if (_isPreparedForShutdown) return;
         _isPreparedForShutdown = true;
 
+        RecordMeasurementEvent("kapanış başladı");
+
         _lifetimeCancellation.Cancel();
         CancelCurrentSearch();
         var folderCancellation = Interlocked.Exchange(
@@ -457,6 +464,9 @@ public partial class MainWindow : Window {
     
     private async Task InitializeAsync() {
         try {
+            RecordMeasurementEvent(
+                "indeks başlatma başladı",
+                _startupOptions.ProfileName);
             Log("=== İndeksleme Başlıyor ===");
             Log($"📦 Database: {_indexLifecycle.DatabasePath}");
 
@@ -475,8 +485,15 @@ public partial class MainWindow : Window {
 
             await Dispatcher.InvokeAsync(() =>
                 CompleteIndexInitialization(startup, stopwatch.ElapsedMilliseconds));
+            RecordMeasurementEvent(
+                "indeks başlatma bitti",
+                $"{startup.Stats.FileCount} dosya · {startup.Stats.DirectoryCount} klasör",
+                stopwatch.ElapsedMilliseconds);
         } catch (OperationCanceledException) when (_isPreparedForShutdown) {
         } catch (Exception ex) {
+            RecordMeasurementEvent(
+                "indeks başlatma başarısız",
+                ex.GetType().Name);
             Log($"❌ HATA: {ex.Message}");
             Log($"Stack trace: {ex.StackTrace}");
             await Dispatcher.InvokeAsync(() => {

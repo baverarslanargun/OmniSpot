@@ -5,6 +5,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartFileLauncher.Core.DataStructures;
+using SmartFileLauncher.Core.IO;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Search;
 
@@ -15,6 +16,9 @@ public class IndexManager : IDisposable
     private readonly IndexDatabase _db;
     private readonly FileWatcherService _watcher;
     private readonly ITokenizer _tokenizer;
+    private readonly FileSystemPathGuard? _measurementPathGuard;
+    private readonly bool _enforceMeasurementPathSafety;
+    private readonly bool _skipReparsePoints;
     private readonly object _lock = new();
     private readonly object _notificationLock = new();
     private readonly SemaphoreSlim _lifecycleGate = new(1, 1);
@@ -67,15 +71,43 @@ public class IndexManager : IDisposable
     {
     }
 
+    public static IndexManager CreateWithDatabasePath(
+        string databasePath,
+        ITokenizer? tokenizer = null,
+        bool enforceMeasurementPathSafety = true,
+        bool skipReparsePoints = false)
+    {
+        if (string.IsNullOrWhiteSpace(databasePath))
+            throw new ArgumentException("Database yolu boş olamaz.", nameof(databasePath));
+
+        return new IndexManager(
+            new IndexDatabase(databasePath),
+            new FileWatcherService(skipReparsePoints: skipReparsePoints),
+            tokenizer,
+            measurementPathGuard: enforceMeasurementPathSafety
+                || skipReparsePoints
+                ? FileSystemPathGuard.Default
+                : null,
+            enforceMeasurementPathSafety: enforceMeasurementPathSafety,
+            skipReparsePoints: skipReparsePoints);
+    }
+
     internal IndexManager(
         IndexDatabase database,
         FileWatcherService watcher,
         ITokenizer? tokenizer = null,
-        TimeSpan? reconciliationInterval = null)
+        TimeSpan? reconciliationInterval = null,
+        FileSystemPathGuard? measurementPathGuard = null,
+        bool enforceMeasurementPathSafety = false,
+        bool skipReparsePoints = false)
     {
         _tokenizer = tokenizer ?? new BasicTokenizer();
         _db = database;
         _watcher = watcher;
+        _measurementPathGuard = measurementPathGuard;
+        _enforceMeasurementPathSafety =
+            enforceMeasurementPathSafety || measurementPathGuard != null;
+        _skipReparsePoints = skipReparsePoints || measurementPathGuard != null;
         _reconciliationInterval = reconciliationInterval ?? TimeSpan.FromMinutes(10);
         if (_reconciliationInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(reconciliationInterval));
@@ -283,6 +315,7 @@ public class IndexManager : IDisposable
 
     private async Task BootstrapScanAsync(string rootPath, CancellationToken ct)
     {
+        EnsureMeasurementDirectorySafe(rootPath);
         var sw = Stopwatch.StartNew();
 
         var rootName = Path.GetFileName(rootPath);
@@ -303,6 +336,7 @@ public class IndexManager : IDisposable
         {
             lock (_lock)
             {
+            EnsureMeasurementDirectorySafe(rootPath);
             try
             {
                 totalItems = CountItems(rootPath);
@@ -316,6 +350,7 @@ public class IndexManager : IDisposable
 
             try
             {
+                EnsureMeasurementDirectorySafe(rootPath);
                 var rootDir = new IndexedDirectory
                 {
                     FullPath = rootPath,
@@ -352,6 +387,11 @@ public class IndexManager : IDisposable
 
     private async Task BootstrapScanMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
+        foreach (var rootPath in rootPaths)
+        {
+            EnsureMeasurementDirectorySafe(rootPath);
+        }
+
         var sw = Stopwatch.StartNew();
 
         lock (_lock)
@@ -371,6 +411,7 @@ public class IndexManager : IDisposable
             foreach (var rootPath in rootPaths)
             {
                 if (!Directory.Exists(rootPath)) continue;
+                EnsureMeasurementDirectorySafe(rootPath);
                 try
                 {
                     totalItems += CountItems(rootPath);
@@ -388,6 +429,7 @@ public class IndexManager : IDisposable
                 foreach (var rootPath in rootPaths)
                 {
                     if (!Directory.Exists(rootPath)) continue;
+                    EnsureMeasurementDirectorySafe(rootPath);
                     
                     var rootName = Path.GetFileName(rootPath);
                     if (string.IsNullOrEmpty(rootName)) rootName = rootPath;
@@ -438,12 +480,16 @@ public class IndexManager : IDisposable
                                         bool reportProgress = true)
     {
         ct.ThrowIfCancellationRequested();
+        EnsureMeasurementDirectorySafe(path);
 
         try
         {
             foreach (var dir in Directory.GetDirectories(path))
             {
                 ct.ThrowIfCancellationRequested();
+
+                if (ShouldSkipReparsePath(dir))
+                    continue;
 
                 var dirName = Path.GetFileName(dir);
                 var dirInfo = new DirectoryInfo(dir);
@@ -488,12 +534,16 @@ public class IndexManager : IDisposable
                     reportProgress);
             }
 
+            EnsureMeasurementDirectorySafe(path);
             foreach (var file in Directory.GetFiles(path))
             {
                 ct.ThrowIfCancellationRequested();
 
                 try
                 {
+                    if (ShouldSkipReparsePath(file))
+                        continue;
+
                     var fi = new FileInfo(file);
 
                     if ((fi.Attributes & FileAttributes.Hidden) != 0 ||
@@ -543,12 +593,21 @@ public class IndexManager : IDisposable
 
     private int CountItems(string path)
     {
+        EnsureMeasurementDirectorySafe(path);
         int count = 0;
         try
         {
-            count += Directory.GetFiles(path).Length;
+            foreach (var file in Directory.GetFiles(path))
+            {
+                if (!ShouldSkipReparsePath(file))
+                    count++;
+            }
+
             foreach (var dir in Directory.GetDirectories(path))
             {
+                if (ShouldSkipReparsePath(dir))
+                    continue;
+
                 count++;
                 count += CountItems(dir);
             }
@@ -1164,7 +1223,9 @@ public class IndexManager : IDisposable
 
     private void AddRootDirectoryToIndex(string rootPath, CancellationToken ct)
     {
-        if (_pathToNode.ContainsKey(rootPath) || !Directory.Exists(rootPath))
+        if (_pathToNode.ContainsKey(rootPath) ||
+            !Directory.Exists(rootPath) ||
+            ShouldSkipReparsePath(rootPath))
             return;
 
         var directoryInfo = new DirectoryInfo(rootPath);
@@ -1211,7 +1272,7 @@ public class IndexManager : IDisposable
         }
     }
 
-    private static ReconciliationSnapshot CaptureDiskSnapshot(
+    private ReconciliationSnapshot CaptureDiskSnapshot(
         IReadOnlyList<string> rootPaths,
         CancellationToken ct)
     {
@@ -1234,7 +1295,7 @@ public class IndexManager : IDisposable
         return snapshot;
     }
 
-    private static void CaptureDirectoryTree(
+    private void CaptureDirectoryTree(
         string rootPath,
         ReconciliationSnapshot snapshot,
         CancellationToken ct)
@@ -1251,6 +1312,13 @@ public class IndexManager : IDisposable
             try
             {
                 attributes = File.GetAttributes(directoryPath);
+                if (ShouldSkipReparsePath(directoryPath))
+                {
+                    snapshot.ProtectedScopes.Add(directoryPath);
+                    snapshot.Errors.Add($"{directoryPath}: reparse point traversal skipped");
+                    continue;
+                }
+
                 if (!string.Equals(
                         directoryPath,
                         rootPath,
@@ -1309,6 +1377,14 @@ public class IndexManager : IDisposable
                 try
                 {
                     var entryAttributes = File.GetAttributes(path);
+                    if (ShouldSkipReparsePath(path))
+                    {
+                        var normalizedPath = NormalizeIndexedPath(path);
+                        snapshot.ProtectedScopes.Add(normalizedPath);
+                        snapshot.Errors.Add($"{normalizedPath}: reparse point traversal skipped");
+                        continue;
+                    }
+
                     if (IsHiddenOrSystem(entryAttributes))
                     {
                         snapshot.ExcludedScopes.Add(path);
@@ -1338,13 +1414,20 @@ public class IndexManager : IDisposable
         }
     }
 
-    private static void CaptureFile(
+    private void CaptureFile(
         string filePath,
         ReconciliationSnapshot snapshot)
     {
         var normalizedPath = NormalizeIndexedPath(filePath);
         try
         {
+            if (ShouldSkipReparsePath(normalizedPath))
+            {
+                snapshot.ProtectedScopes.Add(normalizedPath);
+                snapshot.Errors.Add($"{normalizedPath}: reparse point traversal skipped");
+                return;
+            }
+
             var fileInfo = new FileInfo(normalizedPath);
             snapshot.Entries[normalizedPath] = new ReconciliationEntry(
                 normalizedPath,
@@ -1421,11 +1504,20 @@ public class IndexManager : IDisposable
         var configured = false;
         var configuredRoots = new List<string>();
         var normalizedRoots = NormalizeRootPaths(rootPaths)
-            .Where(Directory.Exists)
             .OrderBy(path => path.Length);
 
         foreach (var rootPath in normalizedRoots)
         {
+            if (_enforceMeasurementPathSafety)
+            {
+                EnsureMeasurementDirectorySafe(rootPath);
+            }
+            else if (!Directory.Exists(rootPath) ||
+                     ShouldSkipReparsePath(rootPath))
+            {
+                continue;
+            }
+
             if (configuredRoots.Any(parent => IsSameOrDescendantPath(rootPath, parent)))
                 continue;
 
@@ -1539,6 +1631,17 @@ public class IndexManager : IDisposable
     {
         path = NormalizeIndexedPath(path);
 
+        if (ShouldSkipReparsePath(path))
+        {
+            if (_pathToNode.TryGetValue(path, out var skippedNode))
+            {
+                DeletePersistedPath(skippedNode.FullPath, skippedNode.IsDirectory);
+                RemoveFromIndex(skippedNode.FullPath);
+            }
+
+            return;
+        }
+
         if (_pathToNode.TryGetValue(path, out var existingNode))
         {
             if (existingNode.IsDirectory == isDirectory)
@@ -1605,6 +1708,17 @@ public class IndexManager : IDisposable
     private void HandleModified(FileChangeEvent evt)
     {
         var path = NormalizeIndexedPath(evt.FullPath);
+        if (ShouldSkipReparsePath(path))
+        {
+            if (_pathToNode.TryGetValue(path, out var skippedNode))
+            {
+                DeletePersistedPath(skippedNode.FullPath, skippedNode.IsDirectory);
+                RemoveFromIndex(skippedNode.FullPath);
+            }
+
+            return;
+        }
+
         if (_pathToNode.TryGetValue(path, out var node) && node.Metadata != null)
         {
             try
@@ -1703,7 +1817,9 @@ public class IndexManager : IDisposable
         FileSystemNode parentNode,
         CancellationToken ct = default)
     {
-        if (!Directory.Exists(directoryPath)) return;
+        if (!Directory.Exists(directoryPath) ||
+            ShouldSkipReparsePath(directoryPath))
+            return;
 
         var parentDir = _db.GetDirectoryByPath(parentNode.FullPath);
         if (parentDir == null)
@@ -1777,7 +1893,10 @@ public class IndexManager : IDisposable
 
     private void AddFileToIndex(string filePath, FileSystemNode parentNode)
     {
-        if (_pathToNode.ContainsKey(filePath) || !File.Exists(filePath)) return;
+        if (_pathToNode.ContainsKey(filePath) ||
+            !File.Exists(filePath) ||
+            ShouldSkipReparsePath(filePath))
+            return;
 
         try
         {
@@ -1846,6 +1965,27 @@ public class IndexManager : IDisposable
             node.Parent?.RemoveChild(node.FullPath);
             _pathToNode.Remove(node.FullPath);
             _metadataMap.Remove(node.FullPath);
+        }
+    }
+
+    private bool ShouldSkipReparsePath(string path)
+    {
+        return _skipReparsePoints &&
+               _measurementPathGuard != null &&
+               _measurementPathGuard.FindReparsePointInExistingPath(path) != null;
+    }
+
+    private void EnsureMeasurementDirectorySafe(string path)
+    {
+        if (!_enforceMeasurementPathSafety)
+        {
+            return;
+        }
+
+        if (!Directory.Exists(path) || ShouldSkipReparsePath(path))
+        {
+            throw new InvalidOperationException(
+                "Ölçüm corpus'u eksik veya yeniden yönlendirilmiş bir yoldan okunamaz.");
         }
     }
 
