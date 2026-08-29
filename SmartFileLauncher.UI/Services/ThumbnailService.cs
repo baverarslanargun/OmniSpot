@@ -11,12 +11,21 @@ namespace SmartFileLauncher.UI.Services;
 /// </summary>
 public class ThumbnailService : IThumbnailService
 {
-    private readonly Dictionary<ThumbnailKey, ImageSource> _memoryCache = new();
+    internal const int DefaultMaxMemoryCacheCount = 1000;
+    internal const long DefaultMaxMemoryCacheBytes = 64L * 1024 * 1024;
+
+    private sealed record CacheEntry(ThumbnailKey Key, ImageSource Image, long Bytes);
+
+    private readonly Dictionary<ThumbnailKey, LinkedListNode<CacheEntry>> _memoryCache = new();
+    private readonly LinkedList<CacheEntry> _recency = new();
+    private readonly object _memoryCacheLock = new();
     private readonly SemaphoreSlim _semaphore = new(4); // Max 4 concurrent thumbnail generations
-    private readonly int _maxMemoryCacheCount = 1000;
+    private readonly int _maxMemoryCacheCount;
+    private readonly long _maxMemoryCacheBytes;
     private readonly string _diskCachePath;
     private readonly Action<string> _log;
 
+    private long _memoryCacheBytes;
     private long _requests;
     private long _memoryHits;
     private long _diskHits;
@@ -32,7 +41,11 @@ public class ThumbnailService : IThumbnailService
 
     private sealed record DiskCacheStats(int FileCount, long Bytes, DateTime MeasuredAt);
 
-    public ThumbnailService(Action<string> log, string? diskCachePath = null)
+    public ThumbnailService(
+        Action<string> log,
+        string? diskCachePath = null,
+        int maxMemoryCacheCount = DefaultMaxMemoryCacheCount,
+        long maxMemoryCacheBytes = DefaultMaxMemoryCacheBytes)
     {
         _log = log;
         if (diskCachePath != null && string.IsNullOrWhiteSpace(diskCachePath))
@@ -42,6 +55,23 @@ public class ThumbnailService : IThumbnailService
                 nameof(diskCachePath));
         }
 
+        if (maxMemoryCacheCount <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxMemoryCacheCount),
+                "Bellek önbelleği adet sınırı pozitif olmalı.");
+        }
+
+        if (maxMemoryCacheBytes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(maxMemoryCacheBytes),
+                "Bellek önbelleği bayt sınırı pozitif olmalı.");
+        }
+
+        _maxMemoryCacheCount = maxMemoryCacheCount;
+        _maxMemoryCacheBytes = maxMemoryCacheBytes;
+
         _diskCachePath = diskCachePath switch
         {
             null => Path.Combine(
@@ -50,7 +80,7 @@ public class ThumbnailService : IThumbnailService
                 "thumbcache"),
             _ => Path.GetFullPath(diskCachePath)
         };
-        
+
         Directory.CreateDirectory(_diskCachePath);
         _log($"📁 Thumbnail cache: {_diskCachePath}");
     }
@@ -63,6 +93,12 @@ public class ThumbnailService : IThumbnailService
         Interlocked.Increment(ref _requests);
         try
         {
+            if (size <= 0)
+            {
+                Interlocked.Increment(ref _failures);
+                return null;
+            }
+
             // Path validation
             if (!File.Exists(path) && !Directory.Exists(path))
             {
@@ -74,13 +110,10 @@ public class ThumbnailService : IThumbnailService
             var key = new ThumbnailKey(path, size, fileInfo.LastWriteTimeUtc.Ticks);
 
             // 1. Memory cache check (O(1))
-            lock (_memoryCache)
+            if (TryGetFromMemoryCache(key, out var cachedImage))
             {
-                if (_memoryCache.TryGetValue(key, out var cachedImage))
-                {
-                    Interlocked.Increment(ref _memoryHits);
-                    return cachedImage;
-                }
+                Interlocked.Increment(ref _memoryHits);
+                return cachedImage;
             }
 
             // 2. Disk cache check
@@ -89,7 +122,7 @@ public class ThumbnailService : IThumbnailService
             {
                 try
                 {
-                    var diskImage = LoadFromDiskCache(diskCachePath);
+                    var diskImage = LoadFromDiskCache(diskCachePath, size);
                     if (diskImage != null)
                     {
                         Interlocked.Increment(ref _diskHits);
@@ -118,12 +151,9 @@ public class ThumbnailService : IThumbnailService
             try
             {
                 // Double-check memory cache (race condition protection)
-                lock (_memoryCache)
+                if (TryGetFromMemoryCache(key, out cachedImage))
                 {
-                    if (_memoryCache.TryGetValue(key, out var cachedImage))
-                    {
-                        return cachedImage;
-                    }
+                    return cachedImage;
                 }
 
                 return await Task.Run(() =>
@@ -131,20 +161,22 @@ public class ThumbnailService : IThumbnailService
                     try
                     {
                         var thumbnail = GenerateShellThumbnail(path, size);
-                        if (thumbnail != null)
-                        {
-                            // Freeze for cross-thread access
-                            thumbnail.Freeze();
-
-                            Interlocked.Increment(ref _shellGenerated);
-                            AddToMemoryCache(key, thumbnail);
-                            SaveToDiskCache(diskCachePath, thumbnail);
-                        }
-                        else
+                        if (thumbnail == null)
                         {
                             Interlocked.Increment(ref _failures);
+                            return null;
                         }
-                        return thumbnail;
+
+                        // Freeze for cross-thread access
+                        if (!thumbnail.IsFrozen)
+                        {
+                            thumbnail.Freeze();
+                        }
+
+                        var bounded = StoreAndBound(diskCachePath, thumbnail, size);
+                        Interlocked.Increment(ref _shellGenerated);
+                        AddToMemoryCache(key, bounded);
+                        return bounded;
                     }
                     catch
                     {
@@ -220,9 +252,15 @@ public class ThumbnailService : IThumbnailService
         {
             // DOĞRU YÖNTEM: ShellFile direkt BitmapSource verir (alpha kanal korunur)
             using var shellFile = ShellFile.FromFilePath(path);
-            
-            var bitmapSource = shellFile.Thumbnail.BitmapSource;
-            
+
+            // Kabuk varsayılanı 256×256'dır; istenen boyutu vermezsek görüntülenenden
+            // dört kat büyük bir bitmap tutarız.
+            var shellThumbnail = shellFile.Thumbnail;
+            shellThumbnail.AllowBiggerSize = false;
+            shellThumbnail.CurrentSize = new System.Windows.Size(size, size);
+
+            var bitmapSource = shellThumbnail.BitmapSource;
+
             if (bitmapSource == null)
             {
                 return null;
@@ -240,6 +278,139 @@ public class ThumbnailService : IThumbnailService
         }
     }
 
+    /// <summary>
+    /// Üretilen küçük resmi disk önbelleğine yazar ve bellekte tutulacak sürümün
+    /// uzun kenarını <paramref name="size"/> ile sınırlar.
+    /// </summary>
+    private BitmapSource StoreAndBound(string diskCachePath, BitmapSource generated, int size)
+    {
+        if (!ExceedsBound(generated.PixelWidth, generated.PixelHeight, size))
+        {
+            SaveToDiskCache(diskCachePath, generated);
+            return generated;
+        }
+
+        byte[] encoded;
+        try
+        {
+            encoded = EncodePng(generated);
+        }
+        catch
+        {
+            SaveToDiskCache(diskCachePath, generated);
+            return generated;
+        }
+
+        try
+        {
+            File.WriteAllBytes(diskCachePath, encoded);
+        }
+        catch
+        {
+            // Ignore disk cache save errors
+        }
+
+        return DecodeBounded(encoded, size) ?? generated;
+    }
+
+    internal static bool ExceedsBound(int width, int height, int size)
+        => Math.Max(width, height) > size;
+
+    private static byte[] EncodePng(BitmapSource image)
+    {
+        using var buffer = new MemoryStream();
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(image));
+        encoder.Save(buffer);
+        return buffer.ToArray();
+    }
+
+    /// <summary>
+    /// PNG baytlarını uzun kenarı <paramref name="size"/> pikseli aşmayacak biçimde çözer.
+    /// Kaynak zaten küçükse büyütme yapılmaz.
+    /// </summary>
+    internal static BitmapSource? DecodeBounded(byte[] data, int size)
+    {
+        if (data.Length == 0 || size <= 0)
+        {
+            return null;
+        }
+
+        int sourceWidth;
+        int sourceHeight;
+        using (var probe = new MemoryStream(data, writable: false))
+        {
+            var frame = BitmapFrame.Create(
+                probe,
+                BitmapCreateOptions.DelayCreation,
+                BitmapCacheOption.None);
+            sourceWidth = frame.PixelWidth;
+            sourceHeight = frame.PixelHeight;
+        }
+
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+        {
+            return null;
+        }
+
+        using var source = new MemoryStream(data, writable: false);
+        var bitmap = new BitmapImage();
+        bitmap.BeginInit();
+        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+        // UriSource yerine StreamSource: WPF'in Uri anahtarlı statik görüntü
+        // önbelleği devreye girmez, resmin ömrü yalnız bizim önbelleğimize bağlı olur.
+        bitmap.StreamSource = source;
+        if (ExceedsBound(sourceWidth, sourceHeight, size))
+        {
+            if (sourceWidth >= sourceHeight)
+            {
+                bitmap.DecodePixelWidth = size;
+            }
+            else
+            {
+                bitmap.DecodePixelHeight = size;
+            }
+        }
+
+        bitmap.EndInit();
+        bitmap.Freeze();
+        return bitmap;
+    }
+
+    internal static long GetDecodedByteCount(ImageSource image)
+        => image is BitmapSource bitmap
+            ? (long)bitmap.PixelWidth * bitmap.PixelHeight * bitmap.Format.BitsPerPixel / 8
+            : 0L;
+
+    private bool TryGetFromMemoryCache(ThumbnailKey key, out ImageSource? image)
+    {
+        lock (_memoryCacheLock)
+        {
+            if (_memoryCache.TryGetValue(key, out var node))
+            {
+                _recency.Remove(node);
+                _recency.AddFirst(node);
+                image = node.Value.Image;
+                return true;
+            }
+        }
+
+        image = null;
+        return false;
+    }
+
+    private BitmapSource? LoadFromDiskCache(string cachePath, int size)
+    {
+        try
+        {
+            return DecodeBounded(File.ReadAllBytes(cachePath), size);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private void AddToMemoryCache(ThumbnailKey key, ImageSource image)
     {
         if (image is BitmapSource bitmap)
@@ -248,36 +419,31 @@ public class ThumbnailService : IThumbnailService
             Volatile.Write(ref _lastDecodedPixelHeight, bitmap.PixelHeight);
         }
 
-        lock (_memoryCache)
-        {
-            // Simple eviction: remove first item if cache is full
-            if (_memoryCache.Count >= _maxMemoryCacheCount)
-            {
-                var firstKey = _memoryCache.Keys.First();
-                _memoryCache.Remove(firstKey);
-                Interlocked.Increment(ref _evictions);
-                _log($"🗑️ Memory cache evicted: {Path.GetFileName(firstKey.Path)}");
-            }
-            
-            _memoryCache[key] = image;
-        }
-    }
+        var bytes = GetDecodedByteCount(image);
 
-    private BitmapImage? LoadFromDiskCache(string cachePath)
-    {
-        try
+        lock (_memoryCacheLock)
         {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.UriSource = new Uri(cachePath, UriKind.Absolute);
-            bitmap.EndInit();
-            bitmap.Freeze();
-            return bitmap;
-        }
-        catch
-        {
-            return null;
+            if (_memoryCache.TryGetValue(key, out var existing))
+            {
+                _memoryCacheBytes -= existing.Value.Bytes;
+                _recency.Remove(existing);
+            }
+
+            var node = _recency.AddFirst(new CacheEntry(key, image, bytes));
+            _memoryCache[key] = node;
+            _memoryCacheBytes += bytes;
+
+            // En az kullanılandan başlayarak hem adet hem bayt sınırına in.
+            while (_recency.Count > 1
+                && (_memoryCache.Count > _maxMemoryCacheCount
+                    || _memoryCacheBytes > _maxMemoryCacheBytes))
+            {
+                var evicted = _recency.Last!;
+                _recency.RemoveLast();
+                _memoryCache.Remove(evicted.Value.Key);
+                _memoryCacheBytes -= evicted.Value.Bytes;
+                Interlocked.Increment(ref _evictions);
+            }
         }
     }
 
@@ -298,10 +464,12 @@ public class ThumbnailService : IThumbnailService
 
     public void ClearMemoryCache()
     {
-        lock (_memoryCache)
+        lock (_memoryCacheLock)
         {
             var count = _memoryCache.Count;
             _memoryCache.Clear();
+            _recency.Clear();
+            _memoryCacheBytes = 0;
             _log($"🗑️ Memory cache cleared: {count} items");
         }
     }
@@ -328,7 +496,7 @@ public class ThumbnailService : IThumbnailService
 
     public (int memoryCount, int maxMemory) GetCacheStats()
     {
-        lock (_memoryCache)
+        lock (_memoryCacheLock)
         {
             return (_memoryCache.Count, _maxMemoryCacheCount);
         }
@@ -337,20 +505,11 @@ public class ThumbnailService : IThumbnailService
     public ThumbnailDiagnostics GetDiagnostics()
     {
         int count;
-        long decodedBytes = 0;
-        lock (_memoryCache)
+        long decodedBytes;
+        lock (_memoryCacheLock)
         {
             count = _memoryCache.Count;
-            foreach (var image in _memoryCache.Values)
-            {
-                if (image is BitmapSource bitmap)
-                {
-                    decodedBytes += (long)bitmap.PixelWidth
-                        * bitmap.PixelHeight
-                        * bitmap.Format.BitsPerPixel
-                        / 8;
-                }
-            }
+            decodedBytes = _memoryCacheBytes;
         }
 
         var diskCache = Volatile.Read(ref _diskCacheStats);
@@ -358,6 +517,7 @@ public class ThumbnailService : IThumbnailService
         return new ThumbnailDiagnostics(
             count,
             _maxMemoryCacheCount,
+            _maxMemoryCacheBytes,
             Interlocked.Read(ref _requests),
             Interlocked.Read(ref _memoryHits),
             Interlocked.Read(ref _diskHits),

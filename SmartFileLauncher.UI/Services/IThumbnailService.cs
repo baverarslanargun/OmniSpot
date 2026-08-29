@@ -5,6 +5,7 @@ namespace SmartFileLauncher.UI.Services;
 public sealed record ThumbnailDiagnostics(
     int MemoryCacheCount,
     int MemoryCacheLimit,
+    long MemoryCacheByteLimit,
     long Requests,
     long MemoryHits,
     long DiskHits,

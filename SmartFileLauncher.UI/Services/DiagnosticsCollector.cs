@@ -422,9 +422,20 @@ public sealed class DiagnosticsCollector
                     ? DiagnosticsSeverity.Warning
                     : DiagnosticsSeverity.Normal,
             diagnostics.MemoryCacheCount);
+        var byteFill = diagnostics.MemoryCacheByteLimit == 0
+            ? 0d
+            : (double)diagnostics.DecodedBytes / diagnostics.MemoryCacheByteLimit;
         Metrics.Set(
-            GroupThumbnails, "önbellek boyutu", FormatBytes(diagnostics.DecodedBytes),
-            DiagnosticsSeverity.Normal, diagnostics.DecodedBytes);
+            GroupThumbnails,
+            "önbellek boyutu",
+            $"{FormatBytes(diagnostics.DecodedBytes)} / "
+                + FormatBytes(diagnostics.MemoryCacheByteLimit),
+            byteFill >= 1d
+                ? DiagnosticsSeverity.Critical
+                : byteFill >= 0.8d
+                    ? DiagnosticsSeverity.Warning
+                    : DiagnosticsSeverity.Normal,
+            diagnostics.DecodedBytes);
         Metrics.Set(
             GroupThumbnails,
             "tahliye",
