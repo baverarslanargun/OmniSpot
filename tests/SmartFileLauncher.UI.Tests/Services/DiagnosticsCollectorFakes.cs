@@ -69,6 +69,7 @@ internal sealed class FakeThumbnailService : IThumbnailService
     public ThumbnailDiagnostics GetDiagnostics() => new(
         MemoryCacheCount: 0,
         MemoryCacheLimit: 1000,
+        MemoryCacheByteLimit: 64L * 1024 * 1024,
         Requests: 0,
         MemoryHits: 0,
         DiskHits: 0,

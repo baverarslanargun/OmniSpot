@@ -71,6 +71,9 @@ public partial class MainWindow : Window {
     private const int FILE_CHANGE_DEBOUNCE_MS = 1000; // 1 saniye debounce (daha az kasma için artırıldı)
     private CancellationTokenSource? _currentSearchCancellation;
     private CancellationTokenSource? _folderLoadCancellation;
+    private ThumbnailViewportScheduler? _thumbnailViewport;
+    private readonly System.Windows.Threading.DispatcherTimer _viewportDebounce = new();
+    private readonly System.Windows.Threading.DispatcherTimer _thumbnailIdleRelease = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private long _searchVersion;
     private volatile bool _isPreparedForShutdown;
@@ -178,6 +181,8 @@ public partial class MainWindow : Window {
         // Ayarlardan varsayılan modları uygula
         ApplyDefaultSettings();
         
+        InitializeThumbnailViewport();
+
         // Start async indexing after window loads
         Loaded += MainWindow_Loaded;
     }
@@ -322,6 +327,9 @@ public partial class MainWindow : Window {
         RecordMeasurementEvent("kapanış başladı");
 
         _lifetimeCancellation.Cancel();
+        _viewportDebounce.Stop();
+        _thumbnailIdleRelease.Stop();
+        _thumbnailViewport?.Cancel();
         CancelCurrentSearch();
         var folderCancellation = Interlocked.Exchange(
             ref _folderLoadCancellation,
@@ -671,11 +679,9 @@ public partial class MainWindow : Window {
 
             foreach (var entry in page.Entries)
             {
-                var isNew = false;
                 if (!existing.TryGetValue(entry.FullPath, out var viewModel))
                 {
                     viewModel = new DesktopIconViewModel();
-                    isNew = true;
                 }
 
                 viewModel.Name = entry.Name;
@@ -688,11 +694,6 @@ public partial class MainWindow : Window {
                 {
                     viewModel.SetFolderColors(entry.Name);
                 }
-                if (isNew)
-                {
-                    _ = LoadThumbnailAsync(viewModel);
-                }
-
                 desired.Add(viewModel);
             }
 
@@ -729,6 +730,10 @@ public partial class MainWindow : Window {
             {
                 EmptyFolderPanel.Visibility = Visibility.Collapsed;
             }
+            // İzleyici kaynaklı yenileme küçük resim işi açmaz; yalnız
+            // görünür alan yeniden değerlendirilir.
+            RetargetThumbnailViewport(_desktopIcons.ToList());
+
             Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe" +
                 (page.IsTruncated
                     ? $" (limit: {MAX_FOLDER_ITEMS})"
@@ -791,12 +796,13 @@ public partial class MainWindow : Window {
                     return d.IsDirectory;
                 }).Count();
                 _desktopIcons.Insert(insertIndex, viewModel);
-                
-                // Async thumbnail yükleme
-                _ = LoadThumbnailAsync(viewModel);
             }
         }
-        
+
+        // İndeksleme/izleyici kaynaklı yenileme küçük resim işi açmaz; yalnız
+        // görünür alan yeniden değerlendirilir.
+        RetargetThumbnailViewport(_desktopIcons.ToList());
+
         Log($"🔄 Desktop güncellendi: {_desktopIcons.Count} öğe");
     }
     
@@ -869,14 +875,15 @@ public partial class MainWindow : Window {
     private void LoadDesktopIcons() {
         _desktopIcons.Clear();
         var indexedRoots = _indexLifecycle.GetIndexedRoots();
-        
+
         Log($"📸 Thumbnail yükleme başladı... ({indexedRoots.Count} öğe)");
-        
+
         // Önce klasörler, sonra dosyalar - her grup alfabetik sıralı
         var sortedChildren = indexedRoots
             .OrderBy(n => !n.IsDirectory)  // false (klasör) önce, true (dosya) sonra
             .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase);
-        
+
+        var items = new List<DesktopIconViewModel>();
         foreach (var child in sortedChildren) {
             var viewModel = new DesktopIconViewModel {
                 Name = child.Name,
@@ -884,44 +891,20 @@ public partial class MainWindow : Window {
                 Icon = child.IsDirectory ? "📁" : GetFileIcon(child.Name),
                 IsDirectory = child.IsDirectory
             };
-            
+
             // Klasör renklerini ayarla
             if (child.IsDirectory) {
                 viewModel.SetFolderColors(child.Name);
             }
-            
+
             _desktopIcons.Add(viewModel);
-            
-            // Async thumbnail yükleme - UI'yi bloklamaz
-            _ = LoadThumbnailAsync(viewModel);
+            items.Add(viewModel);
         }
-        
-        Log($"✅ Desktop ikonları yüklendi, thumbnail'ler arka planda yükleniyor...");
-    }
-    
-    private async Task LoadThumbnailAsync(DesktopIconViewModel viewModel)
-    {
-        try
-        {
-            var thumbnail = await _thumbnailService.GetThumbnailAsync(
-                viewModel.FullPath,
-                THUMBNAIL_SIZE,
-                CancellationToken.None
-            );
-            
-            if (thumbnail != null)
-            {
-                // UI thread'inde güncelleme
-                await Dispatcher.InvokeAsync(() => 
-                {
-                    viewModel.Thumbnail = thumbnail;
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            Log($"⚠️ Thumbnail yükleme hatası ({viewModel.Name}): {ex.Message}");
-        }
+
+        // Küçük resimler yalnız görünür alan için, talep geldikçe yüklenir.
+        RetargetThumbnailViewport(items);
+
+        Log($"✅ Desktop ikonları yüklendi, küçük resimler görünür alana göre yüklenecek...");
     }
     
     private async Task LoadSearchThumbnailAsync(SearchResultViewModel viewModel)
@@ -1726,6 +1709,22 @@ public partial class MainWindow : Window {
     /// Thumbnail loading batch size
     /// </summary>
     private const int THUMBNAIL_BATCH_SIZE = 20;
+
+    /// <summary>
+    /// Görünür alanın önüne ve arkasına kaç ekran önden yükleneceği.
+    /// </summary>
+    private const int THUMBNAIL_PREFETCH_SCREENS = 1;
+
+    /// <summary>
+    /// Uygulama bu süre boyunca kullanılmazsa görünür pencere dışındaki küçük
+    /// resimler bellekten düşürülür. Kaydırma sırasında bırakma yapılmaz.
+    /// </summary>
+    private const int THUMBNAIL_IDLE_RELEASE_SECONDS = 60;
+
+    /// <summary>
+    /// Kaydırma sırasında yeniden planlama gecikmesi.
+    /// </summary>
+    private const int VIEWPORT_DEBOUNCE_MS = 100;
     
     /// <summary>
     /// Klasör içeriğini ASYNC yükler - büyük klasörler için optimize edildi
@@ -1755,6 +1754,7 @@ public partial class MainWindow : Window {
                 return false;
             }
 
+            _thumbnailViewport?.Cancel();
             _desktopIcons.Clear();
             EmptyFolderPanel.Visibility = Visibility.Collapsed;
 
@@ -1789,7 +1789,7 @@ public partial class MainWindow : Window {
                 Log($"   📊 {_desktopIcons.Count} öğe yüklendi" +
                     (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
                 RecordFolderMetrics(folderPath, items.Count, page.IsTruncated);
-                _ = LoadThumbnailsInBatchesAsync(items);
+                RetargetThumbnailViewport(items);
             }
 
             return true;
@@ -1808,34 +1808,100 @@ public partial class MainWindow : Window {
     }
 
     /// <summary>
-    /// Thumbnail'leri batch'ler halinde yükler (UI'ı bloklamaz)
+    /// Küçük resim zamanlayıcısını kurar ve kaydırma/boyut olaylarına bağlar.
     /// </summary>
-    private async Task LoadThumbnailsInBatchesAsync(List<DesktopIconViewModel> items) {
-        // Process in batches to avoid overwhelming the system
-        for (int i = 0; i < items.Count; i += THUMBNAIL_BATCH_SIZE) {
-            var batch = items.Skip(i).Take(THUMBNAIL_BATCH_SIZE).ToList();
-            
-            // Load batch in parallel
-            var tasks = batch.Select(async icon => {
-                try {
-                    var thumbnail = await _thumbnailService.GetThumbnailAsync(
-                        icon.FullPath, 
-                        THUMBNAIL_SIZE,
-                        CancellationToken.None);
-                    
-                    if (thumbnail != null) {
-                        await Dispatcher.InvokeAsync(() => {
-                            icon.Thumbnail = thumbnail;
-                        }, System.Windows.Threading.DispatcherPriority.Background);
-                    }
-                } catch { }
-            });
-            
-            await Task.WhenAll(tasks);
-            
-            // Small delay between batches to keep UI responsive
-            await Task.Delay(10);
+    private void InitializeThumbnailViewport() {
+        _thumbnailViewport = new ThumbnailViewportScheduler(
+            _thumbnailService,
+            (icon, thumbnail) => Dispatcher.InvokeAsync(
+                () => { icon.Thumbnail = thumbnail; },
+                System.Windows.Threading.DispatcherPriority.Background).Task,
+            THUMBNAIL_SIZE,
+            THUMBNAIL_BATCH_SIZE,
+            THUMBNAIL_PREFETCH_SCREENS);
+
+        _viewportDebounce.Interval =
+            TimeSpan.FromMilliseconds(VIEWPORT_DEBOUNCE_MS);
+        _viewportDebounce.Tick += (_, __) => {
+            _viewportDebounce.Stop();
+            UpdateThumbnailViewport();
+        };
+
+        DesktopIconsScroll.ScrollChanged += (_, __) => ScheduleViewportUpdate();
+        DesktopIconsScroll.SizeChanged += (_, __) => ScheduleViewportUpdate();
+        DesktopIconsScroll.IsVisibleChanged += (_, __) => ScheduleViewportUpdate();
+
+        // Kullanıcı OmniSpot'tan ayrıldıktan bir süre sonra görünmeyen küçük
+        // resimler bellekten düşürülür; kullanım sırasında hiçbir şey atılmaz.
+        _thumbnailIdleRelease.Interval =
+            TimeSpan.FromSeconds(THUMBNAIL_IDLE_RELEASE_SECONDS);
+        _thumbnailIdleRelease.Tick += (_, __) => {
+            _thumbnailIdleRelease.Stop();
+            _thumbnailViewport?.ReleaseOutsideViewport();
+        };
+        Deactivated += (_, __) => {
+            if (_isPreparedForShutdown) return;
+            _thumbnailIdleRelease.Stop();
+            _thumbnailIdleRelease.Start();
+        };
+        Activated += (_, __) => _thumbnailIdleRelease.Stop();
+    }
+
+    /// <summary>
+    /// Yeni bir öğe listesini hedefler; önceki görünümün işi iptal edilir.
+    /// </summary>
+    private void RetargetThumbnailViewport(IReadOnlyList<DesktopIconViewModel> items) {
+        _thumbnailViewport?.Reset(items);
+        ScheduleViewportUpdate();
+    }
+
+    /// <summary>
+    /// Kaydırma sırasında her karede yeniden planlamamak için geciktirir.
+    /// </summary>
+    private void ScheduleViewportUpdate() {
+        if (_isPreparedForShutdown) return;
+        _viewportDebounce.Stop();
+        _viewportDebounce.Start();
+    }
+
+    private void UpdateThumbnailViewport() {
+        if (_isPreparedForShutdown) return;
+        _thumbnailViewport?.Update(ComputeThumbnailViewport());
+    }
+
+    /// <summary>
+    /// Görünür öğe aralığını hesaplar. Panel sanallaştırılmadığı için ölçü
+    /// gerçekleşmiş bir kaptan alınır; sabit boyut varsayılmaz.
+    /// </summary>
+    private ThumbnailViewport ComputeThumbnailViewport() {
+        if (DesktopIconsScroll.Visibility != Visibility.Visible) return default;
+
+        var count = _desktopIcons.Count;
+        if (count == 0) return default;
+
+        if (DesktopIcons.ItemContainerGenerator.ContainerFromIndex(0)
+            is not FrameworkElement container) {
+            return default;
         }
+
+        var itemWidth = container.ActualWidth
+            + container.Margin.Left + container.Margin.Right;
+        var itemHeight = container.ActualHeight
+            + container.Margin.Top + container.Margin.Bottom;
+        var panelWidth = DesktopIcons.ActualWidth;
+        var viewportHeight = DesktopIconsScroll.ViewportHeight;
+        if (itemWidth <= 0 || itemHeight <= 0 || panelWidth <= 0 || viewportHeight <= 0) {
+            return default;
+        }
+
+        var columns = Math.Max(1, (int)(panelWidth / itemWidth));
+        var firstRow = Math.Max(0, (int)(DesktopIconsScroll.VerticalOffset / itemHeight));
+        // Kısmen görünen satırlar için bir satır pay bırakılır.
+        var rows = (int)Math.Ceiling(viewportHeight / itemHeight) + 1;
+
+        var first = Math.Min(count, firstRow * columns);
+        var visible = Math.Min(count - first, rows * columns);
+        return visible <= 0 ? default : new ThumbnailViewport(first, visible);
     }
     
     /// <summary>
