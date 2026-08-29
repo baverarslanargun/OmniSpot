@@ -32,6 +32,12 @@ public sealed class DiagnosticsCollector
     private DateTime? _forcedLiveMemoryDueAt;
     private long _searchCount;
 
+    /// <summary>
+    /// `CollectProcess` okur, `CollectMemory` native payı çıkarmak için kullanır.
+    /// Toplama sırası (`CollectProcess` → `CollectMemory`) bunu garanti eder.
+    /// </summary>
+    private long _lastPrivateBytes;
+
     public DiagnosticsCollector(
         IIndexLifecycleService indexLifecycle,
         IThumbnailService thumbnails,
@@ -114,6 +120,7 @@ public sealed class DiagnosticsCollector
         {
             _process.Refresh();
             var privateBytes = _process.PrivateMemorySize64;
+            _lastPrivateBytes = privateBytes;
             var workingSet = _process.WorkingSet64;
             var peakWorkingSet = _process.PeakWorkingSet64;
             Metrics.Set(
@@ -168,6 +175,17 @@ public sealed class DiagnosticsCollector
         Metrics.Set(
             GroupMemory, "yönetilen yığın", FormatBytes(managed),
             DiagnosticsSeverity.Normal, managed);
+
+        // `private` eksi yönetilen yığın. Büyümenin yönetilen tarafta mı (bizim
+        // nesnelerimiz) yoksa native tarafta mı (WPF bitmap'leri, SQLite, kabuk)
+        // olduğunu tek satırda ayırır.
+        if (_lastPrivateBytes > 0)
+        {
+            var native = Math.Max(0L, _lastPrivateBytes - managed);
+            Metrics.Set(
+                GroupMemory, "native pay", FormatBytes(native),
+                DiagnosticsSeverity.Normal, native);
+        }
 
         var info = GC.GetGCMemoryInfo();
         if (info.Index > 0)
