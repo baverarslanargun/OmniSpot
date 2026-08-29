@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace SmartFileLauncher.Core.Diagnostics;
 
 public enum MeasurementProfile
@@ -9,11 +11,22 @@ public enum MeasurementProfile
 public sealed record ApplicationStartupOptions(
     DiagnosticsStartupOptions Diagnostics,
     MeasurementProfile? Profile,
-    string? Error)
+    string? Error,
+    TimeSpan? LiveHeapInterval = null)
 {
     public const string ProfileSwitch = "--profil";
+    public const string LiveHeapSwitch = "--canli-yigin";
     public const string EmptyProductionProfileName = "bos-uretim";
     public const string ProductionCopyProfileName = "uretim-kopya";
+
+    /// <summary>
+    /// `--canli-yigin` için kabul edilen saniye aralığı. Alt sınır zorlanmış
+    /// toplamanın uygulamayı sürekli durdurmasını, üst sınır ölçümü anlamsız
+    /// kılacak kadar seyrek örneklemeyi önler.
+    /// </summary>
+    private const int LiveHeapMinimumSeconds = 5;
+
+    private const int LiveHeapMaximumSeconds = 3600;
 
     public static ApplicationStartupOptions Default { get; } =
         new(DiagnosticsStartupOptions.None, null, null);
@@ -32,6 +45,15 @@ public sealed record ApplicationStartupOptions(
         ArgumentNullException.ThrowIfNull(arguments);
 
         var diagnostics = DiagnosticsStartupOptions.Parse(arguments);
+
+        // Sızıntı ölçümü profilden bağımsız açılabilir: gerçek veritabanı ve
+        // gerçek yollarla koşarken de canlı yığın satırları yazılabilsin.
+        var liveHeap = ReadLiveHeapInterval(arguments, out var liveHeapError);
+        if (liveHeapError != null)
+        {
+            return new ApplicationStartupOptions(diagnostics, null, liveHeapError);
+        }
+
         var profileValue = ReadProfileValue(arguments, out var profileError);
         if (profileError != null)
         {
@@ -40,7 +62,7 @@ public sealed record ApplicationStartupOptions(
 
         if (profileValue == null)
         {
-            return new ApplicationStartupOptions(diagnostics, null, null);
+            return new ApplicationStartupOptions(diagnostics, null, null, liveHeap);
         }
 
         var profile = profileValue.Equals(
@@ -84,7 +106,86 @@ public sealed record ApplicationStartupOptions(
         return new ApplicationStartupOptions(
             diagnostics,
             profile,
-            null);
+            null,
+            liveHeap);
+    }
+
+    /// <summary>
+    /// `--canli-yigin &lt;saniye&gt;`: zorlanmış tam toplamadan sonra hayatta kalan
+    /// yığını ölçen satırları açar. Ölçüm profillerinden bağımsızdır; profil
+    /// verilmediğinde de çalışır, verildiğinde onun varsayılanını ezer.
+    /// </summary>
+    private static TimeSpan? ReadLiveHeapInterval(
+        IReadOnlyList<string> arguments,
+        out string? error)
+    {
+        string? value = null;
+        var seen = false;
+
+        for (var index = 0; index < arguments.Count; index++)
+        {
+            var argument = arguments[index];
+            if (argument == null) continue;
+
+            string? candidate;
+            if (argument.StartsWith(
+                    LiveHeapSwitch + "=",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                candidate = argument[(LiveHeapSwitch.Length + 1)..];
+            }
+            else if (argument.Equals(LiveHeapSwitch, StringComparison.OrdinalIgnoreCase))
+            {
+                if (index + 1 >= arguments.Count ||
+                    string.IsNullOrWhiteSpace(arguments[index + 1]) ||
+                    arguments[index + 1].StartsWith('-'))
+                {
+                    error = $"{LiveHeapSwitch} saniye cinsinden bir sayı bekliyor.";
+                    return null;
+                }
+
+                candidate = arguments[++index];
+            }
+            else
+            {
+                continue;
+            }
+
+            if (seen)
+            {
+                error = $"{LiveHeapSwitch} yalnız bir kez verilebilir.";
+                return null;
+            }
+
+            seen = true;
+            value = candidate.Trim().Trim('"');
+        }
+
+        if (!seen)
+        {
+            error = null;
+            return null;
+        }
+
+        if (!int.TryParse(
+                value,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out var seconds))
+        {
+            error = $"{LiveHeapSwitch} saniye cinsinden bir sayı bekliyor: {value}";
+            return null;
+        }
+
+        if (seconds < LiveHeapMinimumSeconds || seconds > LiveHeapMaximumSeconds)
+        {
+            error =
+                $"{LiveHeapSwitch} değeri {LiveHeapMinimumSeconds}-{LiveHeapMaximumSeconds} saniye aralığında olmalı: {seconds}";
+            return null;
+        }
+
+        error = null;
+        return TimeSpan.FromSeconds(seconds);
     }
 
     private static string? ReadProfileValue(
