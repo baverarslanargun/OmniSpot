@@ -1,15 +1,5 @@
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Reads a moved-in subtree from the file system with the same walk the
-/// baseline map uses.
-/// </summary>
-/// <remarks>
-/// The walk is best effort: a directory that cannot be listed is counted and
-/// skipped rather than failing the batch. Failing instead would stall the feed,
-/// because a gap prevents the accept that would move past the very records that
-/// triggered the walk.
-/// </remarks>
 public sealed class UsnFileSystemSubtreeReader : IUsnSubtreeReader
 {
     private readonly IUsnIdentityProbe _identityProbe;

@@ -1,6 +1,5 @@
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>Reason flags carried by a USN record.</summary>
 [Flags]
 public enum UsnReason : uint
 {

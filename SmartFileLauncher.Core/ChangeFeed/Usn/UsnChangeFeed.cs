@@ -1,14 +1,5 @@
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// A <see cref="IChangeFeed"/> backed by the NTFS/ReFS USN change journal.
-/// </summary>
-/// <remarks>
-/// The batch, the journal cursor and the directory map advance as one unit in
-/// <see cref="Accept"/>. Committing the map earlier would make a replayed batch
-/// resolve rename records against already-updated names, so the map belongs on
-/// the cursor side of the commit, after the index write.
-/// </remarks>
 public sealed class UsnChangeFeed : IChangeFeed
 {
     public const string ProviderIdentifier = "usn";
@@ -58,14 +49,8 @@ public sealed class UsnChangeFeed : IChangeFeed
 
     public ChangeFeedRootIdentity RootIdentity { get; }
 
-    /// <summary>Journal position that the last <see cref="Accept"/> committed.</summary>
     public long AcceptedUsn => _nextUsn;
 
-    /// <summary>
-    /// Directories a moved-in subtree could not contribute to the map during the
-    /// last successful read. Changes below them cannot be resolved, so a
-    /// non-zero value belongs in the reconciliation diagnostics.
-    /// </summary>
     public int LastSkippedSubtreeDirectoryCount { get; private set; }
 
     internal int DirectoryCount => _directories.Count;
@@ -198,8 +183,6 @@ public sealed class UsnChangeFeed : IChangeFeed
             cursor = page.NextUsn;
         }
 
-        // The accepted cursor is the queried end, so anything at or past it must
-        // stay for the next batch instead of being delivered twice.
         records.RemoveAll(record => record.Usn >= endUsn);
         return records;
     }

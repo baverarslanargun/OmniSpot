@@ -3,10 +3,6 @@ using SmartFileLauncher.Core.ChangeFeed.Usn;
 
 namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 
-/// <summary>
-/// Builds raw <c>USN_RECORD_V2</c> / <c>USN_RECORD_V3</c> buffers so the parser
-/// is exercised against the real on-disk layout instead of a stand-in type.
-/// </summary>
 internal sealed class UsnRecordBuffer
 {
     private const int V2HeaderLength = 60;

@@ -2,7 +2,6 @@ using System.IO;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>One directory known to the feed, keyed by its file identity.</summary>
 public readonly record struct UsnDirectoryEntry(
     UsnFileReference Reference,
     string Name,
@@ -17,15 +16,6 @@ internal interface IUsnDirectoryLookup
     bool TryGetEntry(UsnFileReference reference, out UsnDirectoryEntry entry);
 }
 
-/// <summary>
-/// Directory identity to path map for one feed root.
-/// </summary>
-/// <remarks>
-/// Only directories are stored. A USN record already carries its own name and
-/// its parent identity, so resolving a file needs nothing but the directory
-/// chain; keeping files out of the map removes the per-file memory cost that a
-/// full node map would add on top of the existing index.
-/// </remarks>
 public sealed class UsnDirectoryMap : IUsnDirectoryLookup
 {
     internal const int MaximumDepth = 512;
@@ -52,7 +42,6 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
 
     public UsnFileReference RootReference { get; }
 
-    /// <summary>Number of directories below the root; the root itself is implicit.</summary>
     public int Count => _entries.Count;
 
     public IReadOnlyCollection<UsnDirectoryEntry> Entries => _entries.Values;
@@ -69,9 +58,6 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
 
     public bool Remove(UsnFileReference reference) => _entries.Remove(reference);
 
-    /// <summary>
-    /// Removes each reference together with every directory below it.
-    /// </summary>
     public int RemoveSubtrees(IReadOnlyCollection<UsnFileReference> references)
     {
         if (references.Count == 0 || _entries.Count == 0)

@@ -5,15 +5,6 @@ using Microsoft.Win32.SafeHandles;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Reads the change journal of one volume through
-/// <c>FSCTL_QUERY_USN_JOURNAL</c> and <c>FSCTL_READ_USN_JOURNAL</c>.
-/// </summary>
-/// <remarks>
-/// Opening the volume device requires administrator rights, so this type only
-/// runs in an elevated host. Everything above it works against
-/// <see cref="IUsnJournalReader"/>.
-/// </remarks>
 public sealed class UsnVolumeJournalReader : IUsnJournalReader
 {
     private const uint GenericRead = 0x80000000;

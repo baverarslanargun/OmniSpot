@@ -13,10 +13,6 @@ internal sealed record UsnProjectionResult(
     ChangeFeedGapReason GapReason,
     int SkippedSubtreeDirectoryCount = 0);
 
-/// <summary>
-/// Turns raw journal records into root-scoped change events and buffers the
-/// directory map updates the same batch implies.
-/// </summary>
 internal static class UsnEventProjector
 {
     private const UsnReason ModifyReasons =
@@ -114,10 +110,6 @@ internal static class UsnEventProjector
         }
     }
 
-    /// <summary>
-    /// Keeps the directory map in step with the batch and returns how many
-    /// directories a moved-in subtree could not contribute.
-    /// </summary>
     private static int UpdateDirectoryMap(
         UsnProjectionContext context,
         UsnRecord record,
@@ -146,9 +138,6 @@ internal static class UsnEventProjector
             return 0;
         }
 
-        // A directory that arrives under a new name without already being known
-        // came from outside the root. Its descendants were not touched on disk,
-        // so the journal will never name them and the map has to learn them now.
         var entersRoot =
             (record.Reason & UsnReason.RenameNewName) != 0 &&
             !scope.Contains(record.FileReference);

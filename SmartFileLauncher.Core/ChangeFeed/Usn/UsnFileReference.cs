@@ -2,10 +2,6 @@ using System.Globalization;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// A 128-bit file identity. NTFS uses only the low 64 bits; ReFS records
-/// (<c>USN_RECORD_V3</c>) use the full width.
-/// </summary>
 public readonly record struct UsnFileReference(ulong Low, ulong High)
 {
     public static readonly UsnFileReference None = default;

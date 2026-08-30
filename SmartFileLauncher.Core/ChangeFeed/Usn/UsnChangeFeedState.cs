@@ -3,16 +3,6 @@ using System.IO;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Everything a USN feed must persist to resume after the application closes:
-/// the root identity it was built for, the journal position, and the directory
-/// map that turns file identities back into paths.
-/// </summary>
-/// <remarks>
-/// The baseline must be taken in this order: query the journal first, take the
-/// directory snapshot second. Changes made during the snapshot are then
-/// replayed by the first read instead of being lost.
-/// </remarks>
 public sealed class UsnChangeFeedState
 {
     public UsnChangeFeedState(

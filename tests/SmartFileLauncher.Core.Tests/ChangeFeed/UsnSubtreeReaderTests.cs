@@ -4,12 +4,6 @@ using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 
-/// <summary>
-/// The subtree walk that follows a directory moved into a root must keep the
-/// same root confinement as the baseline walk. A junction moved into the root
-/// would otherwise pull the identities of directories that live outside it into
-/// the feed map.
-/// </summary>
 public sealed class UsnSubtreeReaderTests
 {
     [Fact]

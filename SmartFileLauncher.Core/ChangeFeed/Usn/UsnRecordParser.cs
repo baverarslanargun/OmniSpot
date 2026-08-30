@@ -3,11 +3,6 @@ using System.Text;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Parses the record region returned by <c>FSCTL_READ_USN_JOURNAL</c>.
-/// Supports <c>USN_RECORD_V2</c> (NTFS) and <c>USN_RECORD_V3</c> (128-bit file
-/// identities, used by ReFS).
-/// </summary>
 public static class UsnRecordParser
 {
     private const int V2HeaderLength = 60;

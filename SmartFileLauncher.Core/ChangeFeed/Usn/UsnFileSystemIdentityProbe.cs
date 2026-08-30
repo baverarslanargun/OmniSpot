@@ -4,15 +4,6 @@ using Microsoft.Win32.SafeHandles;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Reads volume and file identity with <c>GetFileInformationByHandleEx</c>
-/// (<c>FileIdInfo</c>), which returns a 128-bit identity on both NTFS and ReFS
-/// and therefore matches what <c>USN_RECORD_V2</c> and <c>USN_RECORD_V3</c>
-/// report.
-/// </summary>
-/// <remarks>
-/// Opening a path for identity needs no elevation; only reading the journal does.
-/// </remarks>
 public sealed class UsnFileSystemIdentityProbe : IUsnIdentityProbe
 {
     private const uint FileShareRead = 0x00000001;
@@ -93,10 +84,6 @@ public sealed class UsnFileSystemIdentityProbe : IUsnIdentityProbe
         out FileIdInfo information,
         int bufferSize);
 
-    /// <summary>
-    /// <c>FILE_ID_INFO</c>. The 16-byte <c>FILE_ID_128</c> identifier is read as
-    /// two little-endian words so the struct stays blittable.
-    /// </summary>
     [StructLayout(LayoutKind.Sequential)]
     private struct FileIdInfo
     {

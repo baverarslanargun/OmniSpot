@@ -2,24 +2,6 @@ using System.IO;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Shared directory walk behind both the baseline map build and the subtree
-/// learn that follows a directory moved into a root.
-/// </summary>
-/// <remarks>
-/// <para>
-/// The listing is materialised inside the guarded block so a directory that
-/// cannot be opened is counted rather than thrown, whether the runtime reports
-/// the failure when the enumeration is created or when it is walked.
-/// </para>
-/// <para>
-/// The walk never leaves the volume it started on and never traverses a reparse
-/// point, the start path included. A junction would otherwise pull directories
-/// that live outside the root into the feed map, and a map keyed by identity
-/// cannot represent a directory that is reachable through more than one path
-/// anyway.
-/// </para>
-/// </remarks>
 internal static class UsnDirectoryWalk
 {
     public static string[] ListDirectories(string path) => Directory.GetDirectories(path);
@@ -84,12 +66,6 @@ internal static class UsnDirectoryWalk
         return skipped;
     }
 
-    /// <summary>
-    /// Confirms that the walk may descend into <paramref name="path"/>: it must
-    /// not be a reparse point, and it must still be the object the caller named.
-    /// The identity check also covers the directory being moved away again
-    /// between the journal record and this walk.
-    /// </summary>
     private static bool CanEnterDirectory(
         string path,
         UsnFileReference reference,

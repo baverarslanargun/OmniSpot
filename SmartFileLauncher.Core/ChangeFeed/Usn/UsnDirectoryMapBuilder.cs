@@ -2,31 +2,11 @@ using System.IO;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Result of walking a root to build its directory map.
-/// </summary>
-/// <remarks>
-/// <see cref="SkippedDirectoryCount"/> counts directories the walk saw but could
-/// not take into the map: unreadable listings, missing identities, cross-volume
-/// entries and reparse points. Children hidden by the platform listing itself
-/// are not visible to the walk and are therefore not counted; they are equally
-/// invisible to the index scan that walks the same tree.
-/// </remarks>
 public sealed record UsnDirectoryMapBuildResult(
     UsnNodeIdentity RootIdentity,
     IReadOnlyList<UsnDirectoryEntry> Directories,
     int SkippedDirectoryCount);
 
-/// <summary>
-/// Builds the directory identity map a <see cref="UsnChangeFeed"/> needs to turn
-/// journal records back into paths.
-/// </summary>
-/// <remarks>
-/// Only directories are visited; files carry their own name and parent identity
-/// in every journal record. Reparse points are not traversed, and a root that is
-/// itself a reparse point is rejected because its journal records would appear
-/// under the target path rather than under the root path.
-/// </remarks>
 public static class UsnDirectoryMapBuilder
 {
     public static UsnDirectoryMapBuildResult Build(

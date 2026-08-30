@@ -4,11 +4,6 @@ using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 
-/// <summary>
-/// A directory moved into the root renames only itself; its descendants stay
-/// silent in the journal. These tests pin that the feed learns them anyway, so
-/// changes under a moved-in subtree keep producing events after the accept.
-/// </summary>
 public sealed class UsnChangeFeedSubtreeTests
 {
     private const string RootPath = @"C:\Kok";

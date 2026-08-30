@@ -1,10 +1,5 @@
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
-/// <summary>
-/// Buffers directory map changes for one batch so the map and the cursor can be
-/// committed together. Directory removals stay resolvable until the commit, so
-/// records for children that follow their deleted parent still get a path.
-/// </summary>
 internal sealed class UsnProjectionScope : IUsnDirectoryLookup
 {
     private readonly UsnDirectoryMap _map;
@@ -62,9 +57,6 @@ internal sealed class UsnProjectionScope : IUsnDirectoryLookup
             _map.Set(entry.Reference, entry.Name, entry.ParentReference);
         }
 
-        // Descendants go with their removed ancestor: a directory that leaves the
-        // root renames only itself, so its children would otherwise stay in the
-        // persisted map forever with a broken parent chain.
         _map.RemoveSubtrees(_pendingRemovals);
 
         _pendingSets.Clear();
