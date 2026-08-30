@@ -1,0 +1,73 @@
+namespace SmartFileLauncher.Core.ChangeFeed.Usn;
+
+/// <summary>
+/// Buffers directory map changes for one batch so the map and the cursor can be
+/// committed together. Directory removals stay resolvable until the commit, so
+/// records for children that follow their deleted parent still get a path.
+/// </summary>
+internal sealed class UsnProjectionScope : IUsnDirectoryLookup
+{
+    private readonly UsnDirectoryMap _map;
+    private readonly IUsnDirectoryLookup _mapLookup;
+    private readonly Dictionary<UsnFileReference, UsnDirectoryEntry> _pendingSets = new();
+    private readonly HashSet<UsnFileReference> _pendingRemovals = new();
+
+    public UsnProjectionScope(UsnDirectoryMap map)
+    {
+        _map = map;
+        _mapLookup = map;
+    }
+
+    public UsnFileReference RootReference => _map.RootReference;
+
+    public string RootPath => _map.RootPath;
+
+    public bool TryGetEntry(UsnFileReference reference, out UsnDirectoryEntry entry) =>
+        _pendingSets.TryGetValue(reference, out entry) ||
+        _mapLookup.TryGetEntry(reference, out entry);
+
+    public bool Contains(UsnFileReference reference) =>
+        reference == RootReference ||
+        _pendingSets.ContainsKey(reference) ||
+        _map.Contains(reference);
+
+    public bool TryResolve(UsnFileReference reference, out string path) =>
+        UsnPathResolver.TryResolve(this, reference, out path);
+
+    public void Set(UsnFileReference reference, string name, UsnFileReference parentReference)
+    {
+        if (reference.IsNone || reference == RootReference)
+        {
+            return;
+        }
+
+        _pendingSets[reference] = new UsnDirectoryEntry(reference, name, parentReference);
+        _pendingRemovals.Remove(reference);
+    }
+
+    public void Remove(UsnFileReference reference)
+    {
+        if (reference.IsNone || reference == RootReference)
+        {
+            return;
+        }
+
+        _pendingRemovals.Add(reference);
+    }
+
+    public void Commit()
+    {
+        foreach (var entry in _pendingSets.Values)
+        {
+            _map.Set(entry.Reference, entry.Name, entry.ParentReference);
+        }
+
+        // Descendants go with their removed ancestor: a directory that leaves the
+        // root renames only itself, so its children would otherwise stay in the
+        // persisted map forever with a broken parent chain.
+        _map.RemoveSubtrees(_pendingRemovals);
+
+        _pendingSets.Clear();
+        _pendingRemovals.Clear();
+    }
+}
