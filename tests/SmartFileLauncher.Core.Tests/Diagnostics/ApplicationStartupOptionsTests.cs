@@ -159,11 +159,6 @@ public sealed class ApplicationStartupOptionsTests
         Assert.Contains("bir dizin bekliyor", options.Error);
     }
 
-    /// <summary>
-    /// Asıl amaç: sızıntı ölçümü ölçüm profiline bağlı olmasın. Profiller ayrı
-    /// veritabanı kullanıyor; gerçek `index.db` ile koşarken de canlı yığın
-    /// satırları yazılabilmeli.
-    /// </summary>
     [Fact]
     public void LiveHeapIsEnabledWithoutAnyMeasurementProfile()
     {

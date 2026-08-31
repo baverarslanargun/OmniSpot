@@ -5,10 +5,6 @@ using Microsoft.WindowsAPICodePack.Shell;
 
 namespace SmartFileLauncher.UI.Services;
 
-/// <summary>
-/// Professional thumbnail service with memory + disk cache and Windows Shell integration.
-/// OmniSpot: Hafif Basit Masaüstü ve Tarayıcı
-/// </summary>
 public class ThumbnailService : IThumbnailService
 {
     internal const int DefaultMaxMemoryCacheCount = 1000;
@@ -19,7 +15,7 @@ public class ThumbnailService : IThumbnailService
     private readonly Dictionary<ThumbnailKey, LinkedListNode<CacheEntry>> _memoryCache = new();
     private readonly LinkedList<CacheEntry> _recency = new();
     private readonly object _memoryCacheLock = new();
-    private readonly SemaphoreSlim _semaphore = new(4); // Max 4 concurrent thumbnail generations
+    private readonly SemaphoreSlim _semaphore = new(4);
     private readonly int _maxMemoryCacheCount;
     private readonly long _maxMemoryCacheBytes;
     private readonly string _diskCachePath;
@@ -99,7 +95,6 @@ public class ThumbnailService : IThumbnailService
                 return null;
             }
 
-            // Path validation
             if (!File.Exists(path) && !Directory.Exists(path))
             {
                 Interlocked.Increment(ref _failures);
@@ -109,14 +104,12 @@ public class ThumbnailService : IThumbnailService
             var fileInfo = new FileInfo(path);
             var key = new ThumbnailKey(path, size, fileInfo.LastWriteTimeUtc.Ticks);
 
-            // 1. Memory cache check (O(1))
             if (TryGetFromMemoryCache(key, out var cachedImage))
             {
                 Interlocked.Increment(ref _memoryHits);
                 return cachedImage;
             }
 
-            // 2. Disk cache check
             var diskCachePath = Path.Combine(_diskCachePath, key.GetCacheFileName());
             if (File.Exists(diskCachePath))
             {
@@ -132,11 +125,9 @@ public class ThumbnailService : IThumbnailService
                 }
                 catch
                 {
-                    // Ignore disk cache errors
                 }
             }
 
-            // 3. Generate thumbnail (with concurrency control)
             Interlocked.Increment(ref _queuedGenerations);
             try
             {
@@ -150,7 +141,6 @@ public class ThumbnailService : IThumbnailService
             Interlocked.Increment(ref _activeGenerations);
             try
             {
-                // Double-check memory cache (race condition protection)
                 if (TryGetFromMemoryCache(key, out cachedImage))
                 {
                     return cachedImage;
@@ -167,7 +157,6 @@ public class ThumbnailService : IThumbnailService
                             return null;
                         }
 
-                        // Freeze for cross-thread access
                         if (!thumbnail.IsFrozen)
                         {
                             thumbnail.Freeze();
@@ -250,11 +239,8 @@ public class ThumbnailService : IThumbnailService
     {
         try
         {
-            // DOĞRU YÖNTEM: ShellFile direkt BitmapSource verir (alpha kanal korunur)
             using var shellFile = ShellFile.FromFilePath(path);
 
-            // Kabuk varsayılanı 256×256'dır; istenen boyutu vermezsek görüntülenenden
-            // dört kat büyük bir bitmap tutarız.
             var shellThumbnail = shellFile.Thumbnail;
             shellThumbnail.AllowBiggerSize = false;
             shellThumbnail.CurrentSize = new System.Windows.Size(size, size);
@@ -266,7 +252,6 @@ public class ThumbnailService : IThumbnailService
                 return null;
             }
 
-            // Freeze for thread safety
             if (!bitmapSource.IsFrozen)
                 bitmapSource.Freeze();
 
@@ -278,10 +263,6 @@ public class ThumbnailService : IThumbnailService
         }
     }
 
-    /// <summary>
-    /// Üretilen küçük resmi disk önbelleğine yazar ve bellekte tutulacak sürümün
-    /// uzun kenarını <paramref name="size"/> ile sınırlar.
-    /// </summary>
     private BitmapSource StoreAndBound(string diskCachePath, BitmapSource generated, int size)
     {
         if (!ExceedsBound(generated.PixelWidth, generated.PixelHeight, size))
@@ -307,7 +288,6 @@ public class ThumbnailService : IThumbnailService
         }
         catch
         {
-            // Ignore disk cache save errors
         }
 
         return DecodeBounded(encoded, size) ?? generated;
@@ -325,10 +305,6 @@ public class ThumbnailService : IThumbnailService
         return buffer.ToArray();
     }
 
-    /// <summary>
-    /// PNG baytlarını uzun kenarı <paramref name="size"/> pikseli aşmayacak biçimde çözer.
-    /// Kaynak zaten küçükse büyütme yapılmaz.
-    /// </summary>
     internal static BitmapSource? DecodeBounded(byte[] data, int size)
     {
         if (data.Length == 0 || size <= 0)
@@ -357,8 +333,6 @@ public class ThumbnailService : IThumbnailService
         var bitmap = new BitmapImage();
         bitmap.BeginInit();
         bitmap.CacheOption = BitmapCacheOption.OnLoad;
-        // UriSource yerine StreamSource: WPF'in Uri anahtarlı statik görüntü
-        // önbelleği devreye girmez, resmin ömrü yalnız bizim önbelleğimize bağlı olur.
         bitmap.StreamSource = source;
         if (ExceedsBound(sourceWidth, sourceHeight, size))
         {
@@ -433,7 +407,6 @@ public class ThumbnailService : IThumbnailService
             _memoryCache[key] = node;
             _memoryCacheBytes += bytes;
 
-            // En az kullanılandan başlayarak hem adet hem bayt sınırına in.
             while (_recency.Count > 1
                 && (_memoryCache.Count > _maxMemoryCacheCount
                     || _memoryCacheBytes > _maxMemoryCacheBytes))
@@ -458,7 +431,6 @@ public class ThumbnailService : IThumbnailService
         }
         catch
         {
-            // Ignore disk cache save errors
         }
     }
 
@@ -490,7 +462,6 @@ public class ThumbnailService : IThumbnailService
         }
         catch
         {
-            // Ignore clear errors
         }
     }
 

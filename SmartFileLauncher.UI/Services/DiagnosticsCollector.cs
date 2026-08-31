@@ -32,10 +32,6 @@ public sealed class DiagnosticsCollector
     private DateTime? _forcedLiveMemoryDueAt;
     private long _searchCount;
 
-    /// <summary>
-    /// `CollectProcess` okur, `CollectMemory` native payı çıkarmak için kullanır.
-    /// Toplama sırası (`CollectProcess` → `CollectMemory`) bunu garanti eder.
-    /// </summary>
     private long _lastPrivateBytes;
 
     public DiagnosticsCollector(
@@ -176,9 +172,6 @@ public sealed class DiagnosticsCollector
             GroupMemory, "yönetilen yığın", FormatBytes(managed),
             DiagnosticsSeverity.Normal, managed);
 
-        // `private` eksi yönetilen yığın. Büyümenin yönetilen tarafta mı (bizim
-        // nesnelerimiz) yoksa native tarafta mı (WPF bitmap'leri, SQLite, kabuk)
-        // olduğunu tek satırda ayırır.
         if (_lastPrivateBytes > 0)
         {
             var native = Math.Max(0L, _lastPrivateBytes - managed);
@@ -241,13 +234,6 @@ public sealed class DiagnosticsCollector
                 allocationRate.Value);
         }
     }
-    /// <summary>
-    /// `yönetilen yığın` toplama zorlamadan okunur; içindeki toplanmamış çöp
-    /// canlı veriden ayrılamaz. Bu ölçüm tam bir engelleyici toplama yapıp
-    /// kalanı yazar, böylece canlı/çöp ayrımı tek satırda görünür. Toplama
-    /// uygulamayı durdurduğu için yalnız açıkça bir aralık verildiğinde çalışır;
-    /// üretim varsayılanında kapalıdır ve hiçbir satır yazmaz.
-    /// </summary>
     private void CollectForcedLiveMemory(DateTime now)
     {
         if (_forcedLiveMemoryInterval is not { } interval) return;
@@ -294,7 +280,6 @@ public sealed class DiagnosticsCollector
                 : DiagnosticsSeverity.Normal,
             stopwatch.Elapsed.TotalMilliseconds);
     }
-
 
     private void CollectIo(DateTime now)
     {

@@ -3,19 +3,8 @@ using SmartFileLauncher.UI.ViewModels;
 
 namespace SmartFileLauncher.UI.Services;
 
-/// <summary>
-/// Görünür öğe aralığı. <see cref="VisibleCount"/> sıfırsa görünüm ölçülemiyor
-/// veya gizli demektir.
-/// </summary>
 internal readonly record struct ThumbnailViewport(int FirstVisibleIndex, int VisibleCount);
 
-/// <summary>
-/// Küçük resimleri yalnız görünür alan ve sınırlı prefetch için yükler.
-/// Bir kez yüklenen görsel kaydırma sırasında bırakılmaz; yalnız uygulama
-/// bir süre kullanılmadığında <see cref="ReleaseOutsideViewport"/> ile
-/// görünür pencere dışı boşaltılır. Terk edilen görünümün işi iptal edilir
-/// ve eski sonuç UI'ya uygulanmaz.
-/// </summary>
 internal sealed class ThumbnailViewportScheduler
 {
     private readonly IThumbnailService _thumbnails;
@@ -59,14 +48,12 @@ internal sealed class ThumbnailViewportScheduler
         _delayAsync = delayAsync;
     }
 
-    /// <summary>Yürüyen yükleme turu; testler bunu bekler.</summary>
     internal Task Current => _currentTask;
 
     public long ScheduledCount => Interlocked.Read(ref _scheduled);
 
     public long ReleasedCount => Interlocked.Read(ref _released);
 
-    /// <summary>Görünüm değişti: önceki turu iptal eder ve yeni listeyi hedefler.</summary>
     public void Reset(IReadOnlyList<DesktopIconViewModel> items)
     {
         Cancel();
@@ -75,15 +62,12 @@ internal sealed class ThumbnailViewportScheduler
         _items = items ?? Array.Empty<DesktopIconViewModel>();
     }
 
-    /// <summary>Yürüyen turu iptal eder; yeni istek açılmaz.</summary>
     public void Cancel()
     {
         var previous = _current;
         _current = null;
         previous?.Cancel();
 
-        // İptal edilen turda sırası gelmemiş öğeler istenmiş sayılmaz; hâlâ
-        // görünür alandaysalar bir sonraki turda yeniden istenebilmeliler.
         var batch = _currentBatch;
         _currentBatch = null;
         if (batch == null)
@@ -100,10 +84,6 @@ internal sealed class ThumbnailViewportScheduler
         }
     }
 
-    /// <summary>
-    /// Görünür aralık değişti. Tutma penceresi dışındaki görseller serbest
-    /// bırakılır, yükleme penceresindeki eksikler istenir.
-    /// </summary>
     public void Update(ThumbnailViewport viewport)
     {
         var items = _items;
@@ -113,8 +93,6 @@ internal sealed class ThumbnailViewportScheduler
             return;
         }
 
-        // Görünüm ölçülemiyorsa hiçbir şey yükleme, ama serbest de bırakma:
-        // ölçülemeyen bir anı "hiçbir şey görünmüyor" saymak titremeye yol açar.
         if (viewport.VisibleCount <= 0)
         {
             Cancel();
@@ -123,7 +101,6 @@ internal sealed class ThumbnailViewportScheduler
 
         _lastViewport = viewport;
 
-        // Önce iptal: yarım kalan istekler yeniden değerlendirmeye girsin.
         Cancel();
 
         var load = Window(items.Count, viewport, _prefetchScreens);
@@ -131,9 +108,6 @@ internal sealed class ThumbnailViewportScheduler
         for (var index = load.Start; index < load.End; index++)
         {
             var item = items[index];
-            // Zaten yüklü olan istenmez; küçük resmi üretilemeyen öğe de bu
-            // görünüm boyunca tekrar istenmez, aksi hâlde her kaydırmada
-            // sonuçsuz kabuk çağrısı açılır.
             if (item.Thumbnail != null || !_requested.Add(item))
             {
                 continue;
@@ -154,11 +128,6 @@ internal sealed class ThumbnailViewportScheduler
         _currentTask = RunAsync(missing, cancellation);
     }
 
-    /// <summary>
-    /// Uygulama bir süredir kullanılmıyor: son görünür pencerenin dışında kalan
-    /// küçük resimleri bellekten düşürür. Kaydırma sırasında çağrılmaz — bir kez
-    /// yüklenen görsel kullanım boyunca yerinde kalır.
-    /// </summary>
     public void ReleaseOutsideViewport()
     {
         var items = _items;
@@ -167,7 +136,6 @@ internal sealed class ThumbnailViewportScheduler
             return;
         }
 
-        // Son görünür pencere korunur ki uygulamaya dönüldüğünde ekran hazır olsun.
         var keep = Window(items.Count, _lastViewport, _prefetchScreens);
         for (var index = 0; index < items.Count; index++)
         {
@@ -182,16 +150,11 @@ internal sealed class ThumbnailViewportScheduler
             }
 
             items[index].Thumbnail = null;
-            // Bırakılan öğe geri kaydırıldığında yeniden istenebilmeli.
             _requested.Remove(items[index]);
             Interlocked.Increment(ref _released);
         }
     }
 
-    /// <summary>
-    /// Görünür aralığın <paramref name="screens"/> ekran öncesi ve sonrasını
-    /// kapsayan, listeye kırpılmış pencere.
-    /// </summary>
     internal static (int Start, int End) Window(
         int itemCount,
         ThumbnailViewport viewport,
@@ -235,8 +198,6 @@ internal sealed class ThumbnailViewportScheduler
                 _current = null;
             }
 
-            // Normal biten turda küçük resmi üretilemeyen öğe istenmiş kalır;
-            // aynı görünümde tekrar denenmez.
             if (ReferenceEquals(_currentBatch, items))
             {
                 _currentBatch = null;

@@ -47,21 +47,6 @@ internal sealed record TokenRepresentationComparison(
     double? PooledArrayChangePercent,
     IReadOnlyList<string> AcceptanceFailures);
 
-/// <summary>
-/// `_tokensByPath` değerlerinin temsilini eşleştirilmiş (ABBA) ölçer. Üç temsil
-/// aynı `SearchItem` dizisi canlı tutularak, her biri kendi token string'lerini
-/// üreterek kurulur; ölçülen şey her temsilin **marjinal** kalıcı maliyetidir ve
-/// `realtree --breakdown` içindeki `token_sets` aşamasıyla aynı muhasebeyi
-/// kullanır.
-///
-/// Roller: `hashset` legacy baseline (dizi temsilinden önceki üretim),
-/// `array` token tekilleştirmesinden önceki üretim, `pooled_array`
-/// **üretimin bugünkü şekli**.
-///
-/// Ölçümden önce doğruluk kapısı çalışır: her temsil legacy `hashset`
-/// referansının `OrdinalIgnoreCase` benzersiz küme semantiğini öğe öğe
-/// korumak zorundadır. Kapı düşerse sayılar üretilir ama kabul edilmez.
-/// </summary>
 internal static class TokenRepresentationRunner
 {
     private const string HashSetVariant = "hashset";
@@ -177,11 +162,6 @@ internal static class TokenRepresentationRunner
                 candidate.MedianRetainedBytes.Value)
             : null;
 
-    /// <summary>
-    /// Ölçülemeyen örnek medyana katılmaz; hiçbiri ölçülemediyse medyan
-    /// `null`'dır. Negatif GC deltasını ölçülmüş değer gibi raporlamak, bu
-    /// araçta daha önce düzeltilmiş bir kusurdu.
-    /// </summary>
     private static TokenRepresentationVariant Summarize(
         string variant,
         string scope,
@@ -243,11 +223,6 @@ internal static class TokenRepresentationRunner
         GC.Collect(2, GCCollectionMode.Forced, blocking: true);
     }
 
-    /// <summary>
-    /// Kabul kapısı: aday temsiller üretimin küme semantiğini birebir
-    /// korumalıdır. Sayı eşitliği tek başına yetmez; üyelik `OrdinalIgnoreCase`
-    /// ile karşılaştırılır ve dizide yinelenen token aranır.
-    /// </summary>
     private static (TokenRepresentationFacts Facts, List<string> Failures) Verify(
         SearchItem[] items,
         ITokenizer tokenizer,
@@ -389,11 +364,6 @@ internal static class TokenRepresentationRunner
         return sets;
     }
 
-    /// <summary>
-    /// Üretimin `SearchState.Tokenize` şeklinin birebir replikasıdır. Öğe başına
-    /// token sayısı küçüktür (B-1: medyan `2`, `p99 = 10`), bu yüzden
-    /// benzersizlik ayrı bir küme tahsis etmeden doğrusal taramayla korunur.
-    /// </summary>
     private static ImmutableArray<string>[] BuildArrays(SearchItem[] items, ITokenizer tokenizer)
     {
         var arrays = new ImmutableArray<string>[items.Length];
@@ -425,12 +395,6 @@ internal static class TokenRepresentationRunner
         return arrays;
     }
 
-    /// <summary>
-    /// `array` ile aynı kap, farkı token string'lerinin tekilleştirilmesi.
-    /// Havuz ölçüme dahil edilir; üretimde havuzdaki benzersiz string'ler
-    /// `_pathsByToken` anahtarlarıyla paylaşılacağı için gerçek marjinal kazanç
-    /// burada ölçülenden **daha büyüktür**, küçük değil.
-    /// </summary>
     private static ImmutableArray<string>[] BuildPooledArrays(
         SearchItem[] items,
         ITokenizer tokenizer,

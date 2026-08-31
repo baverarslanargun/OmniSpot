@@ -8,7 +8,6 @@ public class NullToVisibilityConverter : IValueConverter
 {
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
-        // Eğer value null ise Visible (icon göster), değilse Collapsed (thumbnail göster)
         return value == null ? Visibility.Visible : Visibility.Collapsed;
     }
 

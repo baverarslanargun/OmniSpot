@@ -19,11 +19,6 @@ public sealed record ApplicationStartupOptions(
     public const string EmptyProductionProfileName = "bos-uretim";
     public const string ProductionCopyProfileName = "uretim-kopya";
 
-    /// <summary>
-    /// `--canli-yigin` için kabul edilen saniye aralığı. Alt sınır zorlanmış
-    /// toplamanın uygulamayı sürekli durdurmasını, üst sınır ölçümü anlamsız
-    /// kılacak kadar seyrek örneklemeyi önler.
-    /// </summary>
     private const int LiveHeapMinimumSeconds = 5;
 
     private const int LiveHeapMaximumSeconds = 3600;
@@ -46,8 +41,6 @@ public sealed record ApplicationStartupOptions(
 
         var diagnostics = DiagnosticsStartupOptions.Parse(arguments);
 
-        // Sızıntı ölçümü profilden bağımsız açılabilir: gerçek veritabanı ve
-        // gerçek yollarla koşarken de canlı yığın satırları yazılabilsin.
         var liveHeap = ReadLiveHeapInterval(arguments, out var liveHeapError);
         if (liveHeapError != null)
         {
@@ -110,11 +103,6 @@ public sealed record ApplicationStartupOptions(
             liveHeap);
     }
 
-    /// <summary>
-    /// `--canli-yigin &lt;saniye&gt;`: zorlanmış tam toplamadan sonra hayatta kalan
-    /// yığını ölçen satırları açar. Ölçüm profillerinden bağımsızdır; profil
-    /// verilmediğinde de çalışır, verildiğinde onun varsayılanını ezer.
-    /// </summary>
     private static TimeSpan? ReadLiveHeapInterval(
         IReadOnlyList<string> arguments,
         out string? error)

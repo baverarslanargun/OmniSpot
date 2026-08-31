@@ -6,11 +6,6 @@ using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.Search;
 
-/// <summary>
-/// Ad normalizasyonunun iki işini sabitler: ayrıştırılmış Unicode biçimini
-/// toparlamak ve aksansız ikinci bir token üretmek. İkisi de kullanıcıya dönük
-/// arama doğruluğu kuralıdır.
-/// </summary>
 public sealed class SearchTextNormalizationTests
 {
     private const string Root = @"C:\Data";
@@ -24,7 +19,6 @@ public sealed class SearchTextNormalizationTests
         Assert.Equal("izmir", SearchTextNormalizer.Fold("\u0131zm\u0131r"));
     }
 
-    // ASCII token'da katlama yeni nesne üretmemeli; her ad için çalışan bir yol.
     [Fact]
     public void FoldLeavesAsciiTokensUntouched()
     {
@@ -33,7 +27,6 @@ public sealed class SearchTextNormalizationTests
         Assert.Same(token, SearchTextNormalizer.Fold(token));
     }
 
-    // Geçersiz Unicode taşıyan bir ad taramayı düşürmemeli.
     [Fact]
     public void NormalizationSurvivesLoneSurrogates()
     {
@@ -43,11 +36,6 @@ public sealed class SearchTextNormalizationTests
         Assert.NotNull(SearchTextNormalizer.Fold(broken));
     }
 
-    /// <summary>
-    /// Asıl regresyon: `İstanbul` adı macOS/ağ paylaşımlarında `I` + birleşen
-    /// nokta olarak gelir. Normalize edilmezse `tr-TR` küçültmesi bunu
-    /// `ı` + birleşen nokta yapar ve dosya hiçbir yazımla bulunamaz.
-    /// </summary>
     [Fact]
     public void DecomposedFileNameIsStillFound()
     {
@@ -69,10 +57,6 @@ public sealed class SearchTextNormalizationTests
         Assert.Single(state.Get("görüşme"));
     }
 
-    /// <summary>
-    /// Katlama aslını silmiyor; tam yazım hem aslını hem katlanmışını
-    /// eşleştirdiği için daha yüksek puan alır ve üste çıkar.
-    /// </summary>
     [Fact]
     public void ExactSpellingOutranksFoldedSpelling()
     {
@@ -92,12 +76,6 @@ public sealed class SearchTextNormalizationTests
         Assert.True(results[0].Score > results[1].Score);
     }
 
-    /// <summary>
-    /// Katlanmış biçim, kelimenin **alternatifidir**; zorunlu ikinci parçası
-    /// değil. `AdvancedSearchEngine` bir terimden çıkan token'ları kesiştirdiği
-    /// için bu ayrım orada kritik: gruplanmazsa `görüşme` sorgusu yalnız
-    /// `gorusme.txt` varken hiçbir şey bulamaz. İki motor da aynı davranmalı.
-    /// </summary>
     [Theory]
     [InlineData("görüşme")]
     [InlineData("gorusme")]
@@ -124,12 +102,6 @@ public sealed class SearchTextNormalizationTests
         Assert.Contains(onlyAccented.FullPath, advanced);
     }
 
-    /// <summary>
-    /// Regresyonun en keskin hali: indekste yalnız aksansız yazım varsa,
-    /// aksanlı sorgunun ürettiği ilk token hiçbir şey eşleştirmez. Gelişmiş
-    /// motor token'ları kesiştirdiği için bu, terimin tamamını düşürür ve
-    /// dosya **hiç** bulunamaz.
-    /// </summary>
     [Fact]
     public void AccentedQueryFindsFoldedOnlyFileInAdvancedSearch()
     {
@@ -145,10 +117,6 @@ public sealed class SearchTextNormalizationTests
         Assert.Equal([onlyFolded.FullPath], results);
     }
 
-    /// <summary>
-    /// Terimdeki **ayrı kelimeler** birlikte aranmaya devam etmeli; alternatif
-    /// gruplaması bunu gevşetirse gelişmiş arama her şeyi eşleştirmeye başlar.
-    /// </summary>
     [Fact]
     public void DistinctWordsInATermStillRequireAllOfThem()
     {

@@ -3,18 +3,10 @@ using System.Threading;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Utilities;
 namespace SmartFileLauncher.Core.DataStructures;
-/// <summary>
-/// Inverted index: token -> list of nodes containing token.
-/// - Add token: O(1) average (Dictionary + append).
-/// - Remove token: O(n) where n = nodes in that token's list.
-/// - Lookup k tokens: O(k + m) to gather raw matches (m total matched nodes before scoring).
-/// - Fuzzy lookup: O(n*d) where n=indexed tokens, d=distance calculation
-/// </summary>
 public class InvertedIndex {
     private readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.NoRecursion);
     private readonly Dictionary<string, List<FileSystemNode>> _index = new();
     
-    // Reverse index: node path -> set of tokens (for fast removal)
     private readonly Dictionary<string, HashSet<string>> _nodeTokens =
         new(StringComparer.OrdinalIgnoreCase);
     
@@ -27,7 +19,6 @@ public class InvertedIndex {
             }
             list.Add(node);
 
-            // Track which tokens this node has
             if (!_nodeTokens.TryGetValue(node.FullPath, out var tokens)) {
                 tokens = new HashSet<string>();
                 _nodeTokens[node.FullPath] = tokens;
@@ -38,16 +29,10 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Remove a node from all token lists. O(t * n) where t = tokens for this node.
-    /// </summary>
     public void Remove(FileSystemNode node) {
         RemoveByPath(node.FullPath);
     }
     
-    /// <summary>
-    /// Remove a node by its path from all token lists.
-    /// </summary>
     public void RemoveByPath(string path) {
         _lock.EnterWriteLock();
         try {
@@ -58,7 +43,6 @@ public class InvertedIndex {
                     list.RemoveAll(n =>
                         string.Equals(n.FullPath, path, StringComparison.OrdinalIgnoreCase));
 
-                    // Clean up empty lists
                     if (list.Count == 0) {
                         _index.Remove(token);
                     }
@@ -71,9 +55,6 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Remove a specific token-node association.
-    /// </summary>
     public void Remove(string token, FileSystemNode node) {
         _lock.EnterWriteLock();
         try {
@@ -96,9 +77,6 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Check if a path is indexed.
-    /// </summary>
     public bool Contains(string path) {
         _lock.EnterReadLock();
         try {
@@ -108,9 +86,6 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Get the number of indexed nodes.
-    /// </summary>
     public int NodeCount {
         get {
             _lock.EnterReadLock();
@@ -122,9 +97,6 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Get the number of unique tokens.
-    /// </summary>
     public int TokenCount {
         get {
             _lock.EnterReadLock();
@@ -136,9 +108,6 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Clear all index data.
-    /// </summary>
     public void Clear() {
         _lock.EnterWriteLock();
         try {
@@ -160,9 +129,6 @@ public class InvertedIndex {
         }
     }
     
-    /// <summary>
-    /// Get nodes matching token with fuzzy matching (Levenshtein distance ≤ maxDistance)
-    /// </summary>
     public IReadOnlyList<FileSystemNode> GetFuzzy(
         string token,
         int maxDistance = 2,
@@ -170,19 +136,12 @@ public class InvertedIndex {
         CreateSnapshot(cancellationToken)
             .GetFuzzy(token, maxDistance, cancellationToken);
     
-    /// <summary>
-    /// Get nodes where the indexed token contains the search token (substring match).
-    /// Useful for finding "FR612" when searching for "612" or "FR".
-    /// </summary>
     public IReadOnlyList<FileSystemNode> GetPartial(
         string token,
         CancellationToken cancellationToken = default) =>
         CreateSnapshot(cancellationToken)
             .GetPartial(token, cancellationToken);
     
-    /// <summary>
-    /// Get all indexed tokens (for debugging/diagnostics)
-    /// </summary>
     public IEnumerable<string> GetAllTokens() {
         _lock.EnterReadLock();
         try {

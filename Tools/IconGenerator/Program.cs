@@ -2,14 +2,10 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 
-// Manual icon creation based on the OmniSpot design
-// Creates a simplified version of the SVG icon
-
 var icoPath = @"c:\OmniSpot\SmartFileLauncher.UI\Resources\app.ico";
 
 Console.WriteLine("Creating OmniSpot icon...");
 
-// Create multiple sizes
 int[] sizes = { 16, 24, 32, 48, 64, 128, 256 };
 var images = new List<Bitmap>();
 
@@ -39,18 +35,16 @@ static Bitmap CreateIcon(int size)
     float scale = size / 256f;
     int cornerRadius = (int)(48 * scale);
     
-    // Background gradient (dark blue)
     using (var bgBrush = new LinearGradientBrush(
         new Point(0, 0),
         new Point(size, size),
-        Color.FromArgb(255, 16, 22, 51),  // #101633
-        Color.FromArgb(255, 5, 8, 18)))   // #050812
+        Color.FromArgb(255, 16, 22, 51),
+        Color.FromArgb(255, 5, 8, 18)))
     {
         using var path = CreateRoundedRect(0, 0, size, size, cornerRadius);
         g.FillPath(bgBrush, path);
     }
     
-    // Main scan circle
     float circleSize = 160 * scale;
     float circleX = (size - circleSize) / 2;
     float circleY = (size - circleSize) / 2;
@@ -58,31 +52,28 @@ static Bitmap CreateIcon(int size)
     using (var circleBrush = new LinearGradientBrush(
         new PointF(circleX, circleY),
         new PointF(circleX + circleSize, circleY + circleSize),
-        Color.FromArgb(255, 55, 243, 255),  // #37F3FF cyan
-        Color.FromArgb(255, 0, 80, 184)))   // #0050B8 blue
+        Color.FromArgb(255, 55, 243, 255),
+        Color.FromArgb(255, 0, 80, 184)))
     {
         g.FillEllipse(circleBrush, circleX, circleY, circleSize, circleSize);
     }
     
-    // File document icon (white with blue tint)
     float docWidth = 52 * scale;
     float docHeight = 68 * scale;
     float docX = (size - docWidth) / 2;
     float docY = (size - docHeight) / 2 + 4 * scale;
     float foldSize = 14 * scale;
     
-    // Document body
     using (var docPath = CreateDocumentPath(docX, docY, docWidth, docHeight, foldSize))
     using (var docBrush = new LinearGradientBrush(
         new PointF(docX, docY),
         new PointF(docX + docWidth, docY + docHeight),
-        Color.FromArgb(255, 240, 248, 255),  // Light blue-white
-        Color.FromArgb(255, 200, 220, 255))) // Slight blue
+        Color.FromArgb(255, 240, 248, 255),
+        Color.FromArgb(255, 200, 220, 255)))
     {
         g.FillPath(docBrush, docPath);
     }
     
-    // Document lines
     float lineY1 = docY + 24 * scale;
     float lineY2 = docY + 36 * scale;
     float lineY3 = docY + 48 * scale;
@@ -97,7 +88,6 @@ static Bitmap CreateIcon(int size)
         g.DrawLine(linePen, lineX, lineY3, lineX + lineWidth2, lineY3);
     }
     
-    // Radar rings (subtle)
     float ringCenter = size / 2f;
     using (var ringPen = new Pen(Color.FromArgb(60, 55, 243, 255), Math.Max(1, 1.5f * scale)))
     {
@@ -111,12 +101,10 @@ static Bitmap CreateIcon(int size)
         }
     }
     
-    // Glowing dot (bottom right)
     float dotSize = 12 * scale;
     float dotX = size * 0.72f;
     float dotY = size * 0.72f;
     
-    // Glow
     using (var glowPath = new GraphicsPath())
     {
         glowPath.AddEllipse(dotX - dotSize, dotY - dotSize, dotSize * 2, dotSize * 2);
@@ -128,7 +116,6 @@ static Bitmap CreateIcon(int size)
         g.FillPath(glowBrush, glowPath);
     }
     
-    // Dot
     using (var dotBrush = new SolidBrush(Color.FromArgb(255, 55, 243, 255)))
     {
         g.FillEllipse(dotBrush, dotX - dotSize / 3, dotY - dotSize / 3, dotSize * 2 / 3, dotSize * 2 / 3);
@@ -159,7 +146,6 @@ static GraphicsPath CreateDocumentPath(float x, float y, float width, float heig
 {
     var path = new GraphicsPath();
     
-    // Document with folded corner
     path.AddLine(x, y, x + width - fold, y);
     path.AddLine(x + width - fold, y, x + width, y + fold);
     path.AddLine(x + width, y + fold, x + width, y + height);
@@ -176,15 +162,13 @@ static void SaveAsIcon(List<Bitmap> images, string filePath)
     using var fs = new FileStream(filePath, FileMode.Create);
     using var bw = new BinaryWriter(fs);
     
-    // ICO Header
-    bw.Write((short)0);      // Reserved
-    bw.Write((short)1);      // Type: 1 = ICO
-    bw.Write((short)images.Count); // Image count
+    bw.Write((short)0);
+    bw.Write((short)1);
+    bw.Write((short)images.Count);
     
     var imageDataList = new List<byte[]>();
-    int offset = 6 + (16 * images.Count); // Header + directory entries
+    int offset = 6 + (16 * images.Count);
     
-    // Directory entries
     foreach (var img in images)
     {
         using var ms = new MemoryStream();
@@ -192,19 +176,18 @@ static void SaveAsIcon(List<Bitmap> images, string filePath)
         var data = ms.ToArray();
         imageDataList.Add(data);
         
-        bw.Write((byte)(img.Width >= 256 ? 0 : img.Width));  // Width
-        bw.Write((byte)(img.Height >= 256 ? 0 : img.Height)); // Height
-        bw.Write((byte)0);    // Color palette
-        bw.Write((byte)0);    // Reserved
-        bw.Write((short)1);   // Color planes
-        bw.Write((short)32);  // Bits per pixel
-        bw.Write(data.Length); // Image size
-        bw.Write(offset);     // Offset
+        bw.Write((byte)(img.Width >= 256 ? 0 : img.Width));
+        bw.Write((byte)(img.Height >= 256 ? 0 : img.Height));
+        bw.Write((byte)0);
+        bw.Write((byte)0);
+        bw.Write((short)1);
+        bw.Write((short)32);
+        bw.Write(data.Length);
+        bw.Write(offset);
         
         offset += data.Length;
     }
     
-    // Image data
     foreach (var data in imageDataList)
     {
         bw.Write(data);

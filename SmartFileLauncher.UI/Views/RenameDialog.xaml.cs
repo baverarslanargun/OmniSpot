@@ -25,7 +25,6 @@ public partial class RenameDialog : Window
             LabelText.Text = "Yeni ad girin:";
         }
         
-        // Dosya uzantısı hariç seç
         Loaded += (_, _) =>
         {
             NameTextBox.Focus();
@@ -33,7 +32,6 @@ public partial class RenameDialog : Window
             var extension = Path.GetExtension(currentName);
             if (!string.IsNullOrEmpty(extension) && !isNew)
             {
-                // Uzantı hariç seç
                 NameTextBox.Select(0, currentName.Length - extension.Length);
             }
             else
@@ -53,7 +51,6 @@ public partial class RenameDialog : Window
             return;
         }
         
-        // Geçersiz karakterleri kontrol et
         char[] invalidChars = Path.GetInvalidFileNameChars();
         if (newName.IndexOfAny(invalidChars) >= 0)
         {

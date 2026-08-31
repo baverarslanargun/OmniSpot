@@ -3,11 +3,6 @@ using SmartFileLauncher.UI.ViewModels;
 
 namespace SmartFileLauncher.UI.Services;
 
-/// <summary>
-/// Klasör ikonlarının küçük resimlerini batch'ler hâlinde yükler. İptal edildiğinde
-/// kalan batch'ler için yeni istek açılmaz; terk edilen klasörün işi yeni klasörün
-/// üstüne binmez.
-/// </summary>
 internal sealed class ThumbnailBatchLoader
 {
     private readonly IThumbnailService _thumbnails;

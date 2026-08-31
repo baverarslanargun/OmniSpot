@@ -10,9 +10,6 @@ public sealed class RealTreeComparisonRunnerTests
     private const int ItemCount = 2_000;
     private const int Seed = 1701;
 
-    // legacy replikası, builder değişikliğinden önceki SearchState.Create
-    // gövdesini birebir taklit etmelidir. Etmiyorsa gerçek ağaç turundaki
-    // "önce" tarafı yanlış olur ve karşılaştırma anlamını yitirir.
     [Fact]
     public void Run_LegacyReplicaProducesSameSearchStateAsProduction()
     {
@@ -45,8 +42,6 @@ public sealed class RealTreeComparisonRunnerTests
         Assert.Equal("test-os", comparison.Environment.OsDescription);
     }
 
-    // Kapı yalnız allocation düşüşü barajı geçilirse ve doğruluk kapısı
-    // temizse geçmiş sayılır.
     [Fact]
     public void Run_DoesNotClaimBarWhenReductionIsBelowThreshold()
     {
@@ -56,8 +51,6 @@ public sealed class RealTreeComparisonRunnerTests
         Assert.True(comparison.AllocationChangePercent < 0);
     }
 
-    // Sözleşme §8.1: koşum içinde frekans veya PROCTHROTTLEMAX kayması varsa
-    // sonuç kalıcı baseline olamaz; kabul kapısı düşmeli.
     [Fact]
     public void Run_FailsAcceptanceWhenFrequencyDriftIsLabelled()
     {

@@ -29,7 +29,6 @@ public sealed class RealTreeMemoryBreakdownTests
         "children_by_path"
     ];
 
-    // GC ölçümleri makineye göre değişir; test rakama değil yapıya bakar.
     [Fact]
     public void Run_ReportsEveryExpectedStageOnce()
     {
@@ -41,9 +40,6 @@ public sealed class RealTreeMemoryBreakdownTests
         Assert.All(breakdown.Stages, stage => Assert.False(string.IsNullOrWhiteSpace(stage.Scope)));
     }
 
-    // GC deltası küçük ağaçlarda negatife düşebilir. Test bunu yasaklamaz;
-    // yasakladığı şey negatifin ölçülmüş bir değer gibi raporlanmasıdır:
-    // ölçülemeyen aşamanın değeri null olmalı, ölçülebilenin pozitif.
     [Fact]
     public void Run_ReportsNullInsteadOfNegativeForUnmeasurableStages()
     {
@@ -65,8 +61,6 @@ public sealed class RealTreeMemoryBreakdownTests
         Assert.True(breakdown.FullCreateRetainedBytes is null or > 0);
     }
 
-    // Ölçülemeyen aşama varsa toplam ve çapraz denetim üretilmez; eksik
-    // toplamı tam sayıymış gibi raporlamak yanıltıcı olurdu.
     [Fact]
     public void Run_SuppressesTotalWhenAnyStageIsUnmeasurable()
     {
@@ -158,9 +152,6 @@ public sealed class RealTreeMemoryBreakdownTests
         }
     }
 
-    // Ölçülen her aşama artık üretimde boşta da bellekte duran bir yapı.
-    // Kararlı toplam, tam `SearchState` ile `IndexManager` aşamalarının
-    // toplamıdır; hiçbir aşama dışarıda bırakılmaz.
     [Fact]
     public void Run_SteadyManagedTotalIsFullCreatePlusEveryIndexStage()
     {
@@ -180,7 +171,6 @@ public sealed class RealTreeMemoryBreakdownTests
         }
     }
 
-    // Kalıcı çıktı sözleşmesi: ad, token ve path hiçbir alana sızmamalı.
     [Fact]
     public void Run_JsonCarriesNoNameTokenOrPathValues()
     {

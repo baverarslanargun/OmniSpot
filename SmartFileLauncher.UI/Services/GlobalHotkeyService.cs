@@ -6,20 +6,14 @@ using System.Windows.Interop;
 
 namespace SmartFileLauncher.UI.Services;
 
-/// <summary>
-/// Windows API kullanarak global hotkey (sistem genelinde kısayol tuşu) yönetimi sağlar.
-/// Uygulama arka planda olsa bile kısayol tuşlarını yakalar.
-/// </summary>
 public class GlobalHotkeyService : IDisposable
 {
-    // Windows API imports
     [DllImport("user32.dll")]
     private static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 
     [DllImport("user32.dll")]
     private static extern bool UnregisterHotKey(IntPtr hWnd, int id);
 
-    // Modifier keys
     [Flags]
     public enum ModifierKeys : uint
     {
@@ -30,7 +24,6 @@ public class GlobalHotkeyService : IDisposable
         Win = 8
     }
 
-    // Virtual key codes for common keys
     public static class VirtualKeyCodes
     {
         public const uint Space = 0x20;
@@ -88,29 +81,14 @@ public class GlobalHotkeyService : IDisposable
     private ModifierKeys _currentModifiers = ModifierKeys.Alt;
     private uint _currentKey = VirtualKeyCodes.Space;
 
-    /// <summary>
-    /// Hotkey tetiklendiğinde çağrılır
-    /// </summary>
     public event EventHandler? HotkeyPressed;
 
-    /// <summary>
-    /// Mevcut modifier tuşları (Alt, Ctrl, Shift, Win)
-    /// </summary>
     public ModifierKeys CurrentModifiers => _currentModifiers;
 
-    /// <summary>
-    /// Mevcut tuş kodu
-    /// </summary>
     public uint CurrentKey => _currentKey;
 
-    /// <summary>
-    /// Hotkey kayıtlı mı?
-    /// </summary>
     public bool IsRegistered => _isRegistered;
 
-    /// <summary>
-    /// Servisi bir WPF penceresi ile başlatır
-    /// </summary>
     public void Initialize(Window window)
     {
         if (_isDisposed)
@@ -121,7 +99,6 @@ public class GlobalHotkeyService : IDisposable
 
         if (_windowHandle == IntPtr.Zero)
         {
-            // Pencere henüz oluşturulmamış, SourceInitialized event'ini bekle
             window.SourceInitialized += (s, e) =>
             {
                 _windowHandle = new WindowInteropHelper(window).Handle;
@@ -140,15 +117,11 @@ public class GlobalHotkeyService : IDisposable
         _source?.AddHook(HwndHook);
     }
 
-    /// <summary>
-    /// Global hotkey'i kaydeder
-    /// </summary>
     public bool RegisterHotkey(ModifierKeys modifiers, uint key)
     {
         if (_windowHandle == IntPtr.Zero)
             return false;
 
-        // Önce mevcut kaydı kaldır
         UnregisterHotkey();
 
         _currentModifiers = modifiers;
@@ -158,17 +131,11 @@ public class GlobalHotkeyService : IDisposable
         return _isRegistered;
     }
 
-    /// <summary>
-    /// Mevcut ayarlarla hotkey'i yeniden kaydeder
-    /// </summary>
     public bool RegisterHotkey()
     {
         return RegisterHotkey(_currentModifiers, _currentKey);
     }
 
-    /// <summary>
-    /// Global hotkey kaydını kaldırır
-    /// </summary>
     public void UnregisterHotkey()
     {
         if (_windowHandle != IntPtr.Zero && _isRegistered)
@@ -178,9 +145,6 @@ public class GlobalHotkeyService : IDisposable
         }
     }
 
-    /// <summary>
-    /// Windows mesajlarını işler
-    /// </summary>
     private IntPtr HwndHook(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
     {
         if (msg == WM_HOTKEY && wParam.ToInt32() == HOTKEY_ID)
@@ -191,9 +155,6 @@ public class GlobalHotkeyService : IDisposable
         return IntPtr.Zero;
     }
 
-    /// <summary>
-    /// Modifier flags'i insan tarafından okunabilir stringe çevirir
-    /// </summary>
     public static string ModifiersToString(ModifierKeys modifiers)
     {
         var parts = new List<string>();
@@ -204,9 +165,6 @@ public class GlobalHotkeyService : IDisposable
         return string.Join(" + ", parts);
     }
 
-    /// <summary>
-    /// Virtual key code'u insan tarafından okunabilir stringe çevirir
-    /// </summary>
     public static string KeyToString(uint keyCode)
     {
         return keyCode switch
@@ -221,9 +179,6 @@ public class GlobalHotkeyService : IDisposable
         };
     }
 
-    /// <summary>
-    /// Tam hotkey string'ini döndürür (örn: "Alt + Space")
-    /// </summary>
     public string GetHotkeyString()
     {
         var modStr = ModifiersToString(_currentModifiers);
@@ -231,17 +186,11 @@ public class GlobalHotkeyService : IDisposable
         return string.IsNullOrEmpty(modStr) ? keyStr : $"{modStr} + {keyStr}";
     }
 
-    /// <summary>
-    /// System.Windows.Input.Key'i virtual key code'a çevirir
-    /// </summary>
     public static uint KeyToVirtualKeyCode(System.Windows.Input.Key key)
     {
         return (uint)KeyInterop.VirtualKeyFromKey(key);
     }
 
-    /// <summary>
-    /// Virtual key code'u System.Windows.Input.Key'e çevirir
-    /// </summary>
     public static System.Windows.Input.Key VirtualKeyCodeToKey(uint vk)
     {
         return KeyInterop.KeyFromVirtualKey((int)vk);

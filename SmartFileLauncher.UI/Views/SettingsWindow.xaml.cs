@@ -18,9 +18,6 @@ public partial class SettingsWindow : Window
     private GlobalHotkeyService.ModifierKeys _pendingModifiers;
     private uint _pendingKey;
     
-    /// <summary>
-    /// Ayarlar değiştiğinde tetiklenir
-    /// </summary>
     public event EventHandler<AppSettings>? SettingsChanged;
     public event EventHandler? IndexRebuildRequested;
 
@@ -40,35 +37,25 @@ public partial class SettingsWindow : Window
         
         LoadSettingsToUI();
         
-        // Keyboard event'lerini yakala
         PreviewKeyDown += SettingsWindow_PreviewKeyDown;
     }
 
-    /// <summary>
-    /// Ayarları UI elementlerine yükler
-    /// </summary>
     private void LoadSettingsToUI()
     {
-        // Hotkey
         _pendingModifiers = (GlobalHotkeyService.ModifierKeys)_settings.HotkeyModifiers;
         _pendingKey = _settings.HotkeyKey;
         UpdateHotkeyDisplay();
         
-        // Startup
         StartMinimizedCheckbox.IsChecked = _settings.StartMinimized;
         StartWithWindowsCheckbox.IsChecked = _settings.StartWithWindows;
         MinimizeToTrayCheckbox.IsChecked = _settings.MinimizeToTrayOnClose;
         
-        // Defaults
         NaturalLanguageDefaultCheckbox.IsChecked = _settings.NaturalLanguageModeEnabled;
         GridViewDefaultCheckbox.IsChecked = _settings.GridViewEnabled;
         
         UpdateIndexStatus();
     }
 
-    /// <summary>
-    /// İndeks durumunu günceller
-    /// </summary>
     private void UpdateIndexStatus()
     {
         var status = _indexMaintenance.GetStatus();
@@ -92,9 +79,6 @@ public partial class SettingsWindow : Window
         IndexPathText.Text = $"Konum: {status.Path}";
     }
 
-    /// <summary>
-    /// İndeksi siler ve temiz bir tarama için uygulamayı yeniden başlatır.
-    /// </summary>
     private void RebuildIndex_Click(object sender, RoutedEventArgs e)
     {
         var result = System.Windows.MessageBox.Show(
@@ -125,9 +109,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>
-    /// İndeks klasörünü açar
-    /// </summary>
     private void OpenIndexFolder_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -144,9 +125,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>
-    /// Hotkey gösterimini günceller
-    /// </summary>
     private void UpdateHotkeyDisplay()
     {
         var modStr = GlobalHotkeyService.ModifiersToString(_pendingModifiers);
@@ -154,9 +132,6 @@ public partial class SettingsWindow : Window
         CurrentHotkeyText.Text = string.IsNullOrEmpty(modStr) ? keyStr : $"{modStr} + {keyStr}";
     }
 
-    /// <summary>
-    /// Kısayol değiştirme modunu başlatır
-    /// </summary>
     private void ChangeHotkeyButton_Click(object sender, RoutedEventArgs e)
     {
         _isRecordingHotkey = true;
@@ -167,27 +142,21 @@ public partial class SettingsWindow : Window
         _log?.Invoke("🎹 Kısayol kayıt modu aktif");
     }
 
-    /// <summary>
-    /// Klavye girişlerini yakalar (hotkey kayıt modu için)
-    /// </summary>
     private void SettingsWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (!_isRecordingHotkey) return;
         
-        // Sadece modifier tuşlarsa bekle
         if (e.Key == Key.LeftCtrl || e.Key == Key.RightCtrl ||
             e.Key == Key.LeftAlt || e.Key == Key.RightAlt ||
             e.Key == Key.LeftShift || e.Key == Key.RightShift ||
             e.Key == Key.LWin || e.Key == Key.RWin)
         {
-            // Modifier'ları güncelle ama tuş bekle
             UpdatePendingModifiers();
             RecordingHotkeyText.Text = $"{GlobalHotkeyService.ModifiersToString(_pendingModifiers)} + ...";
             e.Handled = true;
             return;
         }
         
-        // Escape kayıtı iptal eder
         if (e.Key == Key.Escape)
         {
             CancelHotkeyRecording();
@@ -195,10 +164,8 @@ public partial class SettingsWindow : Window
             return;
         }
         
-        // Modifier'ları kontrol et
         UpdatePendingModifiers();
         
-        // En az bir modifier gerekli
         if (_pendingModifiers == GlobalHotkeyService.ModifierKeys.None)
         {
             RecordingHotkeyText.Text = "⚠️ En az bir modifier tuşu gerekli (Ctrl, Alt, Shift veya Win)";
@@ -206,11 +173,9 @@ public partial class SettingsWindow : Window
             return;
         }
         
-        // Tuşu al
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         _pendingKey = GlobalHotkeyService.KeyToVirtualKeyCode(key);
         
-        // Gösterimi güncelle
         var modStr = GlobalHotkeyService.ModifiersToString(_pendingModifiers);
         var keyStr = GlobalHotkeyService.KeyToString(_pendingKey);
         RecordingHotkeyText.Text = $"✓ {modStr} + {keyStr}";
@@ -220,9 +185,6 @@ public partial class SettingsWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>
-    /// Mevcut modifier tuşlarını kontrol eder
-    /// </summary>
     private void UpdatePendingModifiers()
     {
         _pendingModifiers = GlobalHotkeyService.ModifierKeys.None;
@@ -240,9 +202,6 @@ public partial class SettingsWindow : Window
             _pendingModifiers |= GlobalHotkeyService.ModifierKeys.Win;
     }
 
-    /// <summary>
-    /// Kısayolu onaylar
-    /// </summary>
     private void ConfirmHotkey_Click(object sender, RoutedEventArgs e)
     {
         if (_pendingModifiers == GlobalHotkeyService.ModifierKeys.None)
@@ -260,9 +219,6 @@ public partial class SettingsWindow : Window
         _log?.Invoke($"✓ Kısayol güncellendi: {CurrentHotkeyText.Text}");
     }
 
-    /// <summary>
-    /// Kısayol kayıt modunu iptal eder
-    /// </summary>
     private void CancelHotkey_Click(object sender, RoutedEventArgs e)
     {
         CancelHotkeyRecording();
@@ -274,16 +230,12 @@ public partial class SettingsWindow : Window
         HotkeyRecordingPanel.Visibility = Visibility.Collapsed;
         ChangeHotkeyButton.IsEnabled = true;
         
-        // Eski değerleri geri yükle
         _pendingModifiers = (GlobalHotkeyService.ModifierKeys)_settings.HotkeyModifiers;
         _pendingKey = _settings.HotkeyKey;
         
         _log?.Invoke("🚫 Kısayol değişikliği iptal edildi");
     }
 
-    /// <summary>
-    /// Varsayılan ayarlara sıfırlar
-    /// </summary>
     private void ResetDefaults_Click(object sender, RoutedEventArgs e)
     {
         var result = System.Windows.MessageBox.Show(
@@ -300,9 +252,6 @@ public partial class SettingsWindow : Window
         }
     }
 
-    /// <summary>
-    /// Ayarları kaydeder ve pencereyi kapatır
-    /// </summary>
     private void Save_Click(object sender, RoutedEventArgs e)
     {
         _settings.HotkeyModifiers = (uint)_pendingModifiers;

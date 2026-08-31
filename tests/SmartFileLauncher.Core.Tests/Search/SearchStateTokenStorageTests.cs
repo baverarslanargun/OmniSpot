@@ -5,20 +5,11 @@ using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.Search;
 
-/// <summary>
-/// `SearchState`'in öğe başına token deposunu temsilden bağımsız olarak sabitler.
-///
-/// Sonuç **sırası** bilerek doğrulanmaz: posting kümeleri `ImmutableHashSet` ve
-/// .NET string hash'i process başına randomize olduğundan eşit skorlu sonuçların
-/// sırası bugün de her koşumda değişiyor. Sabitlenebilen ve sabitlenmesi gereken
-/// şey üyelik, skor ve skora göre azalan sıralamadır.
-/// </summary>
 public sealed class SearchStateTokenStorageTests
 {
     private const string Root = @"C:\Data";
     private const string Archive = @"C:\Data\Arsiv";
 
-    // Aynı adda yinelenen token, harf durumu ve alt dizin bir arada.
     private static readonly string[] RaporPaths =
     [
         @"C:\Data\Arsiv\istanbul-rapor.txt",
@@ -42,8 +33,6 @@ public sealed class SearchStateTokenStorageTests
         var paths = state.Get("rapor").Select(item => item.FullPath).ToArray();
 
         Assert.Equal(RaporPaths, Sorted(paths));
-        // `rapor-rapor.txt` adında token iki kez geçer; depo tekilleştirmezse
-        // yol sonuçta iki kez görünür.
         Assert.Equal(paths.Length, paths.Distinct(StringComparer.OrdinalIgnoreCase).Count());
     }
 
@@ -57,42 +46,19 @@ public sealed class SearchStateTokenStorageTests
             Sorted(state.Get("RAPOR").Select(item => item.FullPath)));
     }
 
-    /// <summary>
-    /// Eskiden bilinen boşluktu: indeksleme `tr-TR` ile küçültüyor (`I` → `ı`),
-    /// arama `OrdinalIgnoreCase` ile karşılaştırıyor ve o `ı` ile `i`'yi
-    /// eşitlemiyordu; `ISTANBUL-RAPOR.txt` "istanbul" aranınca bulunmuyordu.
-    /// Katlama bunu kapattı: aksansız biçim **aslının yanına** ikinci token
-    /// olarak yazılıyor, bu yüzden her iki yazım da dosyayı buluyor ve
-    /// noktasız arama hâlâ yalnız kendi aslını hedefleyebiliyor.
-    /// </summary>
     [Fact]
     public void TurkishDottedAndDotlessIBothResolveToTheSameFile()
     {
         var state = CreateState();
 
-        // Noktalı arama artık iki dosyayı da buluyor — asıl düzeltme bu.
         Assert.Equal(
             [@"C:\Data\Arsiv\istanbul-rapor.txt", @"C:\Data\ISTANBUL-RAPOR.txt"],
             Sorted(state.Get("istanbul").Select(item => item.FullPath)));
-        // Aslı silinmedi: noktasız biçim yalnız kendi dosyasını hedefliyor.
         Assert.Equal(
             [@"C:\Data\ISTANBUL-RAPOR.txt"],
             Sorted(state.Get("\u0131stanbul").Select(item => item.FullPath)));
     }
 
-    /// <summary>
-    /// Aynı corpus düz ve ters düğüm sırasıyla kurulur; `path → skor` eşlemesi
-    /// aynı çıkmalıdır.
-    ///
-    /// **Sınır — bu test enumeration sırasını değiştiremez.** Ölçüldü: posting
-    /// kümeleri `ImmutableHashSet` olduğundan enumeration sırası yalnız hash
-    /// düzenine bağlıdır, ekleme sırasından bağımsızdır; girdiyi ters çevirmek
-    /// `Get` sırasını değiştirmez. Enumeration sırası ancak process'ten
-    /// process'e değişir (string hash tohumu), bu da bir unit test'te
-    /// üretilemez. Burada sabitlenen şey kurulum sırası bağımsızlığıdır;
-    /// process'ler arası sıra kararsızlığı çalışma günlüğüne ölçüm olarak
-    /// kaydedildi ve ayrı bir ürün kalemidir.
-    /// </summary>
     [Fact]
     public void ScoresDoNotDependOnNodeInputOrder()
     {
@@ -103,19 +69,12 @@ public sealed class SearchStateTokenStorageTests
         Assert.Equal(
             forward.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray(),
             reversed.OrderBy(pair => pair.Key, StringComparer.Ordinal).ToArray());
-        // 50 (eşleşen token) + 100 (tüm token'lar) + 25 (ad token'ı) = 175;
-        // `rapor.txt` ayrıca OpenCount 4 → +8.
         Assert.Equal(183d, forward[@"C:\Data\rapor.txt"]);
         Assert.All(
             forward.Where(pair => !pair.Key.EndsWith(@"\rapor.txt", StringComparison.OrdinalIgnoreCase)),
             pair => Assert.Equal(175d, pair.Value));
     }
 
-    /// <summary>
-    /// Yayımlanan `SearchState` bir anlık görüntüdür: türetilmiş state'i
-    /// üretmek eskisini değiştiremez. Dizi temsili paylaşılan bir kap taşıdığı
-    /// için bu kapı temsilden bağımsız olarak sabitlenir.
-    /// </summary>
     [Fact]
     public void EarlierSnapshotsKeepTheirPostings()
     {
@@ -129,8 +88,6 @@ public sealed class SearchStateTokenStorageTests
         Assert.Equal(RaporPaths, Sorted(original.Get("rapor").Select(item => item.FullPath)));
         Assert.Empty(original.Get("butce"));
         Assert.Equal(RaporPaths.Length + 2, original.ItemCount);
-        // Türetilmiş state'ler gerçekten değişmiş olmalı; yoksa yukarısı
-        // hiçbir şey doğrulamayan boş bir kapı olurdu.
         Assert.Equal(RaporPaths.Length - 1, renamed.Get("rapor").Count);
         Assert.Single(renamed.Get("butce"));
         Assert.Equal(RaporPaths.Length - 3, trimmed.Get("rapor").Count);
@@ -147,8 +104,6 @@ public sealed class SearchStateTokenStorageTests
         Assert.Equal(scores.OrderByDescending(score => score).ToArray(), scores);
     }
 
-    // `WithoutPath` hangi posting'leri temizleyeceğini öğe başına token
-    // deposundan öğrenir. Depo token kaybederse eski posting asılı kalır.
     [Fact]
     public void UpsertLeavesNoStalePostingForAReplacedName()
     {
@@ -186,8 +141,6 @@ public sealed class SearchStateTokenStorageTests
         Assert.Empty(trimmed.Get("eski"));
     }
 
-    // Bu tek yer sırası pinlenebilir olan yer: `GetDescendants` açıkça
-    // sıralar, hash düzenine bağlı değildir.
     [Fact]
     public void DescendantOrderingStaysDeterministic()
     {

@@ -100,7 +100,7 @@ public partial class App : System.Windows.Application
 	{
 		LogCrash("Dispatcher", e.Exception);
 		System.Windows.MessageBox.Show($"Beklenmeyen UI hatası:\n{e.Exception}", "UI Hatası", MessageBoxButton.OK, MessageBoxImage.Error);
-		e.Handled = true; // prevent silent shutdown
+		e.Handled = true;
 	}
 
 	private void CurrentDomain_UnhandledException(object sender, UnhandledExceptionEventArgs e)
@@ -120,7 +120,7 @@ public partial class App : System.Windows.Application
 				_logFile,
 				FormatCrash(source, ex, DateTime.Now, _redactCrashPaths));
 		}
-		catch { /* ignore logging failures */ }
+		catch { }
 	}
 
 	internal static string FormatCrash(

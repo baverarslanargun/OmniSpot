@@ -8,11 +8,6 @@ using SmartFileLauncher.Core.Search;
 
 namespace OmniSpot.Benchmarking.Measurements;
 
-/// <summary>
-/// `Measurable`, aşamanın kendi tahsisinin GC gürültüsünü aşıp aşmadığını
-/// söyler. Küçük ağaçlarda bir aşamanın deltası negatife düşebilir; bu, o
-/// aşamanın bedava olduğu anlamına gelmez, ölçülemediği anlamına gelir.
-/// </summary>
 internal sealed record MemoryStage(
     string Stage,
     string Scope,
@@ -40,17 +35,6 @@ internal sealed record MemoryBreakdown(
     long? IndexStagesTotalBytes,
     long? SteadyManagedTotalBytes);
 
-/// <summary>
-/// `SearchState`'in canlı ayak izini bileşenlerine ayırır. Dört sözlük private
-/// olduğundan her biri ayrı ayrı, paylaşılan ön koşullar canlı tutularak
-/// **marjinal** maliyetiyle ölçülür. Toplam, aynı ağaçta ölçülen tam
-/// `SearchState.Create` ayak iziyle çapraz denetlenir; sapma büyükse döküm
-/// güvenilmezdir ve öyle raporlanır.
-///
-/// `IndexManager` aşamaları üretim **tipleriyle** kurulur, fakat kurulum
-/// mantığını yeniden uygular; `SearchState` gibi çapraz denetlenen bir
-/// karşılığı yoktur. Üretim kurulumu değişirse bu aşamalar sessizce ayrışır.
-/// </summary>
 internal static class RealTreeMemoryBreakdown
 {
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
@@ -251,12 +235,6 @@ internal static class RealTreeMemoryBreakdown
             .Select(group => group.Last())
             .ToArray();
 
-    /// <summary>
-    /// Üretimin `SearchState.Tokenize` şeklini birebir yansıtır: dizi,
-    /// `OrdinalIgnoreCase` benzersiz, tokenizer sırası korunur ve aynı token
-    /// metni `SearchState` genelinde tek kanonik örnekle paylaşılır. Replika
-    /// üretimden ayrışırsa döküm üretimi değil kendini ölçmeye başlar.
-    /// </summary>
     private static ImmutableArray<string>[] BuildTokenSets(
         SearchItem[] items,
         ITokenizer tokenizer)
@@ -373,13 +351,6 @@ internal static class RealTreeMemoryBreakdown
         return builder.ToImmutable();
     }
 
-    /// <summary>
-    /// `IndexManager`'ın bellekte tuttuğu ağacı üretim tipiyle yeniden kurar.
-    /// Ad ve tam yol için taze kopya ayrılır: üretimde de her düğümün kendi
-    /// `Name` ve `FullPath` örneği vardır, sözlük anahtarları ve `SearchItem`
-    /// alanları bu aynı örneği paylaşır. Kaynak listedeki string'ler yeniden
-    /// kullanılsaydı ağacın en büyük kalemi hiçbir aşamaya yazılmazdı.
-    /// </summary>
     private static FileSystemNode[] CloneNodeTree(IReadOnlyList<FileSystemNode> nodes)
     {
         var clones = new FileSystemNode[nodes.Count];
@@ -407,12 +378,6 @@ internal static class RealTreeMemoryBreakdown
         return clones;
     }
 
-    /// <summary>
-    /// Üretim her dosya düğümü için tek `FileMetadata` ayırır ve aynı örneği
-    /// `_metadataMap` ile paylaşır. Nesneler klon düğümler üzerinden canlı
-    /// kaldığı için burada yalnız sayı döner; ek bir dizi tutulsaydı ölçüme
-    /// üretimde olmayan bir referans maliyeti eklenirdi.
-    /// </summary>
     private static int AttachMetadata(FileSystemNode[] clones)
     {
         var count = 0;

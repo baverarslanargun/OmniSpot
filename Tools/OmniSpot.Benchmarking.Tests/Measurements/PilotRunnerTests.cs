@@ -5,9 +5,6 @@ namespace OmniSpot.Benchmarking.Tests.Measurements;
 
 public sealed class PilotRunnerTests
 {
-    // Pilot turlarında ölçülen gerçek durum: sistem koşum boyunca hızlanıyor.
-    // Baseline'lar önce, canary'ler sonra ölçülürse canary'nin eklediği gecikme
-    // bu drift tarafından yeniyor ve sinyal kayboluyor.
     private const double DriftPerRunNanoseconds = 15;
     private const double CanaryFactor = 1.08;
 
@@ -68,7 +65,6 @@ public sealed class PilotRunnerTests
 
         var band = PilotRunner.VarianceBandPercent(medians);
 
-        // En büyük ardışık sıçrama 505 -> 495, yani %1,980.
         Assert.Equal(1.980198, band, 5);
     }
 

@@ -13,12 +13,6 @@ public sealed class SearchState
     private readonly ImmutableDictionary<string, SearchItem> _itemsByPath;
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _pathsByToken;
 
-    /// <summary>
-    /// Öğe başına token'lar küme değil dizidir. Öğe başına token sayısı küçük
-    /// (medyan `2`, `p99 = 10`, `max = 30`) ve bu değerler yalnız dolaşılıyor —
-    /// üyelik sorgusu yok. `OrdinalIgnoreCase` benzersizliği kurulum sırasında
-    /// korunur; kümenin düğüm başına maliyeti bu boyutta karşılıksızdır.
-    /// </summary>
     private readonly ImmutableDictionary<string, ImmutableArray<string>> _tokensByPath;
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _childrenByPath;
 
@@ -535,12 +529,6 @@ public sealed class SearchState
             .Select(group => group.Last())
             .ToArray();
 
-    /// <summary>
-    /// Tokenizer aynı adda aynı token'ı birden çok kez üretebilir
-    /// (`rapor-rapor.txt`). Küme bunu kendiliğinden tekilleştiriyordu; dizide
-    /// benzersizlik doğrusal taramayla korunur. Öğe başına token sayısı küçük
-    /// olduğundan tarama ayrı bir küme tahsisinden ucuzdur.
-    /// </summary>
     private static ImmutableArray<string> Tokenize(
         string value,
         ITokenizer tokenizer,

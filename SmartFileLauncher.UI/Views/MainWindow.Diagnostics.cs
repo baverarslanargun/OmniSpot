@@ -21,8 +21,6 @@ public partial class MainWindow {
                 _thumbnailService,
                 THUMBNAIL_SIZE,
                 MAX_FOLDER_ITEMS,
-                // `--canli-yigin` ölçümü profilden bağımsız açar; verilmediğinde
-                // ölçüm profilleri kendi varsayılan aralığıyla çalışmaya devam eder.
                 forcedLiveMemoryInterval: _startupOptions.LiveHeapInterval
                     ?? (_startupOptions.Profile is null
                         ? null

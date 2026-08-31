@@ -69,13 +69,6 @@ internal sealed record PhaseSplitDocument(
     IReadOnlyList<PhaseShare> Phases,
     IReadOnlyList<string> AcceptanceFailures);
 
-/// <summary>
-/// `SearchState.Create` fazlarının payını ölçer. Core'a ölçüm noktası koymak
-/// `B-5`'e bağlı olduğundan fazlar in-situ span olarak değil, aynı fixture
-/// üzerinde kümülatif replika koşumlarının farkı olarak elde edilir. Replika
-/// `SearchState.Create` gövdesini birebir yansıtmalıdır; sapma
-/// `production - postings` farkına yazılır ve kabul kapısı bunu yakalar.
-/// </summary>
 internal static class PhaseSplitRunner
 {
     private const string ProductionStage = "production";
@@ -366,10 +359,6 @@ internal static class PhaseSplitRunner
         return total;
     }
 
-    /// <summary>
-    /// Üretimin `SearchState.Tokenize` şeklini yansıtır: dizi,
-    /// `OrdinalIgnoreCase` benzersiz, tokenizer sırası korunur.
-    /// </summary>
     private static ImmutableArray<string> TokenizeReplica(
         string name,
         ITokenizer tokenizer,

@@ -4,10 +4,6 @@ using Xunit;
 
 namespace SmartFileLauncher.UI.Tests.Services;
 
-/// <summary>
-/// Tanılama yüzeyi kendi hatasını yapışkan biçimde raporlamamalıdır: başarısız
-/// bir toplama turundan sonra gelen başarılı tur, durumu geri almalıdır.
-/// </summary>
 public sealed class DiagnosticsCollectorStatusTests
 {
     [Fact]
