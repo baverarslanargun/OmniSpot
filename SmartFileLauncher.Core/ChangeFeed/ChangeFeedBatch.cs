@@ -7,10 +7,14 @@ public sealed class ChangeFeedBatch
     private ChangeFeedBatch(
         ChangeFeedStatus status,
         ChangeFeedGapReason gapReason,
+        ChangeFeedFaultReason faultReason,
+        string? diagnostics,
         IReadOnlyList<ChangeFeedEvent> events)
     {
         Status = status;
         GapReason = gapReason;
+        FaultReason = faultReason;
+        Diagnostics = diagnostics;
         Events = events;
     }
 
@@ -18,12 +22,23 @@ public sealed class ChangeFeedBatch
 
     public ChangeFeedGapReason GapReason { get; }
 
+    public ChangeFeedFaultReason FaultReason { get; }
+
+    public string? Diagnostics { get; }
+
     public IReadOnlyList<ChangeFeedEvent> Events { get; }
 
     public bool HasGap => Status == ChangeFeedStatus.Gap;
 
+    public bool IsFaulted => Status == ChangeFeedStatus.Faulted;
+
     public static ChangeFeedBatch Ok(IReadOnlyList<ChangeFeedEvent> events) =>
-        new(ChangeFeedStatus.Ok, ChangeFeedGapReason.None, events);
+        new(
+            ChangeFeedStatus.Ok,
+            ChangeFeedGapReason.None,
+            ChangeFeedFaultReason.None,
+            null,
+            events);
 
     public static ChangeFeedBatch Gap(ChangeFeedGapReason reason)
     {
@@ -34,14 +49,42 @@ public sealed class ChangeFeedBatch
                 "Boşluk sonucu için bir neden verilmelidir.");
         }
 
-        return new ChangeFeedBatch(ChangeFeedStatus.Gap, reason, NoEvents);
+        return new ChangeFeedBatch(
+            ChangeFeedStatus.Gap,
+            reason,
+            ChangeFeedFaultReason.None,
+            null,
+            NoEvents);
+    }
+
+    public static ChangeFeedBatch Faulted(ChangeFeedFaultReason reason, string diagnostics)
+    {
+        if (reason == ChangeFeedFaultReason.None)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(reason),
+                "Arıza sonucu için bir neden verilmelidir.");
+        }
+
+        if (string.IsNullOrWhiteSpace(diagnostics))
+        {
+            throw new ArgumentException("Arıza tanısı boş olamaz.", nameof(diagnostics));
+        }
+
+        return new ChangeFeedBatch(
+            ChangeFeedStatus.Faulted,
+            ChangeFeedGapReason.None,
+            reason,
+            diagnostics,
+            NoEvents);
     }
 }
 
 public enum ChangeFeedStatus
 {
     Ok,
-    Gap
+    Gap,
+    Faulted
 }
 
 public enum ChangeFeedGapReason
@@ -53,4 +96,10 @@ public enum ChangeFeedGapReason
     RootUnavailable,
     JournalUnavailable,
     FeedStateInvalid
+}
+
+public enum ChangeFeedFaultReason
+{
+    None = 0,
+    NativeProtocolRejected
 }

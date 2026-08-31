@@ -10,6 +10,14 @@ internal sealed class FakeUsnJournalReader : IUsnJournalReader
 
     public bool QueryFails { get; set; }
 
+    public bool QueryRejectsProtocol { get; set; }
+
+    public bool ReadRejectsProtocol { get; set; }
+
+    public Action? OnReadPage { get; set; }
+
+    public int QueryCalls { get; private set; }
+
     public List<(long StartUsn, ulong JournalId)> ReadCalls { get; } = new();
 
     public bool Disposed { get; private set; }
@@ -22,6 +30,13 @@ internal sealed class FakeUsnJournalReader : IUsnJournalReader
 
     public UsnJournalDescriptor QueryJournal()
     {
+        QueryCalls++;
+
+        if (QueryRejectsProtocol)
+        {
+            throw new UsnProtocolRejectedException("Test: sorgu reddedildi.", 87);
+        }
+
         if (QueryFails)
         {
             throw new UsnJournalUnavailableException("Test: günlük okunamadı.");
@@ -33,6 +48,12 @@ internal sealed class FakeUsnJournalReader : IUsnJournalReader
     public UsnReadPage ReadPage(long startUsn, ulong journalId)
     {
         ReadCalls.Add((startUsn, journalId));
+        OnReadPage?.Invoke();
+
+        if (ReadRejectsProtocol)
+        {
+            throw new UsnProtocolRejectedException("Test: okuma reddedildi.", 87);
+        }
 
         if (_pages.Count == 0)
         {
