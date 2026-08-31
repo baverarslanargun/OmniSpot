@@ -22,10 +22,6 @@ public sealed class PhaseSplitRunnerTests
         Assert.True(facts.TokenToItemLinkCount >= facts.UniqueTokenCount);
     }
 
-    // Sentetik fixture düz bir düğüm listesidir: hiçbir öğenin ParentPath'i öğe
-    // kümesinde bulunmaz, bu yüzden BuildChildrenByPath'in Add zinciri hiç
-    // çalışmaz ve `children_publish` fazı bu corpus'ta yapısal olarak ölü kalır.
-    // Fixture parent bağlantısı kazanırsa bu test düşer ve faz yeniden okunmalıdır.
     [Fact]
     public void Verify_CurrentFixtureHasNoParentLinkedItems()
     {

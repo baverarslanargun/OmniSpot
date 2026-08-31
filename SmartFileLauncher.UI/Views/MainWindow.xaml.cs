@@ -23,7 +23,6 @@ using SmartFileLauncher.UI.ViewModels;
 
 namespace SmartFileLauncher.UI.Views;
 
-
 public partial class MainWindow : Window {
     private readonly MainWindowViewModel _viewModel;
     private readonly ISettingsApplicationService _settingsApplication;
@@ -65,10 +64,10 @@ public partial class MainWindow : Window {
         get => _viewModel.IsGridViewMode;
         set => _viewModel.IsGridViewMode = value;
     }
-    private System.Threading.Timer? _fileChangeDebounceTimer; // Dosya değişikliği debounce
+    private System.Threading.Timer? _fileChangeDebounceTimer;
     private readonly object _fileChangeTimerLock = new();
     private readonly RefreshCoalescer _fileChangeRefresh = new();
-    private const int FILE_CHANGE_DEBOUNCE_MS = 1000; // 1 saniye debounce (daha az kasma için artırıldı)
+    private const int FILE_CHANGE_DEBOUNCE_MS = 1000;
     private CancellationTokenSource? _currentSearchCancellation;
     private CancellationTokenSource? _folderLoadCancellation;
     private ThumbnailViewportScheduler? _thumbnailViewport;
@@ -105,8 +104,8 @@ public partial class MainWindow : Window {
         get => _viewModel.CutItem;
         set => _viewModel.CutItem = value;
     }
-    private const int DEBOUNCE_DELAY_MS = 1200; // 1.2 seconds delay after last keystroke (increased from 400ms)
-    private const int THUMBNAIL_SIZE = 128; // Thumbnail boyutu
+    private const int DEBOUNCE_DELAY_MS = 1200;
+    private const int THUMBNAIL_SIZE = 128;
     
     private AppSettings _appSettings;
     
@@ -156,7 +155,6 @@ public partial class MainWindow : Window {
         _shellService.ExitRequested += HandleShellExitRequested;
         SourceInitialized += HandleSourceInitialized;
         
-        // Wire up events
         SearchBox.TextChanged += SearchBox_TextChanged;
         SearchBox.GotFocus += (_, __) => SearchWatermark.Visibility = Visibility.Collapsed;
         SearchBox.LostFocus += (_, __) => {
@@ -175,15 +173,12 @@ public partial class MainWindow : Window {
         Log("=== OmniSpot Başlatıldı ===");
         Log("OmniSpot: Hafif Basit Masaüstü ve Tarayıcı");
         
-        // Pencere kapatma olayını yakala
         Closing += MainWindow_Closing;
         
-        // Ayarlardan varsayılan modları uygula
         ApplyDefaultSettings();
         
         InitializeThumbnailViewport();
 
-        // Start async indexing after window loads
         Loaded += MainWindow_Loaded;
     }
 
@@ -200,9 +195,6 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Varsayılan ayarları uygular
-    /// </summary>
     private void ApplyDefaultSettings() {
         if (_appSettings.NaturalLanguageModeEnabled) {
             NaturalLanguageToggle.IsChecked = true;
@@ -243,9 +235,6 @@ public partial class MainWindow : Window {
     private void HandleShellExitRequested() {
         Dispatcher.Invoke(ForceExit);
     }
-    /// <summary>
-    /// Pencereyi gösterir ve aktif yapar
-    /// </summary>
     private void ShowAndActivate() {
         Show();
         WindowState = WindowState.Normal;
@@ -255,9 +244,6 @@ public partial class MainWindow : Window {
         Log("🔔 OmniSpot uyandırıldı");
     }
     
-    /// <summary>
-    /// Pencereyi system tray'e küçültür
-    /// </summary>
     private void MinimizeToTray() {
         if (_appSettings.MinimizeToTrayOnClose) {
             Hide();
@@ -266,9 +252,6 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Pencere kapatılmaya çalışıldığında
-    /// </summary>
     private void MainWindow_Closing(object? sender, System.ComponentModel.CancelEventArgs e) {
         if (_appSettings.MinimizeToTrayOnClose) {
             e.Cancel = true;
@@ -277,11 +260,7 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Ayarlar penceresini açar
-    /// </summary>
     private void OpenSettings() {
-        // Önce mevcut hotkey'i kaldır (ayarlar değişebilir)
         _shellService.SuspendHotkey();
         
         var settingsWindow = new SettingsWindow(
@@ -294,15 +273,11 @@ public partial class MainWindow : Window {
         settingsWindow.IndexRebuildRequested += OnIndexRebuildRequested;
         settingsWindow.ShowDialog();
         
-        // Hotkey'i yeniden kaydet (değişmiş olabilir)
         if (!_isPreparedForShutdown) {
             _shellService.ApplyHotkey(_appSettings);
         }
     }
     
-    /// <summary>
-    /// Ayarlar değiştiğinde çağrılır
-    /// </summary>
     private void OnSettingsChanged(object? sender, AppSettings newSettings) {
         _appSettings = newSettings;
         Log("⚙️ Ayarlar güncellendi");
@@ -312,9 +287,6 @@ public partial class MainWindow : Window {
         ForceExit();
     }
     
-    /// <summary>
-    /// Uygulamadan tamamen çıkış yapar
-    /// </summary>
     private void ForceExit() {
         PrepareForShutdown();
         System.Windows.Application.Current.Shutdown();
@@ -382,13 +354,9 @@ public partial class MainWindow : Window {
         }));
     }
     
-    /// <summary>
-    /// AI butonunun durumunu günceller
-    /// </summary>
     private void UpdateAIButtonState(bool isConnected) {
         NaturalLanguageToggle.IsEnabled = isConnected;
         
-        // Eğer internet yoksa ve AI modu aktifse, kapat
         if (!isConnected && _isNaturalLanguageMode) {
             NaturalLanguageToggle.IsChecked = false;
             _isNaturalLanguageMode = false;
@@ -546,17 +514,12 @@ public partial class MainWindow : Window {
         SearchBox.Focus();
     }
 
-    /// <summary>
-    /// Dosya sistemi değişikliklerini işler ve UI'yi günceller.
-    /// Debounce kullanarak çok sık güncelleme yapılmasını engeller.
-    /// </summary>
     private void HandleFileSystemChange(FileChangeEvent evt)
     {
         if (_isPreparedForShutdown ||
             Dispatcher.HasShutdownStarted ||
             Dispatcher.HasShutdownFinished) return;
 
-        // Log the change (sadece bir kere)
         Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
 
         _fileChangeRefresh.Request();
@@ -645,9 +608,6 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Mevcut klasördeki ikonları akıllıca günceller (klasör içindeyken).
-    /// </summary>
     private async Task RefreshCurrentFolderIconsAsync()
     {
         var folderPath = _currentFolderPath;
@@ -730,8 +690,6 @@ public partial class MainWindow : Window {
             {
                 EmptyFolderPanel.Visibility = Visibility.Collapsed;
             }
-            // İzleyici kaynaklı yenileme küçük resim işi açmaz; yalnız
-            // görünür alan yeniden değerlendirilir.
             RetargetThumbnailViewport(_desktopIcons.ToList());
 
             Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe" +
@@ -747,25 +705,19 @@ public partial class MainWindow : Window {
             Log($"⚠️ Klasör güncelleme hatası: {ex.Message}");
         }
     }
-    /// <summary>
-    /// Ana sayfa (desktop) ikonlarını akıllıca günceller.
-    /// </summary>
     private void RefreshDesktopIconsSmart()
     {
         var indexedRoots = _indexLifecycle.GetIndexedRoots();
         
-        // Mevcut öğelerin path'lerini al
         var existingPaths = _desktopIcons.ToDictionary(d => d.FullPath, d => d, StringComparer.OrdinalIgnoreCase);
         var currentPaths = indexedRoots.Select(c => c.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         
-        // Silinen öğeleri kaldır
         var toRemove = _desktopIcons.Where(d => !currentPaths.Contains(d.FullPath)).ToList();
         foreach (var item in toRemove)
         {
             _desktopIcons.Remove(item);
         }
         
-        // Yeni öğeleri ekle
         foreach (var child in indexedRoots.OrderBy(n => n.Name))
         {
             if (!existingPaths.ContainsKey(child.FullPath))
@@ -778,37 +730,28 @@ public partial class MainWindow : Window {
                     IsDirectory = child.IsDirectory
                 };
                 
-                // Klasör renklerini ayarla
                 if (child.IsDirectory)
                 {
                     viewModel.SetFolderColors(child.Name);
                 }
                 
-                // Sıralı ekleme: Önce klasörler, sonra dosyalar (her grup kendi içinde alfabetik)
                 var insertIndex = _desktopIcons.TakeWhile(d => 
                 {
-                    // Eğer her ikisi de klasör veya her ikisi de dosya ise alfabetik sırala
                     if (d.IsDirectory == child.IsDirectory)
                     {
                         return string.Compare(d.Name, child.Name, StringComparison.OrdinalIgnoreCase) < 0;
                     }
-                    // Klasörler her zaman dosyalardan önce
                     return d.IsDirectory;
                 }).Count();
                 _desktopIcons.Insert(insertIndex, viewModel);
             }
         }
 
-        // İndeksleme/izleyici kaynaklı yenileme küçük resim işi açmaz; yalnız
-        // görünür alan yeniden değerlendirilir.
         RetargetThumbnailViewport(_desktopIcons.ToList());
 
         Log($"🔄 Desktop güncellendi: {_desktopIcons.Count} öğe");
     }
     
-    /// <summary>
-    /// Arama sonuçlarını yeniler (dosya değişikliği sonrası).
-    /// </summary>
     private async Task RefreshSearchResultsAsync()
     {
         if (string.IsNullOrWhiteSpace(_lastSearchQuery)) return;
@@ -850,7 +793,6 @@ public partial class MainWindow : Window {
                         IsDirectory = isDirectory
                     };
                     
-                    // Klasör renklerini ayarla
                     if (isDirectory) {
                         viewModel.SetFolderColors(result.Name);
                     }
@@ -864,7 +806,6 @@ public partial class MainWindow : Window {
         }
         catch (OperationCanceledException)
         {
-            // A newer query owns the result surface.
         }
         catch (Exception ex)
         {
@@ -878,9 +819,8 @@ public partial class MainWindow : Window {
 
         Log($"📸 Thumbnail yükleme başladı... ({indexedRoots.Count} öğe)");
 
-        // Önce klasörler, sonra dosyalar - her grup alfabetik sıralı
         var sortedChildren = indexedRoots
-            .OrderBy(n => !n.IsDirectory)  // false (klasör) önce, true (dosya) sonra
+            .OrderBy(n => !n.IsDirectory)
             .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase);
 
         var items = new List<DesktopIconViewModel>();
@@ -892,7 +832,6 @@ public partial class MainWindow : Window {
                 IsDirectory = child.IsDirectory
             };
 
-            // Klasör renklerini ayarla
             if (child.IsDirectory) {
                 viewModel.SetFolderColors(child.Name);
             }
@@ -901,7 +840,6 @@ public partial class MainWindow : Window {
             items.Add(viewModel);
         }
 
-        // Küçük resimler yalnız görünür alan için, talep geldikçe yüklenir.
         RetargetThumbnailViewport(items);
 
         Log($"✅ Desktop ikonları yüklendi, küçük resimler görünür alana göre yüklenecek...");
@@ -927,7 +865,6 @@ public partial class MainWindow : Window {
         }
         catch
         {
-            // Thumbnail yüklenemezse sessizce devam et
         }
     }
     
@@ -942,7 +879,6 @@ public partial class MainWindow : Window {
         if (string.IsNullOrWhiteSpace(query)) {
             CancelCurrentSearch();
             
-            // Show desktop icons, hide search results
             DesktopIconsScroll.Visibility = Visibility.Visible;
             ResultsContainer.Visibility = Visibility.Collapsed;
             _searchResults.Clear();
@@ -991,7 +927,6 @@ public partial class MainWindow : Window {
 
             await RunSearchAsync(query, version, cancellation.Token);
         } catch (OperationCanceledException) {
-            // A newer request owns the UI. The stale request must not mutate it.
         } catch (Exception ex) {
             if (!IsCurrentSearch(version)) return;
 
@@ -1016,9 +951,6 @@ public partial class MainWindow : Window {
     private bool IsCurrentSearch(long version) =>
         version == Volatile.Read(ref _searchVersion);
     
-    /// <summary>
-    /// Aranıyor göstergesini gösterir
-    /// </summary>
     private void ShowSearchingIndicator(string query) {
         SearchingPanel.Visibility = Visibility.Visible;
         NoResultsPanel.Visibility = Visibility.Collapsed;
@@ -1026,11 +958,8 @@ public partial class MainWindow : Window {
         ResultsList.Visibility = Visibility.Collapsed;
         ResultsGridScroll.Visibility = Visibility.Collapsed;
         
-        // Yeni arama başladığında önceki fallback uyarısını gizle
-        // (Eğer bu arama başarılı olursa uyarı kapanır, olmazsa tekrar gösterilir)
         FallbackWarningBanner.Visibility = Visibility.Collapsed;
         
-        // AI modunda farklı mesaj
         if (_isNaturalLanguageMode) {
             SearchingText.Text = "🤖 AI ile aranıyor...";
         } else {
@@ -1038,9 +967,6 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Tüm sonuç panellerini gizler
-    /// </summary>
     private void HideAllPanels() {
         SearchingPanel.Visibility = Visibility.Collapsed;
         NoResultsPanel.Visibility = Visibility.Collapsed;
@@ -1048,9 +974,6 @@ public partial class MainWindow : Window {
         FallbackWarningBanner.Visibility = Visibility.Collapsed;
     }
     
-    /// <summary>
-    /// Hata panelini gösterir
-    /// </summary>
     private void ShowError(string title, string message) {
         SearchingPanel.Visibility = Visibility.Collapsed;
         NoResultsPanel.Visibility = Visibility.Collapsed;
@@ -1062,47 +985,31 @@ public partial class MainWindow : Window {
         ErrorMessage.Text = message;
     }
     
-    /// <summary>
-    /// AI fallback uyarı banner'ını gösterir
-    /// </summary>
     private void ShowFallbackWarning(string reason) {
         FallbackWarningBanner.Visibility = Visibility.Visible;
         FallbackReasonText.Text = reason;
         Log($"⚠️ AI fallback: {reason}");
     }
     
-    /// <summary>
-    /// Fallback banner'ını kapatır
-    /// </summary>
     private void CloseFallbackBanner_Click(object sender, RoutedEventArgs e) {
         FallbackWarningBanner.Visibility = Visibility.Collapsed;
     }
     
-    /// <summary>
-    /// Delta sync warning banner'ını kapatır
-    /// </summary>
     private void CloseDeltaSyncBanner_Click(object sender, RoutedEventArgs e) {
         DeltaSyncWarningBanner.Visibility = Visibility.Collapsed;
     }
     
-    /// <summary>
-    /// Delta sync warning banner'ını gösterir
-    /// </summary>
     private void ShowDeltaSyncWarning(string details) {
         DeltaSyncWarningBanner.Visibility = Visibility.Visible;
         DeltaSyncWarningText.Text = details;
     }
     
-    /// <summary>
-    /// Delta sync progress'i günceller
-    /// </summary>
     private void UpdateDeltaSyncProgress(int processed, int total, int percentage) {
         DeltaSyncProgressBar.IsIndeterminate = false;
         DeltaSyncProgressBar.Value = percentage;
         DeltaSyncDetails.Text = $" - %{percentage}";
         DeltaSyncMinimizedText.Text = $"%{percentage}";
         
-        // Delta sync tamamlandı mı?
         if (percentage >= 100) {
             DeltaSyncPanel.Visibility = Visibility.Collapsed;
             DeltaSyncMinimized.Visibility = Visibility.Collapsed;
@@ -1126,25 +1033,16 @@ public partial class MainWindow : Window {
         DeltaSyncMinimized.Visibility = Visibility.Collapsed;
     }
     
-    /// <summary>
-    /// Delta sync panelini minimize eder
-    /// </summary>
     private void MinimizeDeltaSync_Click(object sender, RoutedEventArgs e) {
         DeltaSyncPanel.Visibility = Visibility.Collapsed;
         DeltaSyncMinimized.Visibility = Visibility.Visible;
     }
     
-    /// <summary>
-    /// Delta sync panelini genişletir
-    /// </summary>
     private void ExpandDeltaSync_Click(object sender, MouseButtonEventArgs e) {
         DeltaSyncPanel.Visibility = Visibility.Visible;
         DeltaSyncMinimized.Visibility = Visibility.Collapsed;
     }
     
-    /// <summary>
-    /// Folder loading indicator'ı gösterir
-    /// </summary>
     private void ShowFolderLoadingIndicator(string folderPath) {
         var folderName = Path.GetFileName(folderPath);
         if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
@@ -1153,16 +1051,10 @@ public partial class MainWindow : Window {
         FolderLoadingPanel.Visibility = Visibility.Visible;
     }
     
-    /// <summary>
-    /// Folder loading indicator'ı gizler
-    /// </summary>
     private void HideFolderLoadingIndicator() {
         FolderLoadingPanel.Visibility = Visibility.Collapsed;
     }
     
-    /// <summary>
-    /// Tekrar Dene butonuna tıklandığında
-    /// </summary>
     private async void RetryButton_Click(object sender, RoutedEventArgs e) {
         if (!string.IsNullOrWhiteSpace(_lastSearchQuery)) {
             Log($"🔄 Yeniden deneniyor: '{_lastSearchQuery}'");
@@ -1174,7 +1066,6 @@ public partial class MainWindow : Window {
                 return;
             }
             
-            // Aramayı yeniden başlat
             ErrorPanel.Visibility = Visibility.Collapsed;
             FallbackWarningBanner.Visibility = Visibility.Collapsed;
             BeginSearch(_lastSearchQuery, debounce: false);
@@ -1417,34 +1308,27 @@ public partial class MainWindow : Window {
     }
     
     private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
-        // ESC - Kapat
         if (e.Key == Key.Escape) {
             SafeClose();
             return;
         }
         
-        // File operation keyboard shortcuts
         bool ctrlPressed = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
         bool shiftPressed = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
         bool altPressed = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
         
-        // Hover edilen öğe varsa onu kullan, yoksa seçili öğeyi kullan
         var targetPath = _hoveredItemPath ?? _selectedItemPath;
         var targetItem = _hoveredItem;
         
-        // Ctrl+C - Kopyala (hover edilen öğe)
         if (ctrlPressed && e.Key == Key.C && !string.IsNullOrEmpty(targetPath)) {
             CopyItemToClipboard(targetPath, isCut: false);
             e.Handled = true;
             return;
         }
         
-        // Ctrl+X - Kes (hover edilen öğe)
         if (ctrlPressed && e.Key == Key.X && !string.IsNullOrEmpty(targetPath)) {
             CopyItemToClipboard(targetPath, isCut: true);
-            // Kesilen öğeyi silik göster
             if (targetItem != null) {
-                // Önceki kesilen öğeyi normal yap
                 if (_cutItem != null) {
                     _cutItem.IsCut = false;
                 }
@@ -1455,35 +1339,30 @@ public partial class MainWindow : Window {
             return;
         }
         
-        // Ctrl+V - Yapıştır
         if (ctrlPressed && e.Key == Key.V) {
             PasteFromClipboard();
             e.Handled = true;
             return;
         }
         
-        // Ctrl+Shift+N - Yeni Klasör
         if (ctrlPressed && shiftPressed && e.Key == Key.N) {
             ContextMenu_NewFolder(this, new RoutedEventArgs());
             e.Handled = true;
             return;
         }
         
-        // F2 - Yeniden Adlandır (hover edilen öğe)
         if (e.Key == Key.F2 && !string.IsNullOrEmpty(targetPath)) {
             RenameItem(targetPath);
             e.Handled = true;
             return;
         }
         
-        // Delete - Sil (hover edilen öğe)
         if (e.Key == Key.Delete && !string.IsNullOrEmpty(targetPath)) {
             DeleteItem(targetPath);
             e.Handled = true;
             return;
         }
         
-        // F5 - Yenile
         if (e.Key == Key.F5) {
             RefreshCurrentFolder();
             ShowFeedback("🔄 Yenilendi");
@@ -1491,7 +1370,6 @@ public partial class MainWindow : Window {
             return;
         }
         
-        // Alt+Enter - Özellikler (hover edilen öğe)
         if (altPressed && e.Key == Key.Enter && !string.IsNullOrEmpty(targetPath)) {
             _fileOperations.ShowProperties(targetPath);
             e.Handled = true;
@@ -1499,22 +1377,14 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Kullanıcıya geçici geri bildirim gösterir
-    /// </summary>
     private void ShowFeedback(string message) {
         Log($"💬 {message}");
-        // TODO: Toast notification eklenebilir
     }
     
-    /// <summary>
-    /// Öğeyi panoya kopyalar
-    /// </summary>
     private void CopyItemToClipboard(string path, bool isCut) {
         _clipboardPath = path;
         _isCutOperation = isCut;
         
-        // Önceki kesilen öğeyi normal yap (kopyalama durumunda)
         if (!isCut && _cutItem != null) {
             _cutItem.IsCut = false;
             _cutItem = null;
@@ -1525,9 +1395,6 @@ public partial class MainWindow : Window {
         ShowFeedback($"{operation}: {name}");
     }
     
-    /// <summary>
-    /// Panodan yapıştırır
-    /// </summary>
     private void PasteFromClipboard() {
         if (string.IsNullOrEmpty(_clipboardPath)) {
             ShowFeedback("⚠️ Panoda öğe yok");
@@ -1569,9 +1436,6 @@ public partial class MainWindow : Window {
         }
     }
 
-    /// <summary>
-    /// Öğeyi yeniden adlandırır
-    /// </summary>
     private void RenameItem(string path) {
         var currentName = Path.GetFileName(path);
         var dialog = new RenameDialog(currentName);
@@ -1597,9 +1461,6 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Öğeyi siler (Geri Dönüşüm Kutusuna)
-    /// </summary>
     private void DeleteItem(string path) {
         var name = Path.GetFileName(path);
         var result = System.Windows.MessageBox.Show(
@@ -1657,18 +1518,13 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Klasörü uygulama içinde açar ve içeriğini gösterir
-    /// </summary>
     private async Task OpenFolderInApp(string folderPath) {
         try {
             Log($"📂 Klasör açılıyor: {folderPath}");
             
-            // Show loading indicator
             ShowFolderLoadingIndicator(folderPath);
             
             try {
-                // Klasör içeriğini ASYNC yükle (büyük klasörler için optimize edildi)
                 if (!await LoadFolderContentsAsync(
                         folderPath,
                         ensureSynchronized: true)) {
@@ -1677,20 +1533,16 @@ public partial class MainWindow : Window {
 
                 _currentFolderPath = folderPath;
                 
-                // UI'ı güncelle
                 SearchBox.Clear();
                 ResultsContainer.Visibility = Visibility.Collapsed;
                 DesktopIconsScroll.Visibility = Visibility.Visible;
                 
-                // Geri butonunu göster
                 BackButton.Visibility = Visibility.Visible;
                 
-                // Watermark'ı güncelle
                 var folderName = System.IO.Path.GetFileName(folderPath);
                 if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
                 SearchWatermark.Text = $"📂 {folderName}";
             } finally {
-                // Hide loading overlay
                 HideFolderLoadingIndicator();
             }
             
@@ -1700,35 +1552,16 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Maximum number of items to load in a folder (performance limit)
-    /// </summary>
     private const int MAX_FOLDER_ITEMS = 1000;
     
-    /// <summary>
-    /// Thumbnail loading batch size
-    /// </summary>
     private const int THUMBNAIL_BATCH_SIZE = 20;
 
-    /// <summary>
-    /// Görünür alanın önüne ve arkasına kaç ekran önden yükleneceği.
-    /// </summary>
     private const int THUMBNAIL_PREFETCH_SCREENS = 1;
 
-    /// <summary>
-    /// Uygulama bu süre boyunca kullanılmazsa görünür pencere dışındaki küçük
-    /// resimler bellekten düşürülür. Kaydırma sırasında bırakma yapılmaz.
-    /// </summary>
     private const int THUMBNAIL_IDLE_RELEASE_SECONDS = 60;
 
-    /// <summary>
-    /// Kaydırma sırasında yeniden planlama gecikmesi.
-    /// </summary>
     private const int VIEWPORT_DEBOUNCE_MS = 100;
     
-    /// <summary>
-    /// Klasör içeriğini ASYNC yükler - büyük klasörler için optimize edildi
-    /// </summary>
     private async Task<bool> LoadFolderContentsAsync(
         string folderPath,
         bool ensureSynchronized = false) {
@@ -1807,9 +1640,6 @@ public partial class MainWindow : Window {
         }
     }
 
-    /// <summary>
-    /// Küçük resim zamanlayıcısını kurar ve kaydırma/boyut olaylarına bağlar.
-    /// </summary>
     private void InitializeThumbnailViewport() {
         _thumbnailViewport = new ThumbnailViewportScheduler(
             _thumbnailService,
@@ -1831,8 +1661,6 @@ public partial class MainWindow : Window {
         DesktopIconsScroll.SizeChanged += (_, __) => ScheduleViewportUpdate();
         DesktopIconsScroll.IsVisibleChanged += (_, __) => ScheduleViewportUpdate();
 
-        // Kullanıcı OmniSpot'tan ayrıldıktan bir süre sonra görünmeyen küçük
-        // resimler bellekten düşürülür; kullanım sırasında hiçbir şey atılmaz.
         _thumbnailIdleRelease.Interval =
             TimeSpan.FromSeconds(THUMBNAIL_IDLE_RELEASE_SECONDS);
         _thumbnailIdleRelease.Tick += (_, __) => {
@@ -1847,17 +1675,11 @@ public partial class MainWindow : Window {
         Activated += (_, __) => _thumbnailIdleRelease.Stop();
     }
 
-    /// <summary>
-    /// Yeni bir öğe listesini hedefler; önceki görünümün işi iptal edilir.
-    /// </summary>
     private void RetargetThumbnailViewport(IReadOnlyList<DesktopIconViewModel> items) {
         _thumbnailViewport?.Reset(items);
         ScheduleViewportUpdate();
     }
 
-    /// <summary>
-    /// Kaydırma sırasında her karede yeniden planlamamak için geciktirir.
-    /// </summary>
     private void ScheduleViewportUpdate() {
         if (_isPreparedForShutdown) return;
         _viewportDebounce.Stop();
@@ -1869,10 +1691,6 @@ public partial class MainWindow : Window {
         _thumbnailViewport?.Update(ComputeThumbnailViewport());
     }
 
-    /// <summary>
-    /// Görünür öğe aralığını hesaplar. Panel sanallaştırılmadığı için ölçü
-    /// gerçekleşmiş bir kaptan alınır; sabit boyut varsayılmaz.
-    /// </summary>
     private ThumbnailViewport ComputeThumbnailViewport() {
         if (DesktopIconsScroll.Visibility != Visibility.Visible) return default;
 
@@ -1896,7 +1714,6 @@ public partial class MainWindow : Window {
 
         var columns = Math.Max(1, (int)(panelWidth / itemWidth));
         var firstRow = Math.Max(0, (int)(DesktopIconsScroll.VerticalOffset / itemHeight));
-        // Kısmen görünen satırlar için bir satır pay bırakılır.
         var rows = (int)Math.Ceiling(viewportHeight / itemHeight) + 1;
 
         var first = Math.Min(count, firstRow * columns);
@@ -1904,17 +1721,10 @@ public partial class MainWindow : Window {
         return visible <= 0 ? default : new ThumbnailViewport(first, visible);
     }
     
-    /// <summary>
-    /// Klasör içeriğini yükler (legacy - senkron versiyon, küçük klasörler için)
-    /// </summary>
     private void LoadFolderContents(string folderPath) {
-        // Delegate to async version for large folder support
         _ = LoadFolderContentsAsync(folderPath);
     }
     
-    /// <summary>
-    /// Klasör için thumbnail yükler
-    /// </summary>
     private async Task LoadFolderThumbnailAsync(DesktopIconViewModel icon) {
         try {
             var thumbnail = await _thumbnailService.GetThumbnailAsync(icon.FullPath, THUMBNAIL_SIZE);
@@ -1926,11 +1736,7 @@ public partial class MainWindow : Window {
         } catch { }
     }
     
-    /// <summary>
-    /// Dosya adına veya uzantısına göre ikon döndürür
-    /// </summary>
     private string GetFileIcon(string filenameOrExtension) {
-        // Uzantıyı al (eğer dosya adı verilmişse)
         var ext = filenameOrExtension.StartsWith(".") 
             ? filenameOrExtension.ToLowerInvariant() 
             : System.IO.Path.GetExtension(filenameOrExtension).ToLowerInvariant();
@@ -1953,9 +1759,6 @@ public partial class MainWindow : Window {
         };
     }
     
-    /// <summary>
-    /// Üst klasöre çık
-    /// </summary>
     private void GoToParentFolder() {
         if (string.IsNullOrEmpty(_currentFolderPath)) {
             GoToHome();
@@ -1973,9 +1776,6 @@ public partial class MainWindow : Window {
 
         _ = OpenFolderInApp(parent);
     }
-    /// <summary>
-    /// Ana ekrana (Desktop) dön
-    /// </summary>
     private void GoToHome() {
         _currentFolderPath = null;
         BackButton.Visibility = Visibility.Collapsed;
@@ -1983,9 +1783,6 @@ public partial class MainWindow : Window {
         SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
     }
     
-    /// <summary>
-    /// Geri butonuna tıklandığında
-    /// </summary>
     private void BackButton_Click(object sender, RoutedEventArgs e) {
         GoToParentFolder();
     }
@@ -1999,7 +1796,6 @@ public partial class MainWindow : Window {
     }
     
     private void SafeClose() {
-        // Eğer MinimizeToTray aktifse, ForceExit kullan
         if (_appSettings.MinimizeToTrayOnClose) {
             MinimizeToTray();
         } else {
@@ -2009,9 +1805,6 @@ public partial class MainWindow : Window {
     
     #region File Operations & Context Menu
     
-    /// <summary>
-    /// Dosya/klasör üzerine mouse geldiğinde (hover)
-    /// </summary>
     private void FileItem_MouseEnter(object sender, System.Windows.Input.MouseEventArgs e) {
         if (sender is FrameworkElement element) {
             if (element.DataContext is DesktopIconViewModel divm) {
@@ -2025,20 +1818,13 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Mouse öğeden ayrıldığında
-    /// </summary>
     private void FileItem_MouseLeave(object sender, System.Windows.Input.MouseEventArgs e) {
         _hoveredItemPath = null;
         _hoveredItem = null;
     }
     
-    /// <summary>
-    /// Dosya/klasör üzerinde sağ tık yapıldığında
-    /// </summary>
     private void FileItem_RightClick(object sender, MouseButtonEventArgs e) {
         if (sender is FrameworkElement element) {
-            // Button'un Tag'ından veya DataContext'ten path al
             if (element.Tag is string path) {
                 _selectedItemPath = path;
             } else if (element.DataContext is DesktopIconViewModel divm) {
@@ -2050,11 +1836,7 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Boş alana sağ tık yapıldığında
-    /// </summary>
     private void EmptyArea_RightClick(object sender, MouseButtonEventArgs e) {
-        // Eğer bir dosya/klasör üzerinde değilse boş alan menüsü göster
         if (e.OriginalSource is ScrollViewer || e.OriginalSource is Grid) {
             _selectedItemPath = _currentFolderPath ?? Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
         }
@@ -2093,13 +1875,11 @@ public partial class MainWindow : Window {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
         
-        // ViewModel'i bul
         var item = _desktopIcons.FirstOrDefault(i => 
             string.Equals(i.FullPath, path, StringComparison.OrdinalIgnoreCase));
         
         CopyItemToClipboard(path, isCut: true);
         
-        // Kesilen öğeyi silik göster
         if (item != null) {
             if (_cutItem != null) {
                 _cutItem.IsCut = false;
@@ -2156,18 +1936,12 @@ public partial class MainWindow : Window {
         }
     }
 
-    /// <summary>
-    /// Context menu'den path bilgisini alır
-    /// </summary>
     private string? GetPathFromContextMenu(object sender) {
         if (sender is MenuItem menuItem && menuItem.Parent is ContextMenu contextMenu) {
-            // PlacementTarget'tan path'i al
             if (contextMenu.PlacementTarget is FrameworkElement element) {
-                // Button'un Tag'ından path al (Grid view için)
                 if (element.Tag is string tagPath) {
                     return tagPath;
                 }
-                // DataContext'ten path al (List view için)
                 if (element is System.Windows.Controls.ListViewItem listViewItem && listViewItem.Content is SearchResultViewModel srvm) {
                     return srvm.FullPath;
                 }
@@ -2180,7 +1954,6 @@ public partial class MainWindow : Window {
             }
         }
         
-        // Fallback: _selectedItemPath kullan
         return _selectedItemPath;
     }
     
@@ -2242,9 +2015,6 @@ public partial class MainWindow : Window {
         }
     }
     
-    /// <summary>
-    /// Belirli bir öğenin parent klasörünü yeniler (öğenin bulunduğu klasöre göre)
-    /// </summary>
     private void RefreshFolderContaining(string itemPath) {
         var parentFolder = Path.GetDirectoryName(itemPath);
         if (string.IsNullOrEmpty(parentFolder)) {
@@ -2252,26 +2022,19 @@ public partial class MainWindow : Window {
             return;
         }
         
-        // Eğer parent klasör şu anda görüntülenen klasörse
         if (_currentFolderPath != null && 
             string.Equals(parentFolder.TrimEnd('\\', '/'), _currentFolderPath.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase)) {
             LoadFolderContents(_currentFolderPath);
         }
-        // Eğer ana sayfadaysak (desktop icons), ana sayfayı yenile
         else if (_currentFolderPath == null) {
             LoadDesktopIcons();
         }
-        // Farklı bir klasördeyiz, RefreshCurrentFolder'ı kullan
         else {
             RefreshCurrentFolder();
         }
     }
     
-    /// <summary>
-    /// Görüntüdeki öğeyi yerinde günceller (ana sayfaya dönmeden)
-    /// </summary>
     private void UpdateItemInView(string oldPath, string newPath, string newName) {
-        // Desktop ikonlarında ara
         var icon = _desktopIcons.FirstOrDefault(i => 
             string.Equals(i.FullPath, oldPath, StringComparison.OrdinalIgnoreCase));
         
@@ -2280,14 +2043,10 @@ public partial class MainWindow : Window {
             icon.FullPath = newPath;
             Log($"✅ Görünüm güncellendi: {newName}");
         } else {
-            // Bulunamadıysa klasörü yenile
             RefreshCurrentFolder();
         }
     }
     
-    /// <summary>
-    /// Görüntüden öğeyi kaldırır (ana sayfaya dönmeden)
-    /// </summary>
     private void RemoveItemFromView(string path) {
         var icon = _desktopIcons.FirstOrDefault(i => 
             string.Equals(i.FullPath, path, StringComparison.OrdinalIgnoreCase));

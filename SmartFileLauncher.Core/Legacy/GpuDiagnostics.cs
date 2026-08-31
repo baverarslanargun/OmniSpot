@@ -47,12 +47,10 @@ public static class GpuDiagnostics
         }
     }
 
-    // Very rough estimate: per-layer MB approximated by (modelSizeMB / 32) for Phi-3 4k instruct quantized
     public static int RecommendLayers(int vramMB, long modelSizeMB)
     {
         if (vramMB <= 0) return 0;
-        double perLayer = modelSizeMB / 32.0; // assume 32 transformer layers
-        // keep 512MB headroom for other processes
+        double perLayer = modelSizeMB / 32.0;
         var usable = Math.Max(vramMB - 512, perLayer);
         int layers = (int)Math.Floor(usable / perLayer);
         if (layers < 1) layers = 1;

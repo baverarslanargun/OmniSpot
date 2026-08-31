@@ -120,11 +120,6 @@ internal sealed record PilotRegime(
     string DecisionStatistic,
     string CanaryDesign);
 
-/// <summary>
-/// Bir canary basamağının eşleştirilmiş sonucu. Referans, canary koşumunun hemen
-/// öncesindeki ve sonrasındaki baseline koşumlarının ortalamasıdır; bu sayede
-/// zaman eksenindeki doğrusal drift birinci derecede iptal olur.
-/// </summary>
 internal sealed record CanaryPairResult(
     double CanaryPercent,
     string CanaryLabel,

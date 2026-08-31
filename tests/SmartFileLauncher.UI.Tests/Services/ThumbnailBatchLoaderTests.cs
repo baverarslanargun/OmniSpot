@@ -34,10 +34,6 @@ public sealed class ThumbnailBatchLoaderTests
         Assert.All(thumbnails.Sizes, size => Assert.Equal(ThumbnailSize, size));
     }
 
-    /// <summary>
-    /// Kök neden: klasör değiştiğinde eski tur `CancellationToken.None` ile
-    /// `1.000` öğeye kadar devam ediyordu.
-    /// </summary>
     [Fact]
     public async Task RunAsync_StopsOpeningNewRequestsAfterCancellation()
     {
@@ -53,7 +49,6 @@ public sealed class ThumbnailBatchLoaderTests
             },
             delayAsync: (_, _) =>
             {
-                // İlk batch bittikten hemen sonra kullanıcı başka klasöre geçiyor.
                 cancellation.Cancel();
                 return Task.CompletedTask;
             });
@@ -64,9 +59,6 @@ public sealed class ThumbnailBatchLoaderTests
         Assert.Equal(BatchSize, items.Count(item => item.Thumbnail != null));
     }
 
-    /// <summary>
-    /// İptal edilen tur, yeni UI durumuna küçük resim yazmamalı.
-    /// </summary>
     [Fact]
     public async Task RunAsync_DoesNotApplyResultsProducedAfterCancellation()
     {
@@ -92,8 +84,6 @@ public sealed class ThumbnailBatchLoaderTests
 
         await loader.RunAsync(items, cancellation.Token);
 
-        // İlk istekte iptal geldi: aynı batch'teki kalan öğeler için istek açılmadı
-        // ve gelen sonuç UI'ya yazılmadı.
         Assert.Single(thumbnails.Requests);
         Assert.DoesNotContain(items, item => item.Thumbnail != null);
     }

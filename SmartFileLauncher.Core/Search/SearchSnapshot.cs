@@ -3,9 +3,6 @@ using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Search;
 
-/// <summary>
-/// Immutable view of the searchable index and file tree for one query.
-/// </summary>
 public sealed class SearchSnapshot {
     public InvertedIndexSnapshot InvertedIndex { get; }
     public FileSystemNode? RootNode { get; }

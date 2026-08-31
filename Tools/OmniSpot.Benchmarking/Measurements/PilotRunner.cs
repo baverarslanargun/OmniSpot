@@ -9,17 +9,8 @@ internal static class PilotRunner
     private static readonly int[] CandidateItemCounts = [1_000, 5_000, 10_000, 25_000, 50_000];
     private static readonly double[] CanaryPercents = [1, 2, 3, 5, 8];
 
-    /// <summary>
-    /// Ölçüm öncesi kayda alınmayan ısınma koşumu sayısı.
-    /// </summary>
     private const int StabilizationRunCount = 3;
 
-    /// <summary>
-    /// Her koşumun kaç bağımsız süreçte ölçüleceği. Tek süreçte ölçüldüğünde
-    /// ardışık baseline'lar arasında %5 fark kalıyordu; o fark sürecin kendi
-    /// JIT ve bellek yerleşiminden geliyor ve iterasyon sayısını artırmakla
-    /// azalmıyor. Örnekler birden çok sürece dağıtılınca bu bileşen ortalanır.
-    /// </summary>
     private const int PilotLaunchCount = 3;
 
     internal static PilotDocument Run(
@@ -45,18 +36,11 @@ internal static class PilotRunner
             .LastOrDefault(calibration[0].ItemCount);
         var fixture = SyntheticSearchFixtureGenerator.Create(itemCount, seed);
         var instrument = InstrumentationProbe.Measure();
-        // Süreç başına iterasyon. Toplam örnek sayısı PilotLaunchCount ile çarpılır,
-        // yani 3 x 20 = 60: önceki turlarla aynı örnek sayısı, üç ayrı süreçten.
         const int pilotWarmups = 12;
         const int pilotMeasurements = 20;
         var runs = new List<PilotRun>();
         var baselines = new List<PilotRun>();
 
-        // Sistem seviyesinde ısınma. Tur 3 ölçümünde ilk koşum 704 ms, on üçüncü
-        // koşum 499 ms geldi (%29 fark) ve eğri koşum boyunca oturmadı: dosya
-        // cache'i, bellek yerleşimi ve JIT katmanları ancak birkaç koşum sonra
-        // dengeye giriyor. Bu koşumlar kayda geçer ama baseline referans havuzuna
-        // ve karara girmez; amaçları yalnız ısınmayı ölçümün dışına almak.
         for (var index = 0; index < StabilizationRunCount; index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -71,8 +55,6 @@ internal static class PilotRunner
                 artifactsPath));
         }
 
-        // İlk iki baseline ardışık alınır; ölçüm rejimi (warmup ve iterasyon sayısı)
-        // yalnız bunlardan seçilir.
         var baselineZero = Execute(
             "baseline-0",
             fixture,
@@ -96,10 +78,6 @@ internal static class PilotRunner
         runs.Add(baselineOne);
         cancellationToken.ThrowIfCancellationRequested();
 
-        // SelectMeasurementCount ve SelectWarmupCount tüm süreçlerin birleşik örnek
-        // dizisi üzerinden çalışır; Execute ise değeri süreç başına iterasyon olarak
-        // kullanır. Bölme yapılmazsa sonraki koşumlar PilotLaunchCount katı örnek
-        // toplar ve ilk iki baseline ile kıyaslanamaz hale gelir.
         var measurementCount = Math.Max(
             1,
             SelectMeasurementCount(baselineZero, baselineOne) / PilotLaunchCount);
@@ -107,8 +85,6 @@ internal static class PilotRunner
             1,
             SelectWarmupCount(baselineZero.WarmupNanoseconds) / PilotLaunchCount);
 
-        // Diagnoser koşumu ayrı tutulur ve baseline referans havuzuna girmez:
-        // MemoryDiagnoser ek iterasyon çalıştırdığı için duvar süresi kıyaslanabilir değildir.
         var allocationRun = Execute(
             "baseline-memory",
             fixture,
@@ -120,9 +96,6 @@ internal static class PilotRunner
             artifactsPath);
         runs.Add(allocationRun);
 
-        // Merdivenin ilk referansı. baseline-0 ve baseline-1 yalnız rejim seçimi
-        // içindir ve pilot ayarlarıyla koştukları için referans havuzuna alınmaz;
-        // buradan sonraki bütün koşumlar aynı warmup/iterasyon rejimini kullanır.
         cancellationToken.ThrowIfCancellationRequested();
         var firstReference = Execute(
             "baseline-2",
@@ -136,10 +109,6 @@ internal static class PilotRunner
         runs.Add(firstReference);
         baselines.Add(firstReference);
 
-        // Eşleştirilmiş canary merdiveni. Dizi: A B A B A B A B A B A
-        // Her canary'nin referansı kendisinden hemen önceki ve hemen sonraki
-        // baseline'ın ortalamasıdır; zaman eksenindeki doğrusal drift bu ortalamada
-        // birinci derecede iptal olur.
         var delayReferenceMedian = firstReference.MedianNanoseconds;
         var pairs = new List<CanaryPairResult>();
         foreach (var canaryPercent in CanaryPercents)
@@ -188,9 +157,6 @@ internal static class PilotRunner
                 Detected: false));
         }
 
-        // Gürültü bandı ardışık baseline çiftlerinden gelir ve karar istatistiği
-        // medyandır (sözleşme §8.1: birincil özet medyandır, p95 ancak örnek sayısı
-        // dondurulduktan sonra kullanılır).
         var varianceBand = VarianceBandPercent(
             baselines.Select(baseline => baseline.MedianNanoseconds).ToArray());
         var threshold = RoundUp(Math.Max(0.5, varianceBand), 0.25);
@@ -227,8 +193,6 @@ internal static class PilotRunner
             failures.Add("canary_ladder_incomplete");
         }
 
-        // Karara giren bütün koşumlar aynı örnek sayısıyla ölçülmelidir; aksi halde
-        // farklı büyüklükteki dağılımlar karşılaştırılır ve varyans bandı sahte çıkar.
         var comparedSampleCounts = runs
             .Where(run => run.CanaryPercent > 0 || baselines.Contains(run))
             .Select(run => run.WorkloadNanoseconds.Count)
@@ -301,22 +265,11 @@ internal static class PilotRunner
             failures);
     }
 
-    /// <summary>
-    /// Bir canary koşumunun referansı: kendisinden hemen önceki ve hemen sonraki
-    /// baseline medyanlarının ortalaması. Ölçümler eşit aralıklı ve drift doğrusalsa
-    /// bu ortalama tam olarak canary koşumunun zaman noktasına denk gelir, dolayısıyla
-    /// drift farktan düşer.
-    /// </summary>
     internal static double PairedReference(
         double baselineBeforeMedian,
         double baselineAfterMedian) =>
         (baselineBeforeMedian + baselineAfterMedian) / 2d;
 
-    /// <summary>
-    /// Gürültü bandı: ardışık baseline koşumları arasındaki en büyük mutlak yüzde
-    /// değişimi. Baseline'lar canary koşumlarıyla dönüşümlü alındığı için bu band
-    /// gerçek koşumlar-arası gürültüyü temsil eder.
-    /// </summary>
     internal static double VarianceBandPercent(IReadOnlyList<double> baselineMedians)
     {
         ArgumentNullException.ThrowIfNull(baselineMedians);
@@ -390,7 +343,6 @@ internal static class PilotRunner
 
     private static int SelectMeasurementCount(PilotRun first, PilotRun second)
     {
-        // Süreç başına iterasyon adayları; toplam örnek sayısı PilotLaunchCount katıdır.
         foreach (var count in new[] { 10, 15, 20 })
         {
             if (first.WorkloadNanoseconds.Count < count || second.WorkloadNanoseconds.Count < count)

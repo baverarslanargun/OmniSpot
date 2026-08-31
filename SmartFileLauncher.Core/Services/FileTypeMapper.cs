@@ -4,9 +4,6 @@ using System.Linq;
 
 namespace SmartFileLauncher.Core.Services;
 
-/// <summary>
-/// Maps generic file type names to file extensions
-/// </summary>
 public static class FileTypeMapper {
     private static readonly Dictionary<string, string[]> _typeMap = new(StringComparer.OrdinalIgnoreCase) {
         ["video"] = [".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg"],
@@ -25,7 +22,6 @@ public static class FileTypeMapper {
         if (_typeMap.TryGetValue(typeName, out var extensions)) {
             return extensions;
         }
-        // If not a type, treat as direct extension
         if (typeName.StartsWith(".")) {
             return [typeName];
         }

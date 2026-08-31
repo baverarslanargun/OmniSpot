@@ -3,9 +3,6 @@ using System.Text.Json.Serialization;
 
 namespace SmartFileLauncher.Core.Models;
 
-/// <summary>
-/// Structured query extracted from natural language by LLM
-/// </summary>
 public class StructuredQuery {
     [JsonPropertyName("intent")]
     public string Intent { get; set; } = "search";
@@ -19,10 +16,6 @@ public class StructuredQuery {
     [JsonPropertyName("file_types")]
     public List<string> FileTypes { get; set; } = new();
     
-    /// <summary>
-    /// Specific file extensions predicted by AI (e.g., "pptx", "mp4", "jpg")
-    /// More specific than FileTypes - used for precise filtering
-    /// </summary>
     [JsonPropertyName("predicted_extensions")]
     public List<string> PredictedExtensions { get; set; } = new();
 
@@ -50,35 +43,18 @@ public class StructuredQuery {
     [JsonPropertyName("open_action")]
     public OpenAction? OpenAction { get; set; }
     
-    /// <summary>
-    /// Target type probabilities from AI (file vs folder preference)
-    /// </summary>
     [JsonPropertyName("target_type")]
     public TargetType? TargetType { get; set; }
     
-    /// <summary>
-    /// When true, the query is asking for ALL files matching filters (type, folder, date, size)
-    /// without searching for specific keywords in filenames.
-    /// Examples: "tüm resimler", "bütün PDF'ler", "indirilen dosyaları göster"
-    /// </summary>
     [JsonPropertyName("filter_only_mode")]
     public bool FilterOnlyMode { get; set; } = false;
     
-    /// <summary>
-    /// Indicates whether AI failed and rule-based fallback was used
-    /// </summary>
     [JsonIgnore]
     public bool UsedFallback { get; set; } = false;
     
-    /// <summary>
-    /// Reason for fallback if UsedFallback is true
-    /// </summary>
     [JsonIgnore]
     public string? FallbackReason { get; set; }
     
-    /// <summary>
-    /// Warning message for partial failures (e.g., Keyword API failed but Intent succeeded)
-    /// </summary>
     [JsonIgnore]
     public string? WarningMessage { get; set; }
 }
@@ -143,37 +119,19 @@ public class OpenAction {
     public string OpenMode { get; set; } = "show_list";
 }
 
-/// <summary>
-/// Target type probabilities - whether user wants a file or folder
-/// </summary>
 public class TargetType {
-    /// <summary>
-    /// Probability that user wants a file (0.0 - 1.0)
-    /// </summary>
     [JsonPropertyName("file")]
     public double File { get; set; } = 0.5;
     
-    /// <summary>
-    /// Probability that user wants a folder (0.0 - 1.0)
-    /// </summary>
     [JsonPropertyName("folder")]
     public double Folder { get; set; } = 0.5;
     
-    /// <summary>
-    /// Returns true if user prefers folders over files
-    /// </summary>
     [JsonIgnore]
     public bool PrefersFolder => Folder > File;
     
-    /// <summary>
-    /// Returns true if user prefers files over folders
-    /// </summary>
     [JsonIgnore]
     public bool PrefersFile => File > Folder;
     
-    /// <summary>
-    /// Returns true if there's a strong preference (difference > 0.3)
-    /// </summary>
     [JsonIgnore]
     public bool HasStrongPreference => Math.Abs(File - Folder) > 0.3;
 }

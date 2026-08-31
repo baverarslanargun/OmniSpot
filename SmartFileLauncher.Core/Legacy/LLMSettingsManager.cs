@@ -21,7 +21,7 @@ public static class LLMSettingsManager
                     return settings;
             }
         }
-        catch { /* ignore parse errors, fall back to defaults */ }
+        catch { }
         return new LLMSettings();
     }
 
@@ -32,7 +32,7 @@ public static class LLMSettingsManager
             var json = JsonSerializer.Serialize(settings, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(SettingsPath, json);
         }
-        catch { /* ignore save errors */ }
+        catch { }
     }
 
     public static string GetSettingsFilePath() => SettingsPath;

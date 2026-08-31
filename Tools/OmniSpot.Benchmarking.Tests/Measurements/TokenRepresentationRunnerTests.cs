@@ -19,7 +19,6 @@ public sealed class TokenRepresentationRunnerTests
         "pooled_array"
     ];
 
-    // GC ölçümleri makineye göre değişir; test rakama değil yapıya bakar.
     [Fact]
     public void Run_ReportsEveryVariantOnce()
     {
@@ -32,10 +31,6 @@ public sealed class TokenRepresentationRunnerTests
             Assert.False(string.IsNullOrWhiteSpace(variant.Scope)));
     }
 
-    // Roller üretimle birlikte kayar: `array` üretim şekli olduktan sonra
-    // `hashset`'i hâlâ "üretim" diye etiketlemek okuyucuyu yanıltır. Üretim
-    // temsili yeniden değişirse bu test kırılıp etiketlerin güncellenmesini
-    // zorlar.
     [Fact]
     public void Run_LabelsPooledArrayAsTheProductionRepresentation()
     {
@@ -54,8 +49,6 @@ public sealed class TokenRepresentationRunnerTests
         Assert.Equal(scopes.Values.Distinct(StringComparer.Ordinal).Count(), scopes.Count);
     }
 
-    // Eşleştirme ancak sıra dengeliyse anlamlıdır: her temsil aynı sayıda
-    // örnek almalı ve hiçbiri sistematik olarak ilk sırada olmamalı.
     [Fact]
     public void Run_GivesEveryVariantTheSameNumberOfPairedSamples()
     {
@@ -67,8 +60,6 @@ public sealed class TokenRepresentationRunnerTests
         Assert.Equal(ExpectedVariants.Length, counts.Count);
         Assert.Single(counts.Values.Distinct());
 
-        // Eşleştirme her tur içinde aynalı olmalı; tur sayısı artınca da
-        // geçerli kalsın diye tur tur bakılır, tüm diziye değil.
         var perRound = ExpectedVariants.Length * 2;
         Assert.Equal(0, comparison.Samples.Count % perRound);
         foreach (var round in comparison.Samples.Chunk(perRound))
@@ -78,8 +69,6 @@ public sealed class TokenRepresentationRunnerTests
         }
     }
 
-    // GC deltası küçük ağaçlarda negatife düşebilir. Test bunu yasaklamaz;
-    // yasakladığı şey negatifin ölçülmüş bir değer gibi raporlanmasıdır.
     [Fact]
     public void Run_ReportsNullInsteadOfNegativeForUnmeasurableSamples()
     {
@@ -96,8 +85,6 @@ public sealed class TokenRepresentationRunnerTests
         });
     }
 
-    // Ölçülemeyen temsil varsa yüzde değişimi üretilmez ve bu bir kabul
-    // hatası olarak raporlanır; eksik karşılaştırma tam gibi sunulamaz.
     [Fact]
     public void Run_SuppressesChangePercentWhenAVariantIsUnmeasurable()
     {
@@ -116,8 +103,6 @@ public sealed class TokenRepresentationRunnerTests
         }
     }
 
-    // Asıl kapı bu: aday temsiller üretimin OrdinalIgnoreCase benzersiz küme
-    // semantiğini bozarsa sayılar anlamsızdır. Sentetik fixture'da bozulmamalı.
     [Fact]
     public void Run_AcceptsCandidatesThatPreserveSetSemantics()
     {
@@ -156,7 +141,6 @@ public sealed class TokenRepresentationRunnerTests
         Assert.True(comparison.Facts.MaxTokensPerItem > 0);
     }
 
-    // Kalıcı çıktı sözleşmesi: ad, token ve path hiçbir alana sızmamalı.
     [Fact]
     public void Run_JsonCarriesNoNameTokenOrPathValues()
     {

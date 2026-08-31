@@ -4,11 +4,6 @@ using Xunit;
 
 namespace SmartFileLauncher.UI.Tests.Services;
 
-/// <summary>
-/// Bellek büyümesinin yönetilen tarafta mı (bizim nesnelerimiz) yoksa native
-/// tarafta mı (WPF bitmap'leri, SQLite, kabuk) olduğu tek satırda görünmeli;
-/// aksi hâlde `private` ile yığın elle çıkarılmak zorunda kalıyor.
-/// </summary>
 public sealed class DiagnosticsCollectorNativeShareTests
 {
     [Fact]
@@ -23,10 +18,6 @@ public sealed class DiagnosticsCollectorNativeShareTests
         Assert.True(reading.Numeric >= 0d);
     }
 
-    /// <summary>
-    /// Satır türetilmiş bir değer: aynı turdaki `private` ve `yönetilen yığın`
-    /// okumalarının farkına eşit olmalı, yoksa üç satır birbirini tutmaz.
-    /// </summary>
     [Fact]
     public void NativeShareEqualsPrivateMinusManagedHeapInTheSameRound()
     {

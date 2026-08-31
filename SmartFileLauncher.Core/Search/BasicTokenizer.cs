@@ -1,14 +1,5 @@
 using System.Globalization;
 namespace SmartFileLauncher.Core.Search;
-/// <summary>
-/// Basic tokenizer splitting on common delimiters. Turkish culture lowercasing example.
-/// TODO: Replace/extend with morphological analyzer (Zemberek) in future.
-///
-/// Her parça iki biçimde üretilebilir: `tr-TR` küçültülmüş aslı ve —farklıysa—
-/// aksansız katlanmış biçimi (bkz. <see cref="SearchTextNormalizer"/>). Aynı
-/// kural hem indeksleme hem sorgu tarafında çalışır; böylece `görüşme` araması
-/// tam eşleşmeyle üste çıkarken `gorusme` araması da aynı dosyayı bulur.
-/// </summary>
 public class BasicTokenizer : ITokenizer {
     private static readonly char[] _delims = new[] { ' ', '_', '-', '.', ',', '[', ']', '(', ')' };
     private readonly CultureInfo _culture = new("tr-TR");

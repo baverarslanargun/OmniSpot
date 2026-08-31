@@ -67,10 +67,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         Assert.Equal(48, decoded.PixelHeight);
     }
 
-    /// <summary>
-    /// Kök neden: kabuk ve disk yolu istenen boyutu yok sayıp `256` çözüyordu.
-    /// Tutulan piksel baytı bu yüzden dört katıydı.
-    /// </summary>
     [Fact]
     public void DecodeBounded_RetainsFarFewerPixelBytesThanAnUnboundedDecode()
     {
@@ -129,10 +125,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         Assert.Equal(1, diagnostics.MemoryCacheCount);
     }
 
-    /// <summary>
-    /// Kök neden: önbellek sınırı yalnız adet cinsindendi; her giriş `256×256`
-    /// olduğunda tavan bayt cinsinden ölçülemiyordu.
-    /// </summary>
     [Fact]
     public async Task GetThumbnailAsync_MemoryCacheStaysWithinByteBudget()
     {
@@ -153,10 +145,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         Assert.Equal(9, diagnostics.Evictions);
     }
 
-    /// <summary>
-    /// Kök neden: tahliye `Keys.First()` ile rastgele giriş atıyordu; ölçümde
-    /// `1.031` tahliyeye karşılık yalnız `47` bellek isabeti vardı.
-    /// </summary>
     [Fact]
     public async Task GetThumbnailAsync_EvictsLeastRecentlyUsedEntryFirst()
     {
@@ -171,7 +159,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         await service.GetThumbnailAsync(first, RequestedSize);
         await service.GetThumbnailAsync(second, RequestedSize);
 
-        // `first` yeniden dokunuluyor: artık en son kullanılan o.
         await service.GetThumbnailAsync(first, RequestedSize);
         await service.GetThumbnailAsync(third, RequestedSize);
 
@@ -179,7 +166,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         Assert.Equal(2, before.MemoryCacheCount);
         Assert.Equal(1, before.Evictions);
 
-        // `first` bellekte kalmalı, `second` atılmış olmalı.
         await service.GetThumbnailAsync(first, RequestedSize);
         Assert.Equal(2, service.GetDiagnostics().MemoryHits);
 
@@ -205,10 +191,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         Assert.Equal(6, diagnostics.Evictions);
     }
 
-    /// <summary>
-    /// Kabuk yolu: `ShellThumbnail.CurrentSize` verilmediğinde Windows varsayılan
-    /// `256×256` döndürüyordu. Bu test üretim tarafını gerçek kabukla doğrular.
-    /// </summary>
     [Fact]
     public async Task GetThumbnailAsync_ShellGenerationStaysWithinRequestedSize()
     {
@@ -256,10 +238,6 @@ public sealed class ThumbnailServiceTests : IDisposable
         long maxMemoryCacheBytes = ThumbnailService.DefaultMaxMemoryCacheBytes)
         => new(_ => { }, cachePath, maxMemoryCacheCount, maxMemoryCacheBytes);
 
-    /// <summary>
-    /// Kaynak dosyayı ve ona karşılık gelen disk önbelleği girdisini oluşturur;
-    /// böylece istek kabuk çağrısı yapmadan disk yolundan karşılanır.
-    /// </summary>
     private string SeedDiskCacheEntry(
         string cachePath,
         string fileName,

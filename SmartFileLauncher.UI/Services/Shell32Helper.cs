@@ -3,9 +3,6 @@ using System.Runtime.InteropServices;
 
 namespace SmartFileLauncher.UI.Services;
 
-/// <summary>
-/// Windows Shell32 API helper for file operations
-/// </summary>
 public static class Shell32Helper
 {
     [DllImport("shell32.dll", CharSet = CharSet.Auto)]
@@ -39,9 +36,6 @@ public static class Shell32Helper
     private const uint SEE_MASK_INVOKEIDLIST = 12;
     private const int SW_SHOW = 5;
 
-    /// <summary>
-    /// Shows the Windows properties dialog for a file or folder
-    /// </summary>
     public static void ShowProperties(string path)
     {
         var info = new SHELLEXECUTEINFO

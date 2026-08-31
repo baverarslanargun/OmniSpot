@@ -4,11 +4,6 @@ using Xunit;
 
 namespace SmartFileLauncher.UI.Tests.Services;
 
-/// <summary>
-/// `yönetilen yığın` toplama zorlamadan okunduğu için canlı veri ile
-/// toplanmamış çöp aynı sayıya giriyor. Zorlanmış örnek bu ayrımı verir; ama
-/// toplama uygulamayı durdurduğundan üretim varsayılanında hiç çalışmamalıdır.
-/// </summary>
 public sealed class DiagnosticsCollectorForcedMemoryTests
 {
     private const string LiveLabel = "canlı yığın (zorlanmış)";

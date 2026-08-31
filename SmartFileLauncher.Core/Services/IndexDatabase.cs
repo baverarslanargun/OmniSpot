@@ -9,12 +9,6 @@ using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Services;
 
-/// <summary>
-/// SQLite-based index database for persistent file system caching.
-/// Provides O(1) path lookups via hash-indexed tables.
-/// 
-/// Database location: %APPDATA%\OmniSpot\index.db
-/// </summary>
 public class IndexDatabase : IDisposable
 {
     private const int CurrentSchemaVersion = 1;
@@ -348,9 +342,6 @@ public class IndexDatabase : IDisposable
             StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>
-    /// Opens the database connection and ensures schema exists.
-    /// </summary>
     public void Open()
     {
         if (_connection != null) return;
@@ -365,10 +356,8 @@ public class IndexDatabase : IDisposable
         _connection = new SqliteConnection(connectionString);
         _connection.Open();
 
-        // SQLite foreign key enforcement is connection-scoped and disabled by default.
         ExecuteNonQuery("PRAGMA foreign_keys=ON;");
 
-        // Enable WAL mode for better concurrent performance
         ExecuteNonQuery("PRAGMA journal_mode=WAL;");
         ExecuteNonQuery("PRAGMA synchronous=NORMAL;");
 
@@ -376,9 +365,6 @@ public class IndexDatabase : IDisposable
         RepairOrphanedRows();
     }
 
-    /// <summary>
-    /// Closes the database connection.
-    /// </summary>
     public void Close()
     {
         _connection?.Close();
@@ -386,16 +372,12 @@ public class IndexDatabase : IDisposable
         _connection = null;
     }
 
-    /// <summary>
-    /// Deletes the database file (for fresh start).
-    /// </summary>
     public void DeleteDatabase()
     {
         Close();
         if (File.Exists(_dbPath))
         {
             File.Delete(_dbPath);
-            // Also delete WAL and SHM files
             File.Delete(_dbPath + "-wal");
             File.Delete(_dbPath + "-shm");
         }
@@ -415,11 +397,6 @@ public class IndexDatabase : IDisposable
         }
     }
 
-    /// <summary>
-    /// Repairs rows that may have been written by older versions while SQLite
-    /// foreign-key enforcement was disabled. Future writes are protected by the
-    /// connection-level PRAGMA; this makes existing caches safe to reuse too.
-    /// </summary>
     private void RepairOrphanedRows()
     {
         using var transaction = BeginTransaction();
@@ -461,7 +438,6 @@ public class IndexDatabase : IDisposable
 
     private void CreateSchema()
     {
-        // Directories table
         ExecuteNonQuery(@"
             CREATE TABLE IF NOT EXISTS Directories (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -478,7 +454,6 @@ public class IndexDatabase : IDisposable
             CREATE INDEX IF NOT EXISTS idx_directories_parent ON Directories(ParentId);
         ");
 
-        // Files table
         ExecuteNonQuery(@"
             CREATE TABLE IF NOT EXISTS Files (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -501,7 +476,6 @@ public class IndexDatabase : IDisposable
             CREATE INDEX IF NOT EXISTS idx_files_name ON Files(FileName);
         ");
 
-        // Tokens table (inverted index persistence)
         ExecuteNonQuery(@"
             CREATE TABLE IF NOT EXISTS Tokens (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -510,7 +484,6 @@ public class IndexDatabase : IDisposable
             CREATE INDEX IF NOT EXISTS idx_tokens_token ON Tokens(Token);
         ");
 
-        // File-Token mapping (many-to-many)
         ExecuteNonQuery(@"
             CREATE TABLE IF NOT EXISTS FileTokens (
                 FileId INTEGER NOT NULL,
@@ -522,7 +495,6 @@ public class IndexDatabase : IDisposable
             CREATE INDEX IF NOT EXISTS idx_filetokens_token ON FileTokens(TokenId);
         ");
 
-        // Metadata table (key-value store)
         ExecuteNonQuery(@"
             CREATE TABLE IF NOT EXISTS Metadata (
                 Key TEXT PRIMARY KEY,
@@ -530,7 +502,6 @@ public class IndexDatabase : IDisposable
             );
         ");
 
-        // Excluded paths table
         ExecuteNonQuery(@"
             CREATE TABLE IF NOT EXISTS ExcludedPaths (
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -818,19 +789,12 @@ public class IndexDatabase : IDisposable
 
     #region Batch Operations
 
-    /// <summary>
-    /// Begins a transaction for batch operations.
-    /// </summary>
     public SqliteTransaction BeginTransaction()
     {
         EnsureConnection();
         return _connection!.BeginTransaction();
     }
 
-    /// <summary>
-    /// Clears all indexed data (files, directories, tokens).
-    /// Keeps metadata and excluded paths.
-    /// </summary>
     public void ClearIndex()
     {
         ExecuteNonQuery("DELETE FROM FileTokens;");

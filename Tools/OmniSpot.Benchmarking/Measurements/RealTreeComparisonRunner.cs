@@ -52,13 +52,6 @@ internal sealed record RealTreeComparison(
     double AllocationBarPercent,
     IReadOnlyList<string> AcceptanceFailures);
 
-/// <summary>
-/// `R5` Kapı 1: builder değişikliğini gerçek ağaç üzerinde, bellek içinde ve
-/// eşleştirilmiş (ABBA) olarak doğrular. Ad, token ve path diske yazılmaz;
-/// terminale yalnız toplu sayılar çıkar. `legacy` tarafı değişiklik öncesi
-/// `SearchState.Create` gövdesinin birebir replikasıdır; `builder` tarafı
-/// üretimin kendisidir. İkisinin çıktı eşitliği kabul kapısıdır.
-/// </summary>
 internal static class RealTreeComparisonRunner
 {
     private const string LegacyVariant = "legacy";
@@ -341,11 +334,6 @@ internal static class RealTreeComparisonRunner
         return childrenByPath.ToImmutable();
     }
 
-    /// <summary>
-    /// Sayı eşitliği yetmez: aynı sayıda ama farklı path taşıyan hatalı bir
-    /// sonuç sayı kontrolünden geçer. Üyelik `OrdinalIgnoreCase` ile birebir
-    /// karşılaştırılır.
-    /// </summary>
     private static bool PostingsEqual(
         ImmutableHashSet<string> expected,
         IReadOnlyCollection<SearchItem> actual)

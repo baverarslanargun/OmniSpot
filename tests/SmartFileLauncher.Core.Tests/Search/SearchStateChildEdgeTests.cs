@@ -5,25 +5,12 @@ using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.Search;
 
-/// <summary>
-/// `SearchState`'in çocuk-kenarı invariantını sabitler: bir öğenin
-/// `ParentPath`'i varsa kenar **her zaman** yazılır, ebeveyn o an state'te
-/// olmasa bile.
-///
-/// Eskiden kenar yalnız ebeveyn mevcutken yazılıyor ve sonradan onarılmıyordu;
-/// çocuk ebeveynden önce ayrı bir çağrıda gelirse kenar kalıcı olarak
-/// kayboluyordu. Sarkan kenar okuma tarafında zararsızdır: `GetDescendants`
-/// `_itemsByPath`'te bulunmayan yolu zaten atlar.
-/// </summary>
 public sealed class SearchStateChildEdgeTests
 {
     private const string Root = @"C:\Data";
     private const string Folder = @"C:\Data\Klasor";
     private const string ChildFile = @"C:\Data\Klasor\dosya.txt";
 
-    /// <summary>
-    /// Asıl kusur buydu: çocuk önce, ebeveyn sonra, ayrı çağrılarda.
-    /// </summary>
     [Fact]
     public void ChildAddedBeforeItsParentStillBecomesADescendant()
     {
@@ -36,10 +23,6 @@ public sealed class SearchStateChildEdgeTests
         Assert.Equal([ChildFile], DescendantPaths(state, Folder));
     }
 
-    /// <summary>
-    /// Ters sıra eskiden de çalışıyordu; buradaki amaç düzeltmenin onu
-    /// bozmadığını sabitlemek.
-    /// </summary>
     [Fact]
     public void ParentAddedBeforeItsChildStillBecomesADescendant()
     {
@@ -52,10 +35,6 @@ public sealed class SearchStateChildEdgeTests
         Assert.Equal([ChildFile], DescendantPaths(state, Folder));
     }
 
-    /// <summary>
-    /// `Create` yolu da aynı invariantı taşımalı: ebeveyni verilen düğüm
-    /// kümesinin dışında kalan çocuk yine kenarını almalı.
-    /// </summary>
     [Fact]
     public void CreateKeepsTheChildEdgeWhenTheParentIsOutsideTheNodeSet()
     {
@@ -66,10 +45,6 @@ public sealed class SearchStateChildEdgeTests
         Assert.Equal([ChildFile], DescendantPaths(state, Folder));
     }
 
-    /// <summary>
-    /// Kenar yazıldıktan sonra silme onu temizlemeli; yoksa düzeltme sarkan
-    /// kenarı kalıcılaştırırdı. İlk iddia düzeltmeyi, ikincisi temizliği tutar.
-    /// </summary>
     [Fact]
     public void RemovingAChildDropsItsEdge()
     {
@@ -82,11 +57,6 @@ public sealed class SearchStateChildEdgeTests
         Assert.Empty(DescendantPaths(state.WithoutPathAndDescendants(ChildFile), Folder));
     }
 
-    /// <summary>
-    /// Dizin aynı yolda dosyaya dönüşürse altağaç düşer. `WithUpserts` bu yolu
-    /// `WithoutPathAndDescendants` üzerinden işlediği için kenarların da
-    /// gitmesi gerekir.
-    /// </summary>
     [Fact]
     public void DirectoryReplacedByAFileLosesItsDescendants()
     {
@@ -102,10 +72,6 @@ public sealed class SearchStateChildEdgeTests
         Assert.Empty(replaced.Get("dosya"));
     }
 
-    /// <summary>
-    /// Kenar sözlüğü `OrdinalIgnoreCase` anahtarlı; çocuğun `ParentPath` yazımı
-    /// ebeveynin yazımından farklı olsa da kenar çözülmeli.
-    /// </summary>
     [Fact]
     public void ChildEdgeResolvesParentPathCaseInsensitively()
     {
@@ -125,8 +91,6 @@ public sealed class SearchStateChildEdgeTests
             .Select(item => item.FullPath)
             .ToArray();
 
-    // Ebeveyn state'te bulunmayabilir; `GetDescendants` yalnız `FullPath`
-    // kullandığı için taşıyıcı bir öğe yeterli.
     private static SearchItem ParentItem(string parentPath) =>
         new("Klasor", parentPath, true, null, null, null, 0, Root);
 

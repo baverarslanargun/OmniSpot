@@ -322,12 +322,6 @@ public class AdvancedSearchEngine
         SearchState state,
         CancellationToken cancellationToken)
     {
-        // Tokenizer bir kelime için aslını ve —farklıysa— aksansız biçimini
-        // üretir. Bunlar aynı kelimenin **alternatifleridir**; terimdeki ayrı
-        // kelimeler ise birlikte aranmalıdır. Aksansız biçim iki alternatifte
-        // de ortak olduğundan gruplama anahtarı odur: grup içi birleşim (VEYA),
-        // gruplar arası kesişim (VE). Gruplanmazsa `görüşme` sorgusu
-        // `gorusme.txt`'yi hiç bulamaz.
         var alternativeGroups = _tokenizer.Tokenize(searchTerm.Text)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .GroupBy(SearchTextNormalizer.Fold, StringComparer.OrdinalIgnoreCase)
