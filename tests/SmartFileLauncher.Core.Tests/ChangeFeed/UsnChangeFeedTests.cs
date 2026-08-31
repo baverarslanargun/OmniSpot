@@ -434,6 +434,103 @@ public sealed class UsnChangeFeedTests
         Assert.False(feed.RootIdentity.IsUnknown);
     }
 
+    [Fact]
+    public void Accept_AfterAProjectionGapKeepsPreviousPosition()
+    {
+        var reader = CreateReader().EnqueuePage(
+            EndUsn,
+            new UsnRecordBuffer()
+                .AddVersion2(110, 2, RootReference, UsnReason.FileCreate, "alt", FileAttributes.Directory)
+                .AddVersion2(111, RootReference, 999, UsnReason.RenameNewName, "YeniKok", FileAttributes.Directory)
+                .Build());
+        using var feed = CreateFeed(reader);
+
+        Assert.Equal(ChangeFeedGapReason.RootIdentityChanged, feed.Read().GapReason);
+
+        feed.Accept();
+
+        Assert.Equal(StartUsn, feed.AcceptedUsn);
+        Assert.Empty(feed.CaptureState().Directories);
+    }
+
+    [Fact]
+    public void Read_FaultsWhenTheNativeCallIsRejectedWithAnUnchangedJournal()
+    {
+        var reader = CreateReader();
+        reader.ReadRejectsProtocol = true;
+        using var feed = CreateFeed(reader);
+
+        var batch = feed.Read();
+
+        Assert.Equal(ChangeFeedStatus.Faulted, batch.Status);
+        Assert.Equal(ChangeFeedFaultReason.NativeProtocolRejected, batch.FaultReason);
+        Assert.Equal(ChangeFeedGapReason.None, batch.GapReason);
+        Assert.False(batch.HasGap);
+        Assert.False(string.IsNullOrWhiteSpace(batch.Diagnostics));
+        Assert.True(feed.IsFaulted);
+    }
+
+    [Fact]
+    public void Read_TurnsARejectionIntoAGapWhenTheJournalIdentityChanged()
+    {
+        var reader = CreateReader();
+        reader.ReadRejectsProtocol = true;
+        reader.OnReadPage = () => reader.Descriptor = Descriptor(journalId: 99);
+        using var feed = CreateFeed(reader);
+
+        var batch = feed.Read();
+
+        Assert.Equal(ChangeFeedStatus.Gap, batch.Status);
+        Assert.Equal(ChangeFeedGapReason.JournalIdChanged, batch.GapReason);
+        Assert.False(feed.IsFaulted);
+    }
+
+    [Fact]
+    public void Read_TurnsARejectionIntoAGapWhenTheRetainedRangeLeftTheCursorBehind()
+    {
+        var reader = CreateReader();
+        reader.ReadRejectsProtocol = true;
+        reader.OnReadPage = () =>
+            reader.Descriptor = new UsnJournalDescriptor(JournalId, 500, 800, 0, long.MaxValue, 0, 0);
+        using var feed = CreateFeed(reader);
+
+        var batch = feed.Read();
+
+        Assert.Equal(ChangeFeedGapReason.CursorOutsideJournal, batch.GapReason);
+        Assert.False(feed.IsFaulted);
+    }
+
+    [Fact]
+    public void Read_StopsTouchingTheVolumeAfterAFault()
+    {
+        var reader = CreateReader();
+        reader.ReadRejectsProtocol = true;
+        using var feed = CreateFeed(reader);
+
+        Assert.True(feed.Read().IsFaulted);
+        var queries = reader.QueryCalls;
+        var reads = reader.ReadCalls.Count;
+
+        Assert.True(feed.Read().IsFaulted);
+
+        Assert.Equal(queries, reader.QueryCalls);
+        Assert.Equal(reads, reader.ReadCalls.Count);
+    }
+
+    [Fact]
+    public void Accept_AfterFaultKeepsPreviousPosition()
+    {
+        var reader = CreateReader();
+        reader.QueryRejectsProtocol = true;
+        using var feed = CreateFeed(reader);
+
+        Assert.True(feed.Read().IsFaulted);
+        feed.Accept();
+
+        Assert.Equal(StartUsn, feed.AcceptedUsn);
+        Assert.Empty(reader.ReadCalls);
+    }
+
     private static UsnJournalDescriptor Descriptor(
         ulong journalId = JournalId,
         long nextUsn = EndUsn) =>

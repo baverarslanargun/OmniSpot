@@ -176,13 +176,17 @@ public sealed class UsnVolumeJournalReader : IUsnJournalReader
         throw new Win32Exception(error, $"{device} birimi açılamadı.");
     }
 
-    private static Exception TranslateFailure(int errorCode, string operation) =>
+    internal static Exception TranslateFailure(int errorCode, string operation) =>
         errorCode switch
         {
+            ErrorInvalidParameter =>
+                new UsnProtocolRejectedException(
+                    $"{operation} çağrı sözleşmesini reddetti: {errorCode}",
+                    errorCode,
+                    new Win32Exception(errorCode)),
             ErrorJournalNotActive or
             ErrorJournalDeleteInProgress or
             ErrorJournalEntryDeleted or
-            ErrorInvalidParameter or
             ErrorInvalidFunction or
             ErrorNotSupported =>
                 new UsnJournalUnavailableException(
