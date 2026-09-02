@@ -8,7 +8,7 @@ namespace SmartFileLauncher.ChangeFeedService;
 
 internal sealed class ChangeFeedDrainWorker : BackgroundService
 {
-    public const string ServiceName = "OmniSpotChangeFeed";
+    public const string ServiceName = ChangeFeedServiceIdentity.ServiceName;
     public const string StoreRootSetting = "StoreRoot";
 
     private readonly ILogger<ChangeFeedDrainWorker> _logger;
