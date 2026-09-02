@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFileLauncher.UI.Tests"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFileLauncher.ChangeFeedService", "SmartFileLauncher.ChangeFeedService\SmartFileLauncher.ChangeFeedService.csproj", "{3754CAAA-1FB8-431A-BF9B-F59B089C294B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SmartFileLauncher.ChangeFeedService.Tests", "tests\SmartFileLauncher.ChangeFeedService.Tests\SmartFileLauncher.ChangeFeedService.Tests.csproj", "{8030EEC7-FCEF-461D-A3B9-18785D4DDA24}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -38,5 +40,9 @@ Global
 		{3754CAAA-1FB8-431A-BF9B-F59B089C294B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3754CAAA-1FB8-431A-BF9B-F59B089C294B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{3754CAAA-1FB8-431A-BF9B-F59B089C294B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8030EEC7-FCEF-461D-A3B9-18785D4DDA24}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8030EEC7-FCEF-461D-A3B9-18785D4DDA24}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8030EEC7-FCEF-461D-A3B9-18785D4DDA24}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8030EEC7-FCEF-461D-A3B9-18785D4DDA24}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

@@ -107,7 +107,7 @@ public sealed class ChangeFeedStoreTests
 
         var backlog = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
         Directory.CreateDirectory(
-            Path.Combine(layout.QueueDirectory, "0000000000000000002.json.tmp"));
+            Path.Combine(layout.QueueDirectory, "0000000000000000002.json"));
 
         Assert.NotNull(Record.Exception(
             () => store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot))));

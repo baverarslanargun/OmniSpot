@@ -322,6 +322,21 @@ public sealed class ChangeFeedTrustedStoreTests
         return process.ExitCode == 0 && Directory.Exists(link);
     }
 
+    [Fact]
+    public void NoPublicFactoryCanBindATrustedStoreToAnArbitraryRoot()
+    {
+        var publicTrustedFactories = typeof(ChangeFeedStoreLayout)
+            .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(method => method.Name == nameof(ChangeFeedStoreLayout.ForTrustedOwner))
+            .ToArray();
+
+        var only = Assert.Single(publicTrustedFactories);
+        var parameter = Assert.Single(only.GetParameters());
+
+        Assert.Equal("ownerSid", parameter.Name);
+        Assert.Equal(typeof(string), parameter.ParameterType);
+    }
+
     private static Dictionary<SecurityIdentifier, FileSystemRights> Rules(
         FileSystemSecurity security)
     {
