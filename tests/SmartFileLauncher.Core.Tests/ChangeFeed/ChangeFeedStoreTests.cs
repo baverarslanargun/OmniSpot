@@ -7,7 +7,7 @@ namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 
 public sealed class ChangeFeedStoreTests
 {
-    private const string OwnerSid = "S-1-5-21-1-2-3-1001";
+    private static readonly string OwnerSid = TestStoreOwner.Sid;
     private const string FirstRoot = @"C:\Kok";
     private const string SecondRoot = @"C:\Diger";
     private const ulong JournalId = 7;
@@ -397,11 +397,12 @@ public sealed class ChangeFeedStoreTests
             Path.Combine(directory.Path, "yok")));
 
         CreateStore(directory);
-        ChangeFeedStoreLayout.ForOwner(directory.Path, "S-1-5-21-1-2-3-1002").EnsureCreated();
+        Directory.CreateDirectory(
+            ChangeFeedStoreLayout.ForOwner(directory.Path, "S-1-5-21-1-2-3-1002").OwnerDirectory);
         File.WriteAllText(Path.Combine(directory.Path, "gurultu.txt"), "x");
 
         Assert.Equal(
-            new[] { OwnerSid, "S-1-5-21-1-2-3-1002" },
+            new[] { OwnerSid, "S-1-5-21-1-2-3-1002" }.Order(),
             ChangeFeedStoreLayout.EnumerateOwners(directory.Path).Order());
     }
 

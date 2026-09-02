@@ -51,6 +51,26 @@ public sealed class UsnChangeFeedStateStore
             throw new InvalidDataException("Akış durumu boş.");
         }
 
+        if (document.Roots is null)
+        {
+            throw new InvalidDataException("Akış durumu kök listesi taşımıyor.");
+        }
+
+        if (document.Roots.Any(root => root is null || root.Directories is null))
+        {
+            throw new InvalidDataException("Akış durumu eksik kök veya dizin listesi taşıyor.");
+        }
+
+        var duplicates = document.Roots
+            .GroupBy(root => root.RootPath ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(group => group.Count() > 1);
+
+        if (duplicates is not null)
+        {
+            throw new InvalidDataException(
+                $"Akış durumunda yinelenen kök var: {duplicates.Key}");
+        }
+
         try
         {
             var roots = document.Roots

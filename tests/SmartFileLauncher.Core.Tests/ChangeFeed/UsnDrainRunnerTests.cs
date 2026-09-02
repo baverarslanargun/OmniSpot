@@ -8,7 +8,7 @@ namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 
 public sealed class UsnDrainRunnerTests : IDisposable
 {
-    private const string OwnerSid = "S-1-5-21-9-9-9-1001";
+    private static readonly string OwnerSid = TestStoreOwner.Sid;
     private const ulong JournalId = 7;
     private const long BootstrapUsn = 1000;
 
