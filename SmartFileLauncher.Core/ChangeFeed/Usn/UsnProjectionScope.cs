@@ -31,6 +31,13 @@ internal sealed class UsnProjectionScope : IUsnDirectoryLookup
 
     public void Set(UsnFileReference reference, string name, UsnFileReference parentReference)
     {
+        if (!UsnDirectoryNames.IsSingleSegment(name))
+        {
+            throw new ArgumentException(
+                $"Dizin adı tek bir ad parçası olmalıdır: {name}",
+                nameof(name));
+        }
+
         if (reference.IsNone || reference == RootReference)
         {
             return;

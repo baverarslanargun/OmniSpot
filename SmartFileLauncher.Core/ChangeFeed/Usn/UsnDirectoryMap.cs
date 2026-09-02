@@ -48,6 +48,13 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
 
     public void Set(UsnFileReference reference, string name, UsnFileReference parentReference)
     {
+        if (!UsnDirectoryNames.IsSingleSegment(name))
+        {
+            throw new ArgumentException(
+                $"Dizin adı tek bir ad parçası olmalıdır: {name}",
+                nameof(name));
+        }
+
         if (reference.IsNone || reference == RootReference)
         {
             return;
@@ -114,6 +121,71 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
 
     bool IUsnDirectoryLookup.TryGetEntry(UsnFileReference reference, out UsnDirectoryEntry entry) =>
         _entries.TryGetValue(reference, out entry);
+}
+
+internal static class UsnDirectoryNames
+{
+    private static readonly char[] Separators =
+    {
+        Path.DirectorySeparatorChar,
+        Path.AltDirectorySeparatorChar,
+        Path.VolumeSeparatorChar
+    };
+
+    public static bool IsSingleSegment(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            return false;
+        }
+
+        if (name is "." or "..")
+        {
+            return false;
+        }
+
+        return name.AsSpan().IndexOfAny(Separators) < 0;
+    }
+}
+
+internal static class UsnRootScope
+{
+    public static bool TryCanonicalize(string rootPath, string candidate, out string canonical)
+    {
+        canonical = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(rootPath))
+        {
+            return false;
+        }
+
+        string resolved;
+        try
+        {
+            resolved = Path.TrimEndingDirectorySeparator(Path.GetFullPath(candidate));
+        }
+        catch (Exception failure)
+            when (failure is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+
+        var root = Path.TrimEndingDirectorySeparator(rootPath);
+
+        if (string.Equals(resolved, root, StringComparison.OrdinalIgnoreCase))
+        {
+            canonical = resolved;
+            return true;
+        }
+
+        if (!resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        canonical = resolved;
+        return true;
+    }
 }
 
 internal static class UsnPathResolver

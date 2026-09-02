@@ -26,6 +26,16 @@ public sealed class UsnChangeFeedState
         ArgumentOutOfRangeException.ThrowIfNegative(nextUsn);
         ArgumentOutOfRangeException.ThrowIfNegative(synchronizedFromUsn);
 
+        foreach (var entry in directories)
+        {
+            if (!UsnDirectoryNames.IsSingleSegment(entry.Name))
+            {
+                throw new ArgumentException(
+                    $"Dizin adı tek bir ad parçası olmalıdır: {entry.Name}",
+                    nameof(directories));
+            }
+        }
+
         RootPath = Path.TrimEndingDirectorySeparator(rootPath);
         RootIdentity = rootIdentity;
         JournalId = journalId;

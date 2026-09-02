@@ -49,16 +49,34 @@ internal static class UsnEventProjector
                 continue;
             }
 
+            if (!UsnDirectoryNames.IsSingleSegment(record.Name))
+            {
+                return Invalid();
+            }
+
             string? recordPath = null;
             if (scope.TryResolve(record.ParentFileReference, out var parentPath))
             {
-                recordPath = Path.Combine(parentPath, record.Name);
+                if (!UsnRootScope.TryCanonicalize(
+                        scope.RootPath,
+                        Path.Combine(parentPath, record.Name),
+                        out recordPath))
+                {
+                    return Invalid();
+                }
+
                 Accumulate(aggregates, record, recordPath);
             }
 
             if (record.IsDirectory)
             {
-                skippedSubtreeDirectories += UpdateDirectoryMap(context, record, recordPath);
+                var mapped = UpdateDirectoryMap(context, record, recordPath);
+                if (mapped < 0)
+                {
+                    return Invalid();
+                }
+
+                skippedSubtreeDirectories += mapped;
             }
         }
 
@@ -67,6 +85,9 @@ internal static class UsnEventProjector
             ChangeFeedGapReason.None,
             skippedSubtreeDirectories);
     }
+
+    private static UsnProjectionResult Invalid() =>
+        new(Array.Empty<ChangeFeedEvent>(), ChangeFeedGapReason.FeedStateInvalid);
 
     private static void Accumulate(
         Dictionary<UsnFileReference, Aggregate> aggregates,
@@ -157,6 +178,11 @@ internal static class UsnEventProjector
 
         foreach (var entry in subtree.Directories)
         {
+            if (!UsnDirectoryNames.IsSingleSegment(entry.Name))
+            {
+                return -1;
+            }
+
             scope.Set(entry.Reference, entry.Name, entry.ParentReference);
         }
 
