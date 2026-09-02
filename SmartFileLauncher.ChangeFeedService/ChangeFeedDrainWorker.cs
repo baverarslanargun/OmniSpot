@@ -1,4 +1,3 @@
-using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using SmartFileLauncher.Core.ChangeFeed.Store;
@@ -9,24 +8,12 @@ namespace SmartFileLauncher.ChangeFeedService;
 internal sealed class ChangeFeedDrainWorker : BackgroundService
 {
     public const string ServiceName = ChangeFeedServiceIdentity.ServiceName;
-    public const string StoreRootSetting = "StoreRoot";
 
     private readonly ILogger<ChangeFeedDrainWorker> _logger;
-    private readonly IHostApplicationLifetime _lifetime;
-    private readonly string _storeRoot;
 
-    public ChangeFeedDrainWorker(
-        ILogger<ChangeFeedDrainWorker> logger,
-        IHostApplicationLifetime lifetime,
-        IConfiguration configuration)
+    public ChangeFeedDrainWorker(ILogger<ChangeFeedDrainWorker> logger)
     {
         _logger = logger;
-        _lifetime = lifetime;
-
-        var configured = configuration[StoreRootSetting];
-        _storeRoot = string.IsNullOrWhiteSpace(configured)
-            ? ChangeFeedStoreLayout.DefaultRoot
-            : configured;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -34,23 +21,34 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
         try
         {
             await Task.Run(() => Drain(stoppingToken), stoppingToken).ConfigureAwait(false);
+            _logger.LogInformation("Boşaltma turu bitti; servis kök kabulü için açık kalıyor.");
         }
         catch (OperationCanceledException)
         {
             _logger.LogInformation("Boşaltma durdurma isteğiyle kesildi.");
         }
-        finally
+        catch (Exception failure)
         {
-            _lifetime.StopApplication();
+            _logger.LogError(
+                failure,
+                "Boşaltma turu başarısız oldu; kök kabulü etkilenmiyor.");
         }
     }
 
     private void Drain(CancellationToken cancellationToken)
     {
-        var owners = ChangeFeedStoreLayout.EnumerateOwners(_storeRoot);
+        var trustedRoot = ChangeFeedStoreLayout.DefaultTrustedRoot;
+
+        if (ChangeFeedStoreLayout.LegacyStoreExists(ChangeFeedStoreLayout.LegacyRoot))
+        {
+            _logger.LogWarning(
+                "Eski kullanıcı-yazılabilir depo bulundu ve yok sayıldı; içe aktarılmaz.");
+        }
+
+        var owners = ChangeFeedStoreLayout.EnumerateOwners(trustedRoot);
         if (owners.Count == 0)
         {
-            _logger.LogInformation("{Root} altında abone yok.", _storeRoot);
+            _logger.LogInformation("Güvenilir depoda abone yok.");
             return;
         }
 
@@ -61,20 +59,30 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
         }
     }
 
-    private void DrainOwner(string owner, CancellationToken cancellationToken)
+    internal static (UsnDrainRunner Runner, IChangeFeedStore Store) CreateRunner(
+        ChangeFeedStoreLayout layout)
     {
-        var layout = ChangeFeedStoreLayout.ForOwner(_storeRoot, owner);
+        ArgumentNullException.ThrowIfNull(layout);
 
+        var store = new FileSystemChangeFeedStore(layout);
+        var runner = new UsnDrainRunner(
+            layout,
+            store,
+            new UsnVolumeJournalReaderFactory(),
+            new UsnFileSystemIdentityProbe());
+
+        return (runner, store);
+    }
+
+    internal static ChangeFeedStoreLayout TrustedLayoutFor(string ownerSid) =>
+        ChangeFeedStoreLayout.ForTrustedOwner(ownerSid);
+
+    internal UsnDrainResult? DrainOwner(string owner, CancellationToken cancellationToken)
+    {
         UsnDrainResult result;
         try
         {
-            var runner = new UsnDrainRunner(
-                layout,
-                new FileSystemChangeFeedStore(layout),
-                new UsnVolumeJournalReaderFactory(),
-                new UsnFileSystemIdentityProbe());
-
-            result = runner.Run(cancellationToken);
+            result = CreateRunner(TrustedLayoutFor(owner)).Runner.Run(cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -83,7 +91,7 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
         catch (Exception failure)
         {
             _logger.LogError(failure, "{Owner} için boşaltma başarısız oldu.", owner);
-            return;
+            return null;
         }
 
         _logger.LogInformation(
@@ -96,5 +104,7 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
             result.EventsWritten,
             result.RootsGapped,
             result.Diagnostics ?? string.Empty);
+
+        return result;
     }
 }

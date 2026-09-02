@@ -13,6 +13,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="SmartFileLauncher.ChangeFeedService.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
     <ProjectReference Include="..\SmartFileLauncher.Core\SmartFileLauncher.Core.csproj" />
   </ItemGroup>

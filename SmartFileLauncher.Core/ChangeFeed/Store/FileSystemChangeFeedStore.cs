@@ -13,6 +13,8 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
     private const string EntrySearchPattern = "*.json";
     private const string TemporarySuffix = ".tmp";
     private const string SequenceFormat = "D19";
+    private const int ReplaceAttemptCount = 20;
+    private const int ReplaceBackoffMilliseconds = 10;
 
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -40,7 +42,7 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
 
     public ChangeFeedSubscription? ReadSubscription()
     {
-        if (!File.Exists(_layout.SubscriptionPath))
+        if (ReadSnapshot(_layout.SubscriptionPath) is not { } payload)
         {
             return null;
         }
@@ -48,9 +50,7 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         SubscriptionDocument? document;
         try
         {
-            document = JsonSerializer.Deserialize<SubscriptionDocument>(
-                File.ReadAllBytes(_layout.SubscriptionPath),
-                SerializerOptions);
+            document = JsonSerializer.Deserialize<SubscriptionDocument>(payload, SerializerOptions);
         }
         catch (JsonException failure)
         {
@@ -98,6 +98,27 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         WriteAtomic(
             _layout.SubscriptionPath,
             JsonSerializer.SerializeToUtf8Bytes(document, SerializerOptions));
+    }
+
+    public void DeleteSubscription()
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                File.Delete(_layout.SubscriptionPath);
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (Exception failure)
+                when (IsTransientSharingFailure(failure) && attempt < ReplaceAttemptCount)
+            {
+                Thread.Sleep(ReplaceBackoffMilliseconds);
+            }
+        }
     }
 
     public IReadOnlyList<ChangeFeedQueueEntry> ReadPending()
@@ -445,6 +466,35 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
     private static bool IsUnreadable(Exception failure) =>
         failure is JsonException or InvalidDataException or ArgumentException;
 
+    private static byte[]? ReadSnapshot(string path)
+    {
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                using var stream = new FileStream(
+                    path,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.ReadWrite | FileShare.Delete);
+
+                using var buffer = new MemoryStream();
+                stream.CopyTo(buffer);
+                return buffer.ToArray();
+            }
+            catch (Exception failure)
+                when (failure is FileNotFoundException or DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (Exception failure)
+                when (IsTransientSharingFailure(failure) && attempt < ReplaceAttemptCount)
+            {
+                Thread.Sleep(ReplaceBackoffMilliseconds);
+            }
+        }
+    }
+
     private static void WriteAtomic(string path, byte[] payload)
     {
         var directory = Path.GetDirectoryName(path);
@@ -453,9 +503,45 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
             Directory.CreateDirectory(directory);
         }
 
-        var temporary = path + TemporarySuffix;
-        File.WriteAllBytes(temporary, payload);
-        File.Move(temporary, path, overwrite: true);
+        var temporary = path + "." + Environment.ProcessId.ToString(CultureInfo.InvariantCulture) + TemporarySuffix;
+
+        try
+        {
+            File.WriteAllBytes(temporary, payload);
+
+            for (var attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    File.Move(temporary, path, overwrite: true);
+                    return;
+                }
+                catch (Exception failure)
+                    when (IsTransientSharingFailure(failure) && attempt < ReplaceAttemptCount)
+                {
+                    Thread.Sleep(ReplaceBackoffMilliseconds);
+                }
+            }
+        }
+        catch
+        {
+            TryDelete(temporary);
+            throw;
+        }
+    }
+
+    private static bool IsTransientSharingFailure(Exception failure) =>
+        failure is IOException or UnauthorizedAccessException;
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 
     private sealed class SubscriptionDocument

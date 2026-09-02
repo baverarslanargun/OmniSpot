@@ -6,6 +6,8 @@ public interface IChangeFeedStore
 
     void WriteSubscription(ChangeFeedSubscription subscription);
 
+    void DeleteSubscription();
+
     IReadOnlyList<ChangeFeedQueueEntry> ReadPending();
 
     ChangeFeedQueueEntry Enqueue(
