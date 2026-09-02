@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.IO;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Usn;
@@ -10,7 +9,8 @@ public sealed class UsnChangeFeedState
         UsnNodeIdentity rootIdentity,
         ulong journalId,
         long nextUsn,
-        IReadOnlyList<UsnDirectoryEntry> directories)
+        IReadOnlyList<UsnDirectoryEntry> directories,
+        long synchronizedFromUsn = 0)
     {
         if (string.IsNullOrWhiteSpace(rootPath))
         {
@@ -24,12 +24,14 @@ public sealed class UsnChangeFeedState
 
         ArgumentNullException.ThrowIfNull(directories);
         ArgumentOutOfRangeException.ThrowIfNegative(nextUsn);
+        ArgumentOutOfRangeException.ThrowIfNegative(synchronizedFromUsn);
 
         RootPath = Path.TrimEndingDirectorySeparator(rootPath);
         RootIdentity = rootIdentity;
         JournalId = journalId;
         NextUsn = nextUsn;
         Directories = directories;
+        SynchronizedFromUsn = synchronizedFromUsn;
     }
 
     public string RootPath { get; }
@@ -42,10 +44,8 @@ public sealed class UsnChangeFeedState
 
     public IReadOnlyList<UsnDirectoryEntry> Directories { get; }
 
+    public long SynchronizedFromUsn { get; }
+
     public ChangeFeedRootIdentity ToChangeFeedRootIdentity() =>
-        new(
-            string.Create(
-                CultureInfo.InvariantCulture,
-                $"ntfs-vsn:0x{RootIdentity.VolumeSerialNumber:X16}"),
-            RootIdentity.FileReference.ToString());
+        RootIdentity.ToChangeFeedRootIdentity();
 }

@@ -16,6 +16,7 @@ public sealed class UsnRootProjection
         _identityProbe = identityProbe ?? throw new ArgumentNullException(nameof(identityProbe));
         _subtreeReader = subtreeReader ?? new UsnFileSystemSubtreeReader(_identityProbe);
 
+        SynchronizedFromUsn = state.SynchronizedFromUsn;
         RootPath = state.RootPath;
         RootIdentity = state.ToChangeFeedRootIdentity();
         VolumeSerialNumber = state.RootIdentity.VolumeSerialNumber;
@@ -32,6 +33,8 @@ public sealed class UsnRootProjection
     public ChangeFeedRootIdentity RootIdentity { get; }
 
     public ulong VolumeSerialNumber { get; }
+
+    public long SynchronizedFromUsn { get; }
 
     public int LastSkippedSubtreeDirectoryCount { get; private set; }
 
@@ -60,6 +63,10 @@ public sealed class UsnRootProjection
         ArgumentNullException.ThrowIfNull(records);
         _pendingScope = null;
 
+        var visible = SynchronizedFromUsn <= 0
+            ? records
+            : records.Where(record => record.Usn >= SynchronizedFromUsn).ToArray();
+
         var scope = new UsnProjectionScope(_directories);
         var projection = UsnEventProjector.Project(
             new UsnProjectionContext(
@@ -67,7 +74,7 @@ public sealed class UsnRootProjection
                 _subtreeReader,
                 VolumeSerialNumber,
                 cancellationToken),
-            records);
+            visible);
 
         if (projection.GapReason != ChangeFeedGapReason.None)
         {
@@ -93,5 +100,6 @@ public sealed class UsnRootProjection
             new UsnNodeIdentity(VolumeSerialNumber, _directories.RootReference),
             journalId,
             nextUsn,
-            _directories.Entries.ToArray());
+            _directories.Entries.ToArray(),
+            SynchronizedFromUsn);
 }

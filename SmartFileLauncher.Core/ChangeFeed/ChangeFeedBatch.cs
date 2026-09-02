@@ -95,7 +95,9 @@ public enum ChangeFeedGapReason
     RootIdentityChanged,
     RootUnavailable,
     JournalUnavailable,
-    FeedStateInvalid
+    FeedStateInvalid,
+    DeliveryQueueOverflow,
+    NotYetSynchronized
 }
 
 public enum ChangeFeedFaultReason
