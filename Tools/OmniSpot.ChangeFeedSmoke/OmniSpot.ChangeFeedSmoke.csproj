@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>OmniSpot.ChangeFeedSmoke</AssemblyName>
+    <RootNamespace>OmniSpot.ChangeFeedSmoke</RootNamespace>
+    <IsPackable>false</IsPackable>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\SmartFileLauncher.Core\SmartFileLauncher.Core.csproj" />
+  </ItemGroup>
+</Project>

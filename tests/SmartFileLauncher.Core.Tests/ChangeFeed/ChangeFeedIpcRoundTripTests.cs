@@ -106,6 +106,31 @@ public sealed class ChangeFeedIpcRoundTripTests
     }
 
     [Fact]
+    public async Task AddRoot_ReportsUnauthorizedWhenTheCallerCannotReadThePathChain()
+    {
+        using var harness = new Harness();
+        var parent = harness.Workspace.CreateDirectory("KapaliUst");
+        var root = Directory.CreateDirectory(Path.Combine(parent, "Icerik")).FullName;
+        Deny(parent);
+
+        try
+        {
+            var response = await harness.SendAsync(
+                new ChangeFeedRequest(
+                    ChangeFeedProtocol.Version,
+                    ChangeFeedRequestKind.AddRoot,
+                    root));
+
+            Assert.Equal(ChangeFeedResponseStatus.RootUnauthorized, response.Status);
+            Assert.Empty(harness.StoredRoots());
+        }
+        finally
+        {
+            Undeny(parent);
+        }
+    }
+
+    [Fact]
     public async Task AddRoot_AcceptsARootWhoseChildIsClosedToTheCaller()
     {
         using var harness = new Harness();

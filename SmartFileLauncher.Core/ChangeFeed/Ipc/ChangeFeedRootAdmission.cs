@@ -55,6 +55,13 @@ public sealed class ChangeFeedRootAdmission
             ChangeFeedStoreSecurity.RejectRedirectedPath(canonical);
         }
         catch (ChangeFeedStoreSecurityException failure)
+            when (failure.InnerException is UnauthorizedAccessException)
+        {
+            return Reject(
+                ChangeFeedResponseStatus.RootUnauthorized,
+                $"Kök yoluna erişilemiyor: {requestedRoot}");
+        }
+        catch (ChangeFeedStoreSecurityException failure)
         {
             return Reject(ChangeFeedResponseStatus.RootUnusable, failure.Message);
         }
