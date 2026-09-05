@@ -50,14 +50,20 @@ public sealed class ChangeFeedQueueEntry
 
 public sealed class ChangeFeedRootDelivery
 {
-    public ChangeFeedRootDelivery(string rootPath, ChangeFeedBatch batch)
+    public ChangeFeedRootDelivery(
+        string rootPath,
+        ChangeFeedBatch batch,
+        ChangeFeedRootGeneration generation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
         RootPath = rootPath;
         Batch = batch ?? throw new ArgumentNullException(nameof(batch));
+        Generation = generation;
     }
 
     public string RootPath { get; }
 
     public ChangeFeedBatch Batch { get; }
+
+    public ChangeFeedRootGeneration Generation { get; }
 }

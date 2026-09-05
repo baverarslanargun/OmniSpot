@@ -40,6 +40,22 @@ public sealed class ChangeFeedBatch
             null,
             events);
 
+    private static string Shorten(string diagnostics)
+    {
+        if (diagnostics.Length <= MaximumDiagnosticsLength)
+        {
+            return diagnostics;
+        }
+
+        var cut = MaximumDiagnosticsLength;
+        if (char.IsHighSurrogate(diagnostics[cut - 1]))
+        {
+            cut--;
+        }
+
+        return diagnostics[..cut];
+    }
+
     public static ChangeFeedBatch Gap(ChangeFeedGapReason reason)
     {
         if (reason == ChangeFeedGapReason.None)
@@ -56,6 +72,8 @@ public sealed class ChangeFeedBatch
             null,
             NoEvents);
     }
+
+    public const int MaximumDiagnosticsLength = 1024;
 
     public static ChangeFeedBatch Faulted(ChangeFeedFaultReason reason, string diagnostics)
     {
@@ -75,7 +93,7 @@ public sealed class ChangeFeedBatch
             ChangeFeedStatus.Faulted,
             ChangeFeedGapReason.None,
             reason,
-            diagnostics,
+            Shorten(diagnostics),
             NoEvents);
     }
 }
@@ -97,7 +115,8 @@ public enum ChangeFeedGapReason
     JournalUnavailable,
     FeedStateInvalid,
     DeliveryQueueOverflow,
-    NotYetSynchronized
+    NotYetSynchronized,
+    EntryTooLarge
 }
 
 public enum ChangeFeedFaultReason

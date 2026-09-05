@@ -6,7 +6,13 @@ public static class ChangeFeedProtocol
 
     public const string PipeName = "OmniSpot.ChangeFeed";
 
-    public const int MaximumMessageBytes = 64 * 1024;
+    public const int MaximumRequestBytes = 64 * 1024;
+
+    public const int MaximumResponseBytes = 1024 * 1024;
+
+    public const int PipeOutboundBufferBytes = 64 * 1024;
+
+    public const int PipeInboundBufferBytes = 64 * 1024;
 
     public const int MaximumConcurrentConnections = 4;
 

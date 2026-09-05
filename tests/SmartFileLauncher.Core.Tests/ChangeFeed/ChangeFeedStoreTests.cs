@@ -14,6 +14,9 @@ public sealed class ChangeFeedStoreTests
     private const string VolumeId = "ntfs-vsn:0x000000000000ABCD";
     private const string OtherVolumeId = "ntfs-vsn:0x000000000000BEEF";
 
+    private static readonly ChangeFeedRootGeneration Generation =
+        ChangeFeedRootGeneration.New();
+
     [Fact]
     public void Subscription_RoundTripsThroughTheStore()
     {
@@ -72,13 +75,14 @@ public sealed class ChangeFeedStoreTests
     {
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory, maximumEntryCount: 1);
+        store.WriteSubscription(CreateSubscription());
 
-        store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        var overflow = store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
+        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var overflow = store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
 
         Assert.False(overflow.IsPositional);
         Assert.Equal(0, store.DiscardUncommitted(VolumeId, JournalId, 100));
-        Assert.Equal(overflow.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(overflow.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
     }
 
     [Fact]
@@ -87,12 +91,12 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        var other = store.Enqueue(OtherVolumeId, JournalId, 100, 900, Deliveries(SecondRoot));
-        var mine = store.Enqueue(VolumeId, JournalId, 100, 900, Deliveries(FirstRoot));
+        var other = store.EnqueueOne(OtherVolumeId, JournalId, 100, 900, Deliveries(SecondRoot));
+        var mine = store.EnqueueOne(VolumeId, JournalId, 100, 900, Deliveries(FirstRoot));
 
         Assert.Equal(1, store.DiscardUncommitted(VolumeId, JournalId, 100));
 
-        var survivor = Assert.Single(store.ReadPending());
+        var survivor = Assert.Single(store.ReadPending().Entries);
         Assert.Equal(other.Sequence, survivor.Sequence);
         Assert.Equal(OtherVolumeId, survivor.VolumeId);
         Assert.NotEqual(mine.Sequence, survivor.Sequence);
@@ -104,15 +108,27 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
         var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 1);
+        store.WriteSubscription(CreateSubscription());
 
-        var backlog = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var backlog = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
         Directory.CreateDirectory(
             Path.Combine(layout.QueueDirectory, "0000000000000000002.json"));
 
         Assert.NotNull(Record.Exception(
-            () => store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot))));
+            () => store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot))));
 
-        Assert.Equal(backlog.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(backlog.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
+    }
+
+    [Fact]
+    public void Subscription_RejectsMoreRootsThanTheCeilingCanRepresent()
+    {
+        var roots = Enumerable
+            .Range(0, ChangeFeedSubscription.MaximumRoots + 1)
+            .Select(index => Root(@"C:\Kok" + index, "vol-1", "node-" + index))
+            .ToArray();
+
+        Assert.Throws<ArgumentException>(() => new ChangeFeedSubscription(OwnerSid, roots));
     }
 
     [Fact]
@@ -137,13 +153,13 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        var first = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        var second = store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
+        var first = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var second = store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
 
         Assert.True(second.Sequence > first.Sequence);
         Assert.Equal(
             new[] { first.Sequence, second.Sequence },
-            store.ReadPending().Select(entry => entry.Sequence));
+            store.ReadPending().Entries.Select(entry => entry.Sequence));
     }
 
     [Fact]
@@ -152,7 +168,7 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        store.Enqueue(
+        store.EnqueueOne(
             VolumeId,
             JournalId,
             100,
@@ -169,13 +185,15 @@ public sealed class ChangeFeedStoreTests
                             @"C:\Kok\yeni ad",
                             true,
                             @"C:\Kok\eski ad")
-                    })),
+                    }),
+                    Generation),
                 new ChangeFeedRootDelivery(
                     SecondRoot,
-                    ChangeFeedBatch.Gap(ChangeFeedGapReason.RootIdentityChanged))
+                    ChangeFeedBatch.Gap(ChangeFeedGapReason.RootIdentityChanged),
+                    Generation)
             });
 
-        var entry = Assert.Single(store.ReadPending());
+        var entry = Assert.Single(store.ReadPending().Entries);
 
         Assert.Equal(JournalId, entry.JournalId);
         Assert.Equal(100, entry.FromUsn);
@@ -199,7 +217,7 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        store.Enqueue(
+        store.EnqueueOne(
             VolumeId,
             JournalId,
             100,
@@ -210,10 +228,11 @@ public sealed class ChangeFeedStoreTests
                     FirstRoot,
                     ChangeFeedBatch.Faulted(
                         ChangeFeedFaultReason.NativeProtocolRejected,
-                        "FSCTL reddedildi"))
+                        "FSCTL reddedildi"),
+                    Generation)
             });
 
-        var batch = Assert.Single(store.ReadPending()).Roots[0].Batch;
+        var batch = Assert.Single(store.ReadPending().Entries).Roots[0].Batch;
 
         Assert.Equal(ChangeFeedStatus.Faulted, batch.Status);
         Assert.Equal(ChangeFeedFaultReason.NativeProtocolRejected, batch.FaultReason);
@@ -226,12 +245,12 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        var first = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        var second = store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
+        var first = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var second = store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
 
         store.Acknowledge(first.Sequence);
 
-        Assert.Equal(second.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(second.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
     }
 
     [Fact]
@@ -240,11 +259,11 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        var first = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var first = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
         store.Acknowledge(first.Sequence);
-        Assert.Empty(store.ReadPending());
+        Assert.Empty(store.ReadPending().Entries);
 
-        var second = store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
+        var second = store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
 
         Assert.True(second.Sequence > first.Sequence);
     }
@@ -254,12 +273,13 @@ public sealed class ChangeFeedStoreTests
     {
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory, maximumEntryCount: 2);
+        store.WriteSubscription(CreateSubscription());
 
-        store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
-        var overflow = store.Enqueue(VolumeId, JournalId, 300, 400, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
+        var overflow = store.EnqueueOne(VolumeId, JournalId, 300, 400, Deliveries(FirstRoot));
 
-        Assert.Equal(overflow.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(overflow.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
         Assert.False(overflow.IsPositional);
         Assert.Equal(
             new[] { FirstRoot, SecondRoot }.Order(),
@@ -275,17 +295,123 @@ public sealed class ChangeFeedStoreTests
     public void Enqueue_ReplacesTheBacklogWhenTheByteLimitIsReached()
     {
         using var directory = new TemporaryDirectory();
-        CreateStore(directory).Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var seed = CreateStore(directory);
+        seed.WriteSubscription(CreateSubscription());
+        seed.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
 
         var overflow = CreateStore(directory, maximumTotalBytes: 16)
-            .Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
+            .EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
 
         Assert.All(
             overflow.Roots,
             root => Assert.Equal(
                 ChangeFeedGapReason.DeliveryQueueOverflow,
                 root.Batch.GapReason));
-        Assert.Equal(overflow.Sequence, Assert.Single(CreateStore(directory).ReadPending()).Sequence);
+        Assert.Equal(overflow.Sequence, Assert.Single(CreateStore(directory).ReadPending().Entries).Sequence);
+    }
+
+    [Fact]
+    public void AnOverflowWithoutASubscription_WritesNoRecoveryAtAll()
+    {
+        using var directory = new TemporaryDirectory();
+        var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
+        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 1);
+
+        var history = Enumerable
+            .Range(0, ChangeFeedSubscription.MaximumRoots + 44)
+            .SelectMany(index => Stale(@"C:\Gecmis" + index))
+            .ToArray();
+
+        Assert.Single(store.Enqueue(VolumeId, JournalId, 0, 10, history));
+
+        var overflow = store.Enqueue(VolumeId, JournalId, 10, 20, Deliveries(FirstRoot));
+
+        Assert.Empty(overflow);
+        Assert.Empty(store.ReadPending().Entries);
+    }
+
+    [Fact]
+    public void AnOverflowRecovery_CoversOnlyTheRootsTheSubscriptionStillCarries()
+    {
+        using var directory = new TemporaryDirectory();
+        var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
+        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 3);
+
+        store.WriteSubscription(new ChangeFeedSubscription(
+            OwnerSid,
+            new[] { Root(FirstRoot, "vol-1", "node-1") }));
+
+        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 200, 300, Stale(SecondRoot));
+        store.EnqueueOne(VolumeId, JournalId, 300, 400, Stale(FirstRoot));
+
+        var overflow = store.EnqueueOne(VolumeId, JournalId, 400, 500, Deliveries(FirstRoot));
+
+        Assert.Equal(new[] { FirstRoot }, overflow.Roots.Select(root => root.RootPath));
+        Assert.Equal(Generation.Value, overflow.Roots[0].Generation.Value);
+    }
+
+    [Fact]
+    public void AnOverflowRecovery_StaysWithinTheSubscriptionRootCount()
+    {
+        using var directory = new TemporaryDirectory();
+        var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
+        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 40);
+
+        store.WriteSubscription(new ChangeFeedSubscription(
+            OwnerSid,
+            new[]
+            {
+                Root(FirstRoot, "vol-1", "node-1"),
+                Root(SecondRoot, "vol-1", "node-2")
+            }));
+
+        foreach (var index in Enumerable.Range(0, 40))
+        {
+            store.EnqueueOne(
+                VolumeId,
+                JournalId,
+                index,
+                index + 1,
+                Stale(@"C:\Eski" + index));
+        }
+
+        var overflow = store.EnqueueOne(VolumeId, JournalId, 900, 901, Deliveries(FirstRoot));
+
+        Assert.True(
+            overflow.Roots.Count <= store.ReadSubscription()!.Roots.Count,
+            "Kurtarma abonelik kök sayısını aştı.");
+        Assert.Equal(new[] { FirstRoot }, overflow.Roots.Select(root => root.RootPath));
+    }
+
+    [Fact]
+    public void AMultiPartRepair_StillRespectsTheReadBudget()
+    {
+        using var directory = new TemporaryDirectory();
+        var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
+        var store = new FileSystemChangeFeedStore(
+            layout,
+            maximumEntryCount: FileSystemChangeFeedStore.DefaultMaximumEntryCount,
+            maximumTotalBytes: FileSystemChangeFeedStore.DefaultMaximumTotalBytes,
+            maximumEntryBytes: 2048);
+
+        var roots = Enumerable
+            .Range(0, 80)
+            .Select(index => Root(@"C:\Kok\" + new string('k', 60) + index, "vol-1", "node-" + index))
+            .ToArray();
+
+        store.WriteSubscription(new ChangeFeedSubscription(OwnerSid, roots));
+        File.WriteAllText(
+            Path.Combine(layout.QueueDirectory, "0000000000000000009.json"),
+            "{ bozuk");
+
+        var slice = store.ReadPending(new ChangeFeedReadBudget(2, long.MaxValue));
+
+        Assert.Equal(2, slice.Entries.Count);
+        Assert.True(slice.HasMore, "Onarım çok parçalıysa devamı bildirilmeli.");
+        Assert.True(
+            Directory.GetFiles(layout.QueueDirectory, "*.json").Length > 2,
+            "Kurulum çok parçalı bir onarım üretmeliydi.");
     }
 
     [Fact]
@@ -295,12 +421,12 @@ public sealed class ChangeFeedStoreTests
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
         var store = new FileSystemChangeFeedStore(layout);
         store.WriteSubscription(CreateSubscription());
-        store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
         File.WriteAllText(
             Path.Combine(layout.QueueDirectory, "0000000000000000009.json"),
             "{ bozuk");
 
-        var entry = Assert.Single(store.ReadPending());
+        var entry = Assert.Single(store.ReadPending().Entries);
 
         Assert.Equal(
             new[] { FirstRoot, SecondRoot },
@@ -321,7 +447,7 @@ public sealed class ChangeFeedStoreTests
             Path.Combine(layout.QueueDirectory, "0000000000000000001.json"),
             "{ bozuk");
 
-        Assert.Throws<InvalidDataException>(() => store.ReadPending());
+        Assert.Throws<InvalidDataException>(() => store.ReadPending().Entries);
     }
 
     [Fact]
@@ -330,11 +456,11 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
 
-        var committed = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
+        var committed = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(FirstRoot));
 
         Assert.Equal(1, store.DiscardUncommitted(VolumeId, JournalId, 200));
-        Assert.Equal(committed.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(committed.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
     }
 
     [Fact]
@@ -342,10 +468,10 @@ public sealed class ChangeFeedStoreTests
     {
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory);
-        var entry = store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        var entry = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
 
         Assert.Equal(0, store.DiscardUncommitted(VolumeId, 99, 500));
-        Assert.Equal(entry.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(entry.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
     }
 
     [Fact]
@@ -361,7 +487,7 @@ public sealed class ChangeFeedStoreTests
 
         Assert.Equal(0, store.DiscardUncommitted(VolumeId, JournalId, 500));
 
-        var repaired = Assert.Single(store.ReadPending());
+        var repaired = Assert.Single(store.ReadPending().Entries);
         Assert.All(
             repaired.Roots,
             root => Assert.Equal(ChangeFeedGapReason.FeedStateInvalid, root.Batch.GapReason));
@@ -373,10 +499,10 @@ public sealed class ChangeFeedStoreTests
         using var directory = new TemporaryDirectory();
         var store = CreateStore(directory, maximumEntryCount: 1);
         store.WriteSubscription(CreateSubscription());
-        store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        store.Enqueue(VolumeId, JournalId, 0, 0, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 0, 0, Deliveries(FirstRoot));
 
-        var survivor = Assert.Single(store.ReadPending());
+        var survivor = Assert.Single(store.ReadPending().Entries);
         Assert.False(survivor.IsPositional);
         Assert.All(
             survivor.Roots,
@@ -385,7 +511,7 @@ public sealed class ChangeFeedStoreTests
                 root.Batch.GapReason));
 
         Assert.Equal(0, store.DiscardUncommitted(VolumeId, 99, 0));
-        Assert.Equal(survivor.Sequence, Assert.Single(store.ReadPending()).Sequence);
+        Assert.Equal(survivor.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
     }
 
     [Fact]
@@ -432,7 +558,19 @@ public sealed class ChangeFeedStoreTests
             });
 
     private static ChangeFeedSubscribedRoot Root(string path, string volumeId, string nodeId) =>
-        new(path, new ChangeFeedRootIdentity(volumeId, nodeId));
+        new(
+            path,
+            new ChangeFeedRootIdentity(volumeId, nodeId),
+            Generation);
+
+    private static ChangeFeedRootDelivery[] Stale(string rootPath) =>
+        new[]
+        {
+            new ChangeFeedRootDelivery(
+                rootPath,
+                ChangeFeedBatch.Gap(ChangeFeedGapReason.FeedStateInvalid),
+                ChangeFeedRootGeneration.New())
+        };
 
     private static ChangeFeedRootDelivery[] Deliveries(string rootPath) =>
         new[]
@@ -445,6 +583,7 @@ public sealed class ChangeFeedStoreTests
                         ChangeFeedEventKind.Created,
                         Path.Combine(rootPath, "yeni.txt"),
                         false)
-                }))
+                }),
+                Generation)
         };
 }

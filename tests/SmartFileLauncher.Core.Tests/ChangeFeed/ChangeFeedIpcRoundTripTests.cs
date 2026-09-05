@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using SmartFileLauncher.Core.ChangeFeed;
 using SmartFileLauncher.Core.ChangeFeed.Ipc;
 using SmartFileLauncher.Core.ChangeFeed.Store;
 using SmartFileLauncher.Core.ChangeFeed.Usn;
@@ -44,6 +45,198 @@ public sealed class ChangeFeedIpcRoundTripTests
 
         Assert.Equal(ChangeFeedResponseStatus.Ok, again.Status);
         Assert.Single(harness.StoredRoots());
+    }
+
+    [Fact]
+    public async Task ConcurrentAdmissions_LoseNoRootToAReadModifyWriteRace()
+    {
+        using var harness = new Harness();
+        var roots = Enumerable
+            .Range(0, 4)
+            .Select(index => harness.Workspace.CreateDirectory($"Kok{index}"))
+            .ToArray();
+
+        for (var round = 0; round < 8; round++)
+        {
+            foreach (var root in roots)
+            {
+                await harness.SendAsync(new ChangeFeedRequest(
+                    ChangeFeedProtocol.Version,
+                    ChangeFeedRequestKind.RemoveRoot,
+                    root));
+            }
+
+            var responses = await Task.WhenAll(roots.Select(root => Task.Run(() =>
+                harness.SendAsync(new ChangeFeedRequest(
+                    ChangeFeedProtocol.Version,
+                    ChangeFeedRequestKind.AddRoot,
+                    root)))));
+
+            Assert.All(responses, response =>
+                Assert.Equal(ChangeFeedResponseStatus.Ok, response.Status));
+
+            Assert.Equal(
+                roots.Length,
+                harness.StoredRoots().Count);
+        }
+    }
+
+    [Fact]
+    public async Task RealAdmissionAddRoot_IsSerializedAgainstAContendingStore()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+        var order = new List<string>();
+
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        var blocker = Task.Run(() =>
+        {
+            using var scope = harness.OwnerStore().EnterOwnerScope();
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(5));
+            lock (order)
+            {
+                order.Add("rakip");
+            }
+        });
+
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "Rakip kapıyı tutamadı.");
+
+        var admission = Task.Run(async () =>
+        {
+            var response = await harness.SendAsync(
+                new ChangeFeedRequest(
+                    ChangeFeedProtocol.Version,
+                    ChangeFeedRequestKind.AddRoot,
+                    root));
+
+            lock (order)
+            {
+                order.Add("kabul");
+            }
+
+            return response;
+        });
+
+        var raced = await Task.WhenAny(admission, Task.Delay(TimeSpan.FromMilliseconds(400)));
+        Assert.NotSame(admission, raced);
+        Assert.False(
+            File.Exists(harness.SubscriptionPath()),
+            "Kabul yolu kapı tutulurken abonelik yazdı.");
+
+        release.Set();
+
+        var result = await admission;
+        await blocker;
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, result.Status);
+        Assert.Equal(new[] { "rakip", "kabul" }, order);
+        Assert.Single(harness.StoredRoots());
+    }
+
+    [Fact]
+    public async Task RealAdmissionRemoveRoot_IsSerializedAgainstAContendingStore()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+
+        var blocker = Task.Run(() =>
+        {
+            using var scope = harness.OwnerStore().EnterOwnerScope();
+            entered.Set();
+            release.Wait(TimeSpan.FromSeconds(5));
+        });
+
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "Rakip kapıyı tutamadı.");
+
+        var removal = Task.Run(() => harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.RemoveRoot, root)));
+
+        var raced = await Task.WhenAny(removal, Task.Delay(TimeSpan.FromMilliseconds(400)));
+        Assert.NotSame(removal, raced);
+        Assert.True(
+            File.Exists(harness.SubscriptionPath()),
+            "Kaldırma kapı tutulurken aboneliği sildi.");
+
+        release.Set();
+        await removal;
+        await blocker;
+
+        Assert.Empty(harness.StoredRoots());
+    }
+
+    [Fact]
+    public async Task AddRoot_RefusesToGrowTheSubscriptionBeyondItsRootCeiling()
+    {
+        using var harness = new Harness();
+        var full = Enumerable
+            .Range(0, ChangeFeedSubscription.MaximumRoots)
+            .Select(index => new ChangeFeedSubscribedRoot(
+                @"C:\Dolu" + index,
+                new ChangeFeedRootIdentity("vol-1", "node-" + index),
+                ChangeFeedRootGeneration.New()))
+            .ToArray();
+
+        harness.OwnerStore().WriteSubscription(
+            new ChangeFeedSubscription(CurrentSid().Value, full));
+
+        var root = harness.Workspace.CreateDirectory("Fazla");
+
+        var response = await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        Assert.Equal(ChangeFeedResponseStatus.InvalidRequest, response.Status);
+        Assert.Equal(ChangeFeedSubscription.MaximumRoots, harness.StoredRoots().Count);
+        Assert.DoesNotContain(root, harness.StoredRoots());
+    }
+
+    [Fact]
+    public async Task AddRoot_KeepsTheGenerationWhenTheSameRootIsAdmittedAgain()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+        var first = Assert.Single(harness.StoredSubscription()).Generation;
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(
+                ChangeFeedProtocol.Version,
+                ChangeFeedRequestKind.AddRoot,
+                root + Path.DirectorySeparatorChar));
+
+        Assert.False(first.IsUnknown);
+        Assert.Equal(first, Assert.Single(harness.StoredSubscription()).Generation);
+    }
+
+    [Fact]
+    public async Task AddRoot_RenewsTheGenerationAfterARealRemoval()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+        var first = Assert.Single(harness.StoredSubscription()).Generation;
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.RemoveRoot, root));
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        var second = Assert.Single(harness.StoredSubscription()).Generation;
+
+        Assert.False(second.IsUnknown);
+        Assert.NotEqual(first, second);
     }
 
     [Fact]
@@ -163,12 +356,12 @@ public sealed class ChangeFeedIpcRoundTripTests
             harness.PipeName,
             TokenImpersonationLevel.Identification);
 
-        await ChangeFeedMessageChannel.WriteAsync(
+        await ChangeFeedMessageChannel.WriteRequestAsync(
             weak,
             new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root),
             CancellationToken.None);
 
-        var response = await ChangeFeedMessageChannel.ReadAsync<ChangeFeedResponse>(
+        var response = await ChangeFeedMessageChannel.ReadResponseAsync<ChangeFeedResponse>(
             weak,
             CancellationToken.None);
 
@@ -235,7 +428,7 @@ public sealed class ChangeFeedIpcRoundTripTests
         var oversized = new ChangeFeedRequest(
             ChangeFeedProtocol.Version,
             ChangeFeedRequestKind.AddRoot,
-            new string('k', ChangeFeedProtocol.MaximumMessageBytes));
+            new string('k', ChangeFeedProtocol.MaximumRequestBytes));
 
         await Assert.ThrowsAsync<ChangeFeedProtocolException>(
             () => harness.Client.SendAsync(oversized, CancellationToken.None));
@@ -256,10 +449,10 @@ public sealed class ChangeFeedIpcRoundTripTests
             harness.PipeName,
             TokenImpersonationLevel.Impersonation);
 
-        await raw.WriteAsync(BitConverter.GetBytes(ChangeFeedProtocol.MaximumMessageBytes + 1));
+        await raw.WriteAsync(BitConverter.GetBytes(ChangeFeedProtocol.MaximumRequestBytes + 1));
         await raw.FlushAsync();
 
-        var response = await ChangeFeedMessageChannel.ReadAsync<ChangeFeedResponse>(
+        var response = await ChangeFeedMessageChannel.ReadResponseAsync<ChangeFeedResponse>(
             raw,
             CancellationToken.None);
 
@@ -1125,6 +1318,15 @@ public sealed class ChangeFeedIpcRoundTripTests
         public string OwnerDirectory() => Layout(CurrentSid().Value).OwnerDirectory;
 
         public string SubscriptionPath() => Layout(CurrentSid().Value).SubscriptionPath;
+
+        public FileSystemChangeFeedStore OwnerStore() =>
+            new(Layout(CurrentSid().Value));
+
+        public IReadOnlyList<ChangeFeedSubscribedRoot> StoredSubscription()
+        {
+            var store = new FileSystemChangeFeedStore(Layout(CurrentSid().Value));
+            return store.ReadSubscription()?.Roots ?? Array.Empty<ChangeFeedSubscribedRoot>();
+        }
 
         public IReadOnlyList<string> StoredRoots()
         {

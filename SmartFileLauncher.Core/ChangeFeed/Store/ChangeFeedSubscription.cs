@@ -4,12 +4,21 @@ namespace SmartFileLauncher.Core.ChangeFeed.Store;
 
 public sealed class ChangeFeedSubscription
 {
+    public const int MaximumRoots = 256;
+
     public ChangeFeedSubscription(
         string ownerSid,
         IReadOnlyList<ChangeFeedSubscribedRoot> roots)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(ownerSid);
         ArgumentNullException.ThrowIfNull(roots);
+
+        if (roots.Count > MaximumRoots)
+        {
+            throw new ArgumentException(
+                $"Abonelik en çok {MaximumRoots} kök taşıyabilir: {roots.Count}",
+                nameof(roots));
+        }
 
         if (roots.Count == 0)
         {
@@ -48,7 +57,10 @@ public sealed class ChangeFeedSubscription
 
 public sealed class ChangeFeedSubscribedRoot
 {
-    public ChangeFeedSubscribedRoot(string rootPath, ChangeFeedRootIdentity identity)
+    public ChangeFeedSubscribedRoot(
+        string rootPath,
+        ChangeFeedRootIdentity identity,
+        ChangeFeedRootGeneration generation)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
 
@@ -64,13 +76,21 @@ public sealed class ChangeFeedSubscribedRoot
             throw new ArgumentException("Kök kimliği boş olamaz.", nameof(identity));
         }
 
+        if (generation.IsUnknown)
+        {
+            throw new ArgumentException("Kök kuşağı boş olamaz.", nameof(generation));
+        }
+
         RootPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(rootPath));
         Identity = identity;
+        Generation = generation;
     }
 
     public string RootPath { get; }
 
     public ChangeFeedRootIdentity Identity { get; }
+
+    public ChangeFeedRootGeneration Generation { get; }
 
     public bool Contains(string path)
     {

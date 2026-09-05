@@ -2,15 +2,17 @@ namespace SmartFileLauncher.Core.ChangeFeed.Store;
 
 public interface IChangeFeedStore
 {
+    IDisposable EnterOwnerScope(CancellationToken cancellationToken = default);
+
     ChangeFeedSubscription? ReadSubscription();
 
     void WriteSubscription(ChangeFeedSubscription subscription);
 
     void DeleteSubscription();
 
-    IReadOnlyList<ChangeFeedQueueEntry> ReadPending();
+    ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null);
 
-    ChangeFeedQueueEntry Enqueue(
+    IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
         string volumeId,
         ulong journalId,
         long fromUsn,
