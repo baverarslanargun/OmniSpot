@@ -78,8 +78,7 @@ public sealed class UsnDrainRunner
 
         if (partition.Unsupported.Count > 0)
         {
-            AnnounceGap(partition.Unsupported, ChangeFeedGapReason.RootUnavailable);
-            entries++;
+            entries += AnnounceGap(partition.Unsupported, ChangeFeedGapReason.RootUnavailable);
             gapped += partition.Unsupported.Count;
             diagnostics = $"Desteklenmeyen kök: {partition.Unsupported[0].RootPath}";
         }
@@ -95,9 +94,8 @@ public sealed class UsnDrainRunner
             }
             catch (Exception failure) when (IsVolumeFailure(failure))
             {
-                AnnounceGap(group.Roots, ChangeFeedGapReason.JournalUnavailable);
+                entries += AnnounceGap(group.Roots, ChangeFeedGapReason.JournalUnavailable);
                 faulted++;
-                entries++;
                 gapped += group.Roots.Count;
                 diagnostics ??= $"{group.VolumeRoot}: {failure.Message}";
                 continue;
@@ -178,19 +176,21 @@ public sealed class UsnDrainRunner
                 continue;
             }
 
-            deliveries.Add(new ChangeFeedRootDelivery(root.Root.RootPath, root.Batch));
+            deliveries.Add(new ChangeFeedRootDelivery(
+                root.Root.RootPath,
+                root.Batch,
+                GenerationOf(roots, root.Root.RootPath)));
         }
 
         var entries = 0;
         if (deliveries.Count > 0)
         {
-            _store.Enqueue(
+            entries = _store.Enqueue(
                 VolumeIdOf(admission.States),
                 journalId,
                 cursor,
                 batch.NextUsn,
-                deliveries);
-            entries = 1;
+                deliveries).Count;
         }
 
         feed.Accept();
@@ -243,7 +243,8 @@ public sealed class UsnDrainRunner
             {
                 deliveries.Add(new ChangeFeedRootDelivery(
                     root.RootPath,
-                    ChangeFeedBatch.Gap(ChangeFeedGapReason.RootUnavailable)));
+                    ChangeFeedBatch.Gap(ChangeFeedGapReason.RootUnavailable),
+                    root.Generation));
                 continue;
             }
 
@@ -251,14 +252,16 @@ public sealed class UsnDrainRunner
             {
                 deliveries.Add(new ChangeFeedRootDelivery(
                     root.RootPath,
-                    ChangeFeedBatch.Gap(ChangeFeedGapReason.RootIdentityChanged)));
+                    ChangeFeedBatch.Gap(ChangeFeedGapReason.RootIdentityChanged),
+                    root.Generation));
                 continue;
             }
 
             states.Add(fresh);
             deliveries.Add(new ChangeFeedRootDelivery(
                 root.RootPath,
-                ChangeFeedBatch.Gap(ChangeFeedGapReason.NotYetSynchronized)));
+                ChangeFeedBatch.Gap(ChangeFeedGapReason.NotYetSynchronized),
+                root.Generation));
         }
 
         return new Admission(states, deliveries);
@@ -301,11 +304,14 @@ public sealed class UsnDrainRunner
             return new VolumeDrain(0, 0, 0, false, null);
         }
 
-        _store.Enqueue(string.Empty, descriptor.JournalId, 0, 0, admission.Deliveries);
-        return new VolumeDrain(1, 0, admission.Deliveries.Count, false, null);
+        var entries = _store
+            .Enqueue(string.Empty, descriptor.JournalId, 0, 0, admission.Deliveries)
+            .Count;
+
+        return new VolumeDrain(entries, 0, admission.Deliveries.Count, false, null);
     }
 
-    private void AnnounceGap(
+    private int AnnounceGap(
         IReadOnlyList<ChangeFeedSubscribedRoot> roots,
         ChangeFeedGapReason reason) =>
         _store.Enqueue(
@@ -316,8 +322,19 @@ public sealed class UsnDrainRunner
             roots
                 .Select(root => new ChangeFeedRootDelivery(
                     root.RootPath,
-                    ChangeFeedBatch.Gap(reason)))
-                .ToArray());
+                    ChangeFeedBatch.Gap(reason),
+                    root.Generation))
+                .ToArray()).Count;
+
+    private static ChangeFeedRootGeneration GenerationOf(
+        IReadOnlyList<ChangeFeedSubscribedRoot> roots,
+        string rootPath) =>
+        roots
+            .FirstOrDefault(root => string.Equals(
+                root.RootPath,
+                rootPath,
+                StringComparison.OrdinalIgnoreCase))
+            ?.Generation ?? ChangeFeedRootGeneration.Unknown;
 
     private static string VolumeIdOf(IReadOnlyList<UsnChangeFeedState> states) =>
         states.Count == 0

@@ -29,10 +29,10 @@ public sealed class ChangeFeedIpcTests
             ChangeFeedRequestKind.AddRoot,
             @"C:\Projeler");
 
-        await ChangeFeedMessageChannel.WriteAsync(stream, sent, CancellationToken.None);
+        await ChangeFeedMessageChannel.WriteRequestAsync(stream, sent, CancellationToken.None);
         stream.Position = 0;
 
-        var received = await ChangeFeedMessageChannel.ReadAsync<ChangeFeedRequest>(
+        var received = await ChangeFeedMessageChannel.ReadRequestAsync<ChangeFeedRequest>(
             stream,
             CancellationToken.None);
 
@@ -46,16 +46,16 @@ public sealed class ChangeFeedIpcTests
         var oversized = new ChangeFeedRequest(
             ChangeFeedProtocol.Version,
             ChangeFeedRequestKind.AddRoot,
-            new string('k', ChangeFeedProtocol.MaximumMessageBytes));
+            new string('k', ChangeFeedProtocol.MaximumRequestBytes));
 
         await Assert.ThrowsAsync<ChangeFeedProtocolException>(
-            () => ChangeFeedMessageChannel.WriteAsync(stream, oversized, CancellationToken.None));
+            () => ChangeFeedMessageChannel.WriteRequestAsync(stream, oversized, CancellationToken.None));
     }
 
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
-    [InlineData(ChangeFeedProtocol.MaximumMessageBytes + 1)]
+    [InlineData(ChangeFeedProtocol.MaximumRequestBytes + 1)]
     public async Task MessageChannel_RefusesAnInvalidLengthPrefix(int declared)
     {
         using var stream = new MemoryStream();
@@ -63,7 +63,7 @@ public sealed class ChangeFeedIpcTests
         stream.Position = 0;
 
         await Assert.ThrowsAsync<ChangeFeedProtocolException>(
-            () => ChangeFeedMessageChannel.ReadAsync<ChangeFeedRequest>(
+            () => ChangeFeedMessageChannel.ReadRequestAsync<ChangeFeedRequest>(
                 stream,
                 CancellationToken.None));
     }
@@ -77,7 +77,7 @@ public sealed class ChangeFeedIpcTests
         stream.Position = 0;
 
         var failure = await Assert.ThrowsAsync<ChangeFeedProtocolException>(
-            () => ChangeFeedMessageChannel.ReadAsync<ChangeFeedRequest>(
+            () => ChangeFeedMessageChannel.ReadRequestAsync<ChangeFeedRequest>(
                 stream,
                 CancellationToken.None));
 

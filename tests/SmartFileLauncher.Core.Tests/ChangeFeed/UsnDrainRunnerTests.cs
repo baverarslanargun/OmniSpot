@@ -31,7 +31,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         var result = CreateRunner(store, CreateReader()).Run();
 
         Assert.Equal(UsnDrainOutcome.NoSubscription, result.Outcome);
-        Assert.Empty(store.ReadPending());
+        Assert.Empty(store.ReadPending().Entries);
     }
 
     [Fact]
@@ -46,7 +46,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
         Assert.Equal(1, result.RootsGapped);
 
-        var delivery = Assert.Single(Assert.Single(store.ReadPending()).Roots);
+        var delivery = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots);
         Assert.Equal(_firstRoot.Path, delivery.RootPath);
         Assert.Equal(ChangeFeedGapReason.NotYetSynchronized, delivery.Batch.GapReason);
 
@@ -74,7 +74,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         CreateRunner(store, reader).Run();
 
-        var events = Assert.Single(Assert.Single(store.ReadPending()).Roots).Batch.Events;
+        var events = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots).Batch.Events;
         Assert.Equal(
             Path.Combine(_firstRoot.Path, "yeni.txt"),
             Assert.Single(events).FullPath);
@@ -101,7 +101,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         Assert.Equal(1, result.EntriesWritten);
         Assert.Equal(1, result.EventsWritten);
 
-        var entry = Assert.Single(store.ReadPending());
+        var entry = Assert.Single(store.ReadPending().Entries);
         Assert.Equal(BootstrapUsn, entry.FromUsn);
         Assert.Equal(2000, entry.ToUsn);
         Assert.Equal(2000, ReadState()!.NextUsn);
@@ -126,7 +126,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         var result = CreateRunner(store, reader).Run();
 
         Assert.Equal(0, result.EntriesWritten);
-        Assert.Empty(store.ReadPending());
+        Assert.Empty(store.ReadPending().Entries);
         Assert.Equal(2000, ReadState()!.NextUsn);
     }
 
@@ -139,7 +139,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         CreateRunner(store, reader).Run();
         store.Acknowledge(long.MaxValue);
 
-        var orphan = store.Enqueue(
+        var orphan = store.EnqueueOne(
             VolumeId(_firstRoot),
             JournalId,
             BootstrapUsn,
@@ -151,7 +151,8 @@ public sealed class UsnDrainRunnerTests : IDisposable
                     ChangeFeedBatch.Ok(new[]
                     {
                         new ChangeFeedEvent(ChangeFeedEventKind.Created, "yetim", false)
-                    }))
+                    }),
+                    ChangeFeedRootGeneration.New())
             });
 
         reader.Descriptor = Descriptor(nextUsn: 2000);
@@ -161,7 +162,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         Assert.DoesNotContain(
             orphan.Sequence,
-            store.ReadPending().Select(entry => entry.Sequence));
+            store.ReadPending().Entries.Select(entry => entry.Sequence));
     }
 
     [Fact]
@@ -184,7 +185,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         CreateRunner(store, reader).Run();
 
-        var roots = Assert.Single(store.ReadPending()).Roots;
+        var roots = Assert.Single(store.ReadPending().Entries).Roots;
         var healthy = roots.Single(root => root.RootPath == _firstRoot.Path);
         var missing = roots.Single(root => root.RootPath == _secondRoot.Path);
 
@@ -225,7 +226,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         Assert.Equal(1, result.VolumesFaulted);
         Assert.NotNull(result.Diagnostics);
 
-        var delivery = Assert.Single(Assert.Single(store.ReadPending()).Roots);
+        var delivery = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots);
         Assert.Equal(_firstRoot.Path, delivery.RootPath);
         Assert.Equal(ChangeFeedGapReason.JournalUnavailable, delivery.Batch.GapReason);
     }
@@ -239,7 +240,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
         var result = CreateRunner(store, CreateReader()).Run();
 
         Assert.Equal(UsnDrainOutcome.SubscriptionRejected, result.Outcome);
-        Assert.Empty(store.ReadPending());
+        Assert.Empty(store.ReadPending().Entries);
         Assert.Null(ReadState());
     }
 
@@ -253,12 +254,13 @@ public sealed class UsnDrainRunnerTests : IDisposable
             {
                 new ChangeFeedSubscribedRoot(
                     _firstRoot.Path,
-                    new ChangeFeedRootIdentity("ntfs-vsn:0x0000000000000001", "0x0000000000000002"))
+                    new ChangeFeedRootIdentity("ntfs-vsn:0x0000000000000001", "0x0000000000000002"),
+                    ChangeFeedRootGeneration.New())
             }));
 
         var result = CreateRunner(store, CreateReader()).Run();
 
-        var delivery = Assert.Single(Assert.Single(store.ReadPending()).Roots);
+        var delivery = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots);
         Assert.Equal(ChangeFeedGapReason.RootIdentityChanged, delivery.Batch.GapReason);
         Assert.Equal(1, result.RootsGapped);
         Assert.Null(ReadState());
@@ -280,7 +282,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         CreateRunner(store, reader).Run();
 
-        var delivery = Assert.Single(Assert.Single(store.ReadPending()).Roots);
+        var delivery = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots);
         Assert.Equal(ChangeFeedStatus.Ok, delivery.Batch.Status);
         Assert.Equal(
             Path.Combine(_firstRoot.Path, "gec.txt"),
@@ -296,7 +298,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         CreateRunner(store, CreateReader()).Run();
 
-        var delivery = Assert.Single(Assert.Single(store.ReadPending()).Roots);
+        var delivery = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots);
         Assert.Equal(ChangeFeedGapReason.NotYetSynchronized, delivery.Batch.GapReason);
         Assert.Equal(BootstrapUsn, Assert.Single(ReadState()!.Roots).SynchronizedFromUsn);
     }
@@ -339,6 +341,73 @@ public sealed class UsnDrainRunnerTests : IDisposable
         return identity.FileReference.Low;
     }
 
+    [Fact]
+    public void Run_LeavesTheCursorUnacceptedWhenAnyBacklogPartFailsToLand()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+
+        var before = ReadState();
+        Assert.NotNull(before);
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(BootstrapUsn + 10, 51, RootReference(_firstRoot), UsnReason.FileCreate, "yeni.txt")
+                .Build());
+
+        var failing = new FailingEnqueueStore(store);
+        try
+        {
+            CreateRunner(failing, reader).Run();
+        }
+        catch (IOException)
+        {
+        }
+
+        var after = ReadState();
+        Assert.NotNull(after);
+        Assert.Equal(before!.NextUsn, after!.NextUsn);
+        Assert.Empty(store.ReadPending().Entries);
+    }
+
+    private sealed class FailingEnqueueStore : IChangeFeedStore
+    {
+        private readonly IChangeFeedStore _inner;
+
+        public FailingEnqueueStore(IChangeFeedStore inner) => _inner = inner;
+
+        public IDisposable EnterOwnerScope(CancellationToken cancellationToken = default) =>
+            _inner.EnterOwnerScope(cancellationToken);
+
+        public ChangeFeedSubscription? ReadSubscription() => _inner.ReadSubscription();
+
+        public void WriteSubscription(ChangeFeedSubscription subscription) =>
+            _inner.WriteSubscription(subscription);
+
+        public void DeleteSubscription() => _inner.DeleteSubscription();
+
+        public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
+            _inner.ReadPending(budget);
+
+        public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
+            string volumeId,
+            ulong journalId,
+            long fromUsn,
+            long toUsn,
+            IReadOnlyList<ChangeFeedRootDelivery> roots) =>
+            throw new IOException("Kuyruk yazılamadı.");
+
+        public void Acknowledge(long sequence) => _inner.Acknowledge(sequence);
+
+        public int DiscardUncommitted(string volumeId, ulong journalId, long committedUsn) =>
+            _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
+    }
+
     private ChangeFeedStoreLayout Layout() =>
         ChangeFeedStoreLayout.ForOwner(_storeRoot.Path, OwnerSid);
 
@@ -368,7 +437,10 @@ public sealed class UsnDrainRunnerTests : IDisposable
     private ChangeFeedSubscribedRoot SubscribedRoot(string path)
     {
         Assert.True(_probe.TryReadIdentity(path, out var identity));
-        return new ChangeFeedSubscribedRoot(path, identity.ToChangeFeedRootIdentity());
+        return new ChangeFeedSubscribedRoot(
+            path,
+            identity.ToChangeFeedRootIdentity(),
+            ChangeFeedRootGeneration.New());
     }
 
     private static UsnJournalDescriptor Descriptor(long nextUsn = BootstrapUsn) =>

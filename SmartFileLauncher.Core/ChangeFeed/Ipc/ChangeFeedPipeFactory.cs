@@ -77,8 +77,8 @@ public static class ChangeFeedPipeFactory
                 openMode,
                 PipeTypeByte | PipeReadModeByte | PipeWait | PipeRejectRemoteClients,
                 ChangeFeedProtocol.MaximumPipeInstances,
-                ChangeFeedProtocol.MaximumMessageBytes,
-                ChangeFeedProtocol.MaximumMessageBytes,
+                ChangeFeedProtocol.PipeOutboundBufferBytes,
+                ChangeFeedProtocol.PipeInboundBufferBytes,
                 0,
                 ref attributes);
 

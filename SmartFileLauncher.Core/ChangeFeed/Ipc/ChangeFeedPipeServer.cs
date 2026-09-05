@@ -212,16 +212,20 @@ public sealed class ChangeFeedPipeServer
         try
         {
             var request = await ChangeFeedMessageChannel
-                .ReadAsync<ChangeFeedRequest>(pipe, deadline.Token)
+                .ReadRequestAsync<ChangeFeedRequest>(pipe, deadline.Token)
                 .ConfigureAwait(false);
 
-            response = _admission.Handle(pipe, request);
+            response = _admission.Handle(pipe, request, deadline.Token);
         }
         catch (ChangeFeedProtocolException failure)
         {
             response = ChangeFeedResponse.Failed(
                 ChangeFeedResponseStatus.InvalidRequest,
                 failure.Message);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
         }
         catch (ChangeFeedImpersonationException failure)
         {
@@ -231,7 +235,7 @@ public sealed class ChangeFeedPipeServer
         }
 
         await ChangeFeedMessageChannel
-            .WriteAsync(pipe, response, deadline.Token)
+            .WriteResponseAsync(pipe, response, deadline.Token)
             .ConfigureAwait(false);
     }
 }

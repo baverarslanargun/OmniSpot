@@ -10,7 +10,6 @@ public sealed class ChangeFeedAdmissionService
 {
     private readonly ChangeFeedRootAdmission _admission;
     private readonly Func<string, IChangeFeedStore> _storeFactory;
-    private readonly object _gate = new();
 
     public ChangeFeedAdmissionService(
         ChangeFeedRootAdmission admission,
@@ -20,7 +19,10 @@ public sealed class ChangeFeedAdmissionService
         _storeFactory = storeFactory ?? throw new ArgumentNullException(nameof(storeFactory));
     }
 
-    public ChangeFeedResponse Handle(NamedPipeServerStream pipe, ChangeFeedRequest request)
+    public ChangeFeedResponse Handle(
+        NamedPipeServerStream pipe,
+        ChangeFeedRequest request,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(pipe);
         ArgumentNullException.ThrowIfNull(request);
@@ -36,9 +38,11 @@ public sealed class ChangeFeedAdmissionService
         {
             return request.Kind switch
             {
-                ChangeFeedRequestKind.AddRoot => AddRoot(pipe, request.RootPath),
-                ChangeFeedRequestKind.RemoveRoot => RemoveRoot(pipe, request.RootPath),
-                ChangeFeedRequestKind.ListRoots => ListRoots(pipe),
+                ChangeFeedRequestKind.AddRoot =>
+                    AddRoot(pipe, request.RootPath, cancellationToken),
+                ChangeFeedRequestKind.RemoveRoot =>
+                    RemoveRoot(pipe, request.RootPath, cancellationToken),
+                ChangeFeedRequestKind.ListRoots => ListRoots(pipe, cancellationToken),
                 _ => ChangeFeedResponse.Failed(
                     ChangeFeedResponseStatus.InvalidRequest,
                     "Bilinmeyen istek türü.")
@@ -52,7 +56,10 @@ public sealed class ChangeFeedAdmissionService
         }
     }
 
-    private ChangeFeedResponse AddRoot(NamedPipeServerStream pipe, string? rootPath)
+    private ChangeFeedResponse AddRoot(
+        NamedPipeServerStream pipe,
+        string? rootPath,
+        CancellationToken cancellationToken)
     {
         var (caller, decision) = _admission.Evaluate(pipe, rootPath);
 
@@ -61,23 +68,51 @@ public sealed class ChangeFeedAdmissionService
             return ChangeFeedResponse.Failed(decision.Status, decision.Diagnostic);
         }
 
-        lock (_gate)
+        var store = _storeFactory(caller.Value);
+        using (store.EnterOwnerScope(cancellationToken))
         {
-            var store = _storeFactory(caller.Value);
+            cancellationToken.ThrowIfCancellationRequested();
             var roots = ExistingRoots(store);
 
-            var admitted = new ChangeFeedSubscribedRoot(decision.CanonicalPath!, decision.Identity);
+            var admitted = new ChangeFeedSubscribedRoot(
+                decision.CanonicalPath!,
+                decision.Identity,
+                CarryOrRenew(roots, decision.CanonicalPath!, decision.Identity));
+
             var replaced = roots
                 .Where(root => !PathsMatch(root.RootPath, admitted.RootPath))
                 .Append(admitted)
                 .ToArray();
 
+            if (replaced.Length > ChangeFeedSubscription.MaximumRoots)
+            {
+                return ChangeFeedResponse.Failed(
+                    ChangeFeedResponseStatus.InvalidRequest,
+                    $"Abonelik en çok {ChangeFeedSubscription.MaximumRoots} kök taşıyabilir.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             store.WriteSubscription(new ChangeFeedSubscription(caller.Value, replaced));
             return ChangeFeedResponse.Ok(replaced.Select(root => root.RootPath).ToArray());
         }
     }
 
-    private ChangeFeedResponse RemoveRoot(NamedPipeServerStream pipe, string? rootPath)
+    private static ChangeFeedRootGeneration CarryOrRenew(
+        IReadOnlyList<ChangeFeedSubscribedRoot> roots,
+        string canonicalPath,
+        ChangeFeedRootIdentity identity)
+    {
+        var existing = roots.FirstOrDefault(root => PathsMatch(root.RootPath, canonicalPath));
+
+        return existing is not null && existing.Identity == identity
+            ? existing.Generation
+            : ChangeFeedRootGeneration.New();
+    }
+
+    private ChangeFeedResponse RemoveRoot(
+        NamedPipeServerStream pipe,
+        string? rootPath,
+        CancellationToken cancellationToken)
     {
         var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
 
@@ -88,12 +123,15 @@ public sealed class ChangeFeedAdmissionService
                 "Kök yolu boş olamaz.");
         }
 
-        lock (_gate)
+        var store = _storeFactory(caller.Value);
+        using (store.EnterOwnerScope(cancellationToken))
         {
-            var store = _storeFactory(caller.Value);
+            cancellationToken.ThrowIfCancellationRequested();
             var remaining = ExistingRoots(store)
                 .Where(root => !PathsMatch(root.RootPath, rootPath))
                 .ToArray();
+
+            cancellationToken.ThrowIfCancellationRequested();
 
             if (remaining.Length == 0)
             {
@@ -108,13 +146,15 @@ public sealed class ChangeFeedAdmissionService
         }
     }
 
-    private ChangeFeedResponse ListRoots(NamedPipeServerStream pipe)
+    private ChangeFeedResponse ListRoots(
+        NamedPipeServerStream pipe,
+        CancellationToken cancellationToken)
     {
         var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
 
-        lock (_gate)
+        var store = _storeFactory(caller.Value);
+        using (store.EnterOwnerScope(cancellationToken))
         {
-            var store = _storeFactory(caller.Value);
             return ChangeFeedResponse.Ok(
                 ExistingRoots(store).Select(root => root.RootPath).ToArray());
         }

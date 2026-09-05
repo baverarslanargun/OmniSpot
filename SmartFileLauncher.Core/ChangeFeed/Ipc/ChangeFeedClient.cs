@@ -53,11 +53,11 @@ public sealed class ChangeFeedClient
             VerifyServerOwner(pipe);
 
             await ChangeFeedMessageChannel
-                .WriteAsync(pipe, request, deadline.Token)
+                .WriteRequestAsync(pipe, request, deadline.Token)
                 .ConfigureAwait(false);
 
             return await ChangeFeedMessageChannel
-                .ReadAsync<ChangeFeedResponse>(pipe, deadline.Token)
+                .ReadResponseAsync<ChangeFeedResponse>(pipe, deadline.Token)
                 .ConfigureAwait(false);
         }
         catch (ChangeFeedUntrustedServerException)

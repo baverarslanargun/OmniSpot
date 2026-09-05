@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.IO;
+using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -23,30 +24,50 @@ public static class ChangeFeedMessageChannel
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
         WriteIndented = false,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public static async Task WriteAsync<T>(Stream stream, T message, CancellationToken cancellationToken)
+    public static Task WriteRequestAsync<T>(Stream stream, T message, CancellationToken cancellationToken) =>
+        WriteAsync(stream, message, ChangeFeedProtocol.MaximumRequestBytes, cancellationToken);
+
+    public static Task<T> ReadRequestAsync<T>(Stream stream, CancellationToken cancellationToken) =>
+        ReadAsync<T>(stream, ChangeFeedProtocol.MaximumRequestBytes, cancellationToken);
+
+    public static Task WriteResponseAsync<T>(Stream stream, T message, CancellationToken cancellationToken) =>
+        WriteAsync(stream, message, ChangeFeedProtocol.MaximumResponseBytes, cancellationToken);
+
+    public static Task<T> ReadResponseAsync<T>(Stream stream, CancellationToken cancellationToken) =>
+        ReadAsync<T>(stream, ChangeFeedProtocol.MaximumResponseBytes, cancellationToken);
+
+    private static async Task WriteAsync<T>(
+        Stream stream,
+        T message,
+        int maximumBytes,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
         ArgumentNullException.ThrowIfNull(message);
 
         var payload = JsonSerializer.SerializeToUtf8Bytes(message, SerializerOptions);
-        if (payload.Length > ChangeFeedProtocol.MaximumMessageBytes)
+        if (payload.Length > maximumBytes)
         {
             throw new ChangeFeedProtocolException(
-                $"İleti azami boyutu aşıyor: {payload.Length} > {ChangeFeedProtocol.MaximumMessageBytes}");
+                $"İleti azami boyutu aşıyor: {payload.Length} > {maximumBytes}");
         }
 
-        var frame = new byte[ChangeFeedProtocol.LengthPrefixBytes + payload.Length];
-        BinaryPrimitives.WriteInt32LittleEndian(frame, payload.Length);
-        payload.CopyTo(frame, ChangeFeedProtocol.LengthPrefixBytes);
+        var prefix = new byte[ChangeFeedProtocol.LengthPrefixBytes];
+        BinaryPrimitives.WriteInt32LittleEndian(prefix, payload.Length);
 
-        await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(prefix, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
         await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
-    public static async Task<T> ReadAsync<T>(Stream stream, CancellationToken cancellationToken)
+    private static async Task<T> ReadAsync<T>(
+        Stream stream,
+        int maximumBytes,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
@@ -54,7 +75,7 @@ public static class ChangeFeedMessageChannel
         await ReadExactAsync(stream, prefix, cancellationToken).ConfigureAwait(false);
 
         var length = BinaryPrimitives.ReadInt32LittleEndian(prefix);
-        if (length <= 0 || length > ChangeFeedProtocol.MaximumMessageBytes)
+        if (length <= 0 || length > maximumBytes)
         {
             throw new ChangeFeedProtocolException(
                 $"İleti uzunluğu geçersiz: {length}");

@@ -79,7 +79,8 @@ public sealed class ChangeFeedServiceCompositionTests
                 {
                     new ChangeFeedSubscribedRoot(
                         AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar),
-                        new ChangeFeedRootIdentity("vol-test", "node-test"))
+                        new ChangeFeedRootIdentity("vol-test", "node-test"),
+                        ChangeFeedRootGeneration.New())
                 }));
 
             Assert.True(File.Exists(layout.SubscriptionPath));
