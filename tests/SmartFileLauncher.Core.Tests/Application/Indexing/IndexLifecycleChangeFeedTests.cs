@@ -166,6 +166,28 @@ public sealed class IndexLifecycleChangeFeedTests
     }
 
     [Fact]
+    public async Task AFailedFaultHandOver_BringsThePeriodicScanBack()
+    {
+        using var world = new World(hangOnRelease: true);
+        await world.Lifecycle.InitializeAsync();
+
+        Assert.True(
+            world.Manager.ChangeFeedGuarding,
+            "Temiz devralmadan sonra akış nöbette olmalı.");
+
+        world.BreakTheWatcher();
+        var handOver = world.Lifecycle.WatcherFaultHandOver;
+
+        Assert.NotNull(handOver);
+        await handOver!;
+
+        Assert.False(
+            world.Manager.ChangeFeedGuarding,
+            "Watcher öldü ve devir de başarısız olduysa indeksi koruyan hiçbir şey " +
+            "kalmaz; periyodik tam tarama geri gelmeli.");
+    }
+
+    [Fact]
     public async Task AGapDuringStartup_IsReconciledThroughTheRealIndex()
     {
         using var world = new World(realTarget: true, gapOnFirstPull: true);
@@ -246,6 +268,8 @@ public sealed class IndexLifecycleChangeFeedTests
 
         private readonly IndexManager _manager;
         private readonly string _root;
+
+        public IndexManager Manager => _manager;
 
         public World(
             bool withBridge = true,

@@ -358,7 +358,7 @@ public sealed class ChangeFeedIpcRoundTripTests
     }
 
     [Fact]
-    public async Task DrainAndHoldLease_AbandonsTheLeaseWhenTheFinalDrainOutlivesItsBudget()
+    public async Task DrainAndHoldLease_StillHoldsTheLeaseWhenTheDrainOutlivesItsBudget()
     {
         using var harness = new Harness(
             handoffDrainer: (_, cancellationToken) =>
@@ -376,9 +376,9 @@ public sealed class ChangeFeedIpcRoundTripTests
             LeaseSeconds: 120));
         elapsed.Stop();
 
-        Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
+        Assert.Equal(ChangeFeedResponseStatus.Ok, response.Status);
         Assert.Contains("bütçesi", response.Message);
-        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+        Assert.True(harness.OwnerStore().ReadLease().IsHeld(DateTime.UtcNow));
         Assert.True(
             elapsed.Elapsed < ChangeFeedProtocol.IoTimeout,
             $"Son boşaltma {elapsed.Elapsed.TotalSeconds:F1} saniye tuttu; IPC bütçesini aşıyor.");
@@ -392,7 +392,7 @@ public sealed class ChangeFeedIpcRoundTripTests
     }
 
     [Fact]
-    public async Task DrainAndHoldLease_DoesNotHoldTheLeaseWhenTheFinalDrainFails()
+    public async Task DrainAndHoldLease_StillHoldsTheLeaseWhenTheFinalDrainFails()
     {
         using var harness = new Harness(handoffDrainer: (_, _) => false);
 
@@ -401,9 +401,14 @@ public sealed class ChangeFeedIpcRoundTripTests
             ChangeFeedRequestKind.DrainAndHoldLease,
             LeaseSeconds: 120));
 
-        Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
+        Assert.Equal(ChangeFeedResponseStatus.Ok, response.Status);
+        Assert.Contains("devir eksik", response.Message);
         Assert.Equal(1, harness.HandoffDrainCount);
-        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+        Assert.True(
+            harness.OwnerStore().ReadLease().IsHeld(DateTime.UtcNow),
+            "Kirayı reddetmek toparlanmayı imkânsız kılıyor: boşluk kaydını yalnız " +
+            "kirayı alan taraf tüketebilir, tüketilmeyen boşluk her turda yeniden " +
+            "duyurulur. Kira verilir, eksiklik yanıtta bildirilir.");
     }
 
     [Fact]

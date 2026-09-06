@@ -81,7 +81,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
     }
 
     [Fact]
-    public void AHeldLease_StopsTheDrainBeforeTheJournalIsOpened()
+    public void AHeldLease_StillReadsTheJournalButDeliversNothing()
     {
         var store = CreateStore();
         Subscribe(store, _firstRoot.Path);
@@ -96,13 +96,14 @@ public sealed class UsnDrainRunnerTests : IDisposable
             new FakeUsnSubtreeReader()).Run();
 
         Assert.Equal(UsnDrainOutcome.LeaseHeld, result.Outcome);
-        Assert.Equal(0, factory.OpenCount);
+        Assert.Equal(1, factory.OpenCount);
         Assert.Empty(store.ReadPending().Entries);
-        Assert.Null(ReadState());
+        Assert.Equal(0, result.EntriesWritten);
+        Assert.Equal(0, result.EventsWritten);
     }
 
     [Fact]
-    public void AHeldLease_LeavesTheCursorWhereItWas()
+    public void AHeldLease_KeepsTheCursorMovingSoItCannotFallOutOfTheJournal()
     {
         var store = CreateStore();
         Subscribe(store, _firstRoot.Path);
@@ -123,7 +124,98 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         Assert.Equal(UsnDrainOutcome.LeaseHeld, result.Outcome);
         Assert.Empty(store.ReadPending().Entries);
+        Assert.True(
+            ReadState()!.NextUsn > before!.NextUsn,
+            "Kira tutulurken imleç donarsa uzun bir oturumda günlük imlecin üstünden " +
+            "geçer ve servis yerini tamamen kaybeder. Teslimat kapalı, konum takibi açık: " +
+            $"önce {before.NextUsn}, sonra {ReadState()!.NextUsn}");
+    }
+
+    [Fact]
+    public void ASecurityChangeWhileFollowing_DoesNotFreezeTheCursor()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+        var before = ReadState();
+
+        store.HoldLease(TimeSpan.FromMinutes(5));
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.SecurityChange, "rapor.txt")
+                .Build());
+
+        CreateRunner(store, reader).Run();
+
+        Assert.True(
+            ReadState()!.NextUsn > before!.NextUsn,
+            "Güvenlik değişimi takip turunu durdurursa aynı kayıtlar her turda yeniden " +
+            "okunur, bayrak kalıcı olarak doğru kalır ve imleç bir daha asla ilerlemez: " +
+            $"önce {before.NextUsn}, sonra {ReadState()!.NextUsn}");
+    }
+
+    [Fact]
+    public void ASecurityChangeWhileFollowing_IsHeldBackUntilTheServiceDrainsAgain()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+        var stamp = store.ReadSecurityStamp();
+
+        store.HoldLease(TimeSpan.FromMinutes(5));
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.SecurityChange, "rapor.txt")
+                .Build());
+
+        CreateRunner(store, reader).Run();
+
+        Assert.True(
+            store.ReadSecurityStamp().Matches(stamp),
+            "Damga kirayı tutanın devam jetonunu bağlıyor; takip turunda tazelenirse " +
+            "açılıştaki devralma çekişi tam ortasından kopar.");
+        Assert.True(ReadState()!.PendingSecurityChange);
+
+        store.ReleaseLease();
+        reader.Descriptor = Descriptor(nextUsn: 2500);
+        reader.EnqueuePage(2500, new UsnRecordBuffer().Build());
+        CreateRunner(store, reader).Run();
+
+        Assert.False(
+            store.ReadSecurityStamp().Matches(stamp),
+            "Takipte görülen güvenlik değişimi düşürülemez; servis teslimata döndüğü " +
+            "ilk turda bildirilmeli.");
+        Assert.False(ReadState()!.PendingSecurityChange);
+    }
+
+    [Fact]
+    public void AFollowRoundThatCannotAdvance_SaysWhy()
+    {
+        var inner = CreateStore();
+        Subscribe(inner, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(inner, reader).Run();
+        inner.Acknowledge(long.MaxValue);
+        var before = ReadState();
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(2000, new UsnRecordBuffer().Build());
+
+        var result = CreateRunner(new LeaseLostAfterFirstReadStore(inner), reader).Run();
+
         Assert.Equal(before!.NextUsn, ReadState()!.NextUsn);
+        Assert.False(
+            string.IsNullOrWhiteSpace(result.Diagnostics),
+            "İlerlemeyen bir takip turu sessiz kalırsa donma günlükte hiç görünmez; " +
+            "imlecin 43 dakika donduğu tam olarak bu yüzden fark edilmedi.");
     }
 
     [Fact]
@@ -761,6 +853,56 @@ public sealed class UsnDrainRunnerTests : IDisposable
             _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
     }
 
+    private sealed class LeaseLostAfterFirstReadStore : IChangeFeedStore
+    {
+        private readonly IChangeFeedStore _inner;
+        private int _reads;
+
+        public LeaseLostAfterFirstReadStore(IChangeFeedStore inner) => _inner = inner;
+
+        public ChangeFeedWatcherLease ReadLease() =>
+            ++_reads == 1
+                ? ChangeFeedWatcherLease.Until(DateTime.UtcNow, TimeSpan.FromMinutes(5))
+                : ChangeFeedWatcherLease.None;
+
+        public IDisposable EnterOwnerScope(CancellationToken cancellationToken = default) =>
+            _inner.EnterOwnerScope(cancellationToken);
+
+        public ChangeFeedSubscription? ReadSubscription() => _inner.ReadSubscription();
+
+        public void WriteSubscription(ChangeFeedSubscription subscription) =>
+            _inner.WriteSubscription(subscription);
+
+        public void DeleteSubscription() => _inner.DeleteSubscription();
+
+        public ChangeFeedQueueEpoch ReadEpoch() => _inner.ReadEpoch();
+
+        public ChangeFeedSecurityStamp ReadSecurityStamp() => _inner.ReadSecurityStamp();
+
+        public void NoteSecurityChange() => _inner.NoteSecurityChange();
+
+        public ChangeFeedWatcherLease HoldLease(TimeSpan duration) =>
+            _inner.HoldLease(duration);
+
+        public void ReleaseLease() => _inner.ReleaseLease();
+
+        public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
+            _inner.ReadPending(budget);
+
+        public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
+            string volumeId,
+            ulong journalId,
+            long fromUsn,
+            long toUsn,
+            IReadOnlyList<ChangeFeedRootDelivery> roots) =>
+            _inner.Enqueue(volumeId, journalId, fromUsn, toUsn, roots);
+
+        public void Acknowledge(long sequence) => _inner.Acknowledge(sequence);
+
+        public int DiscardUncommitted(string volumeId, ulong journalId, long committedUsn) =>
+            _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
+    }
+
     private sealed class FailingEnqueueStore : IChangeFeedStore
     {
         private readonly IChangeFeedStore _inner;
@@ -809,6 +951,87 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
     private ChangeFeedStoreLayout Layout() =>
         ChangeFeedStoreLayout.ForOwner(_storeRoot.Path, OwnerSid);
+
+    [Fact]
+    public void Run_ReanchorsTheCursorWhenTheJournalMovedPastIt()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+
+        Assert.Equal(BootstrapUsn, ReadState()!.NextUsn);
+
+        reader.Descriptor = new UsnJournalDescriptor(
+            JournalId, 5000, 6000, 0, long.MaxValue, 0, 0);
+
+        var wrapped = CreateRunner(store, reader).Run();
+
+        Assert.Equal(1, wrapped.RootsGapped);
+        Assert.Contains("CursorOutsideJournal", wrapped.Diagnostics);
+        Assert.Equal(
+            6000,
+            ReadState()!.NextUsn);
+
+        var afterwards = CreateRunner(store, reader).Run();
+
+        Assert.Equal(0, afterwards.RootsGapped);
+        Assert.Null(afterwards.Diagnostics);
+    }
+
+    [Fact]
+    public void Run_KeepsTheEarliestCursorWhenOnlySomeRootsWereReanchored()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path, _secondRoot.Path);
+
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+
+        Assert.Equal(BootstrapUsn, ReadState()!.NextUsn);
+
+        reader.Descriptor = new UsnJournalDescriptor(
+            JournalId, 5000, 6000, 0, long.MaxValue, 0, 0);
+        CreateRunner(store, reader).Run();
+
+        Assert.Equal(6000, ReadState()!.NextUsn);
+        Assert.Equal(2, ReadState()!.Roots.Count);
+    }
+
+    [Fact]
+    public void AHeldLease_KeepsTheServiceInsideTheJournalWindow()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+
+        store.HoldLease(TimeSpan.FromMinutes(5));
+
+        for (var step = 0; step < 4; step++)
+        {
+            var first = BootstrapUsn + (step * 500);
+            reader.Descriptor = new UsnJournalDescriptor(
+                JournalId, first, first + 500, 0, long.MaxValue, 0, 0);
+            reader.EnqueuePage(first + 500, new UsnRecordBuffer().Build());
+            CreateRunner(store, reader).Run();
+        }
+
+        Assert.Empty(store.ReadPending().Entries);
+
+        store.ReleaseLease();
+        reader.EnqueuePage(
+            reader.Descriptor.NextUsn,
+            new UsnRecordBuffer().Build());
+        var result = CreateRunner(store, reader).Run();
+
+        Assert.Equal(
+            0,
+            result.RootsGapped);
+        Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
+    }
 
     private FileSystemChangeFeedStore CreateStore() => new(Layout());
 

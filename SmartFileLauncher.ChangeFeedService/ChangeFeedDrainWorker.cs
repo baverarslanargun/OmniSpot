@@ -160,6 +160,27 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
             owner);
     }
 
+    internal static bool IsNotableFollow(UsnDrainResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+
+        return result.Outcome == UsnDrainOutcome.LeaseHeld &&
+            !string.IsNullOrWhiteSpace(result.Diagnostics);
+    }
+
+    internal void LogFollowedRound(string owner, UsnDrainResult result)
+    {
+        if (!IsNotableFollow(result))
+        {
+            return;
+        }
+
+        _logger.LogInformation(
+            "{Owner}: kira başkasında; teslimat yok, konum takip ediliyor. {Diagnostics}",
+            owner,
+            result.Diagnostics);
+    }
+
     internal void LogRound(string owner, UsnDrainResult result)
     {
         _logger.Log(
@@ -196,6 +217,7 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
 
         if (IsPassive(result.Outcome))
         {
+            LogFollowedRound(owner, result);
             return result;
         }
 

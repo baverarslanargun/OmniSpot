@@ -202,34 +202,34 @@ public sealed class ChangeFeedAdmissionService
                 cancellationToken);
             budget.CancelAfter(_handoffDrainBudget);
 
-            bool drained;
+            string? partial;
             try
             {
-                drained = _handoffDrainer(caller.Value, budget.Token);
+                partial = _handoffDrainer(caller.Value, budget.Token)
+                    ? null
+                    : budget.IsCancellationRequested
+                        ? "Son boşaltma bütçesi aşıldı"
+                        : "Son boşaltma tamamlanamadı";
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
             }
-            catch
+            catch (Exception failure)
             {
-                drained = false;
-            }
-
-            if (!drained)
-            {
-                return ChangeFeedResponse.Failed(
-                    ChangeFeedResponseStatus.Unavailable,
-                    budget.IsCancellationRequested
-                        ? "Son boşaltma bütçesi aşıldı; watcher kirası alınmadı."
-                        : "Son boşaltma tamamlanamadı; watcher kirası alınmadı.");
+                partial = budget.IsCancellationRequested
+                    ? "Son boşaltma bütçesi aşıldı"
+                    : $"Son boşaltma hata verdi: {failure.Message}";
             }
 
             cancellationToken.ThrowIfCancellationRequested();
             store.HoldLease(TimeSpan.FromSeconds(leaseSeconds));
-        }
 
-        return ChangeFeedResponse.Ok();
+            return ChangeFeedResponse.Granted(
+                partial is null
+                    ? null
+                    : partial + "; kira yine de verildi, devir eksik.");
+        }
     }
 
     private static ChangeFeedRootGeneration CarryOrRenew(

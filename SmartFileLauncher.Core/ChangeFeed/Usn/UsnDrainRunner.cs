@@ -51,10 +51,7 @@ public sealed class UsnDrainRunner
 
     public UsnDrainResult Run(CancellationToken cancellationToken = default)
     {
-        if (_store.ReadLease().IsHeld(_utcNow()))
-        {
-            return new UsnDrainResult(UsnDrainOutcome.LeaseHeld, 0, 0, 0, 0, 0);
-        }
+        var following = _store.ReadLease().IsHeld(_utcNow());
 
         var subscription = _store.ReadSubscription();
         if (subscription is null)
@@ -87,7 +84,7 @@ public sealed class UsnDrainRunner
         var leaseArrived = false;
         string? diagnostics = null;
 
-        if (partition.Unsupported.Count > 0)
+        if (partition.Unsupported.Count > 0 && !following)
         {
             var announced = AnnounceGap(
                 partition.Unsupported,
@@ -111,10 +108,23 @@ public sealed class UsnDrainRunner
             VolumeDrain result;
             try
             {
-                result = DrainVolume(group.VolumeRoot, group.Roots, cancellationToken);
+                result = DrainVolume(
+                    group.VolumeRoot,
+                    group.Roots,
+                    following,
+                    cancellationToken);
             }
             catch (Exception failure) when (IsVolumeFailure(failure))
             {
+                faulted++;
+                gapped += group.Roots.Count;
+                diagnostics ??= $"{group.VolumeRoot}: {failure.Message}";
+
+                if (following)
+                {
+                    continue;
+                }
+
                 var announced = AnnounceGap(
                     group.Roots,
                     ChangeFeedGapReason.JournalUnavailable,
@@ -127,9 +137,6 @@ public sealed class UsnDrainRunner
                 }
 
                 entries += announced.Value;
-                faulted++;
-                gapped += group.Roots.Count;
-                diagnostics ??= $"{group.VolumeRoot}: {failure.Message}";
                 continue;
             }
 
@@ -143,7 +150,7 @@ public sealed class UsnDrainRunner
             entries += result.Entries;
             events += result.Events;
             gapped += result.Gapped;
-            diagnostics ??= result.Diagnostics;
+            diagnostics = Combine(diagnostics, result.Diagnostics);
 
             if (result.Faulted)
             {
@@ -153,9 +160,11 @@ public sealed class UsnDrainRunner
 
         var outcome = leaseArrived
             ? UsnDrainOutcome.LeasePreempted
-            : drained == 0 && faulted > 0
-                ? UsnDrainOutcome.Faulted
-                : UsnDrainOutcome.Completed;
+            : following
+                ? UsnDrainOutcome.LeaseHeld
+                : drained == 0 && faulted > 0
+                    ? UsnDrainOutcome.Faulted
+                    : UsnDrainOutcome.Completed;
 
         return new UsnDrainResult(outcome, drained, faulted, entries, events, gapped, diagnostics);
     }
@@ -163,6 +172,7 @@ public sealed class UsnDrainRunner
     private VolumeDrain DrainVolume(
         string volumeRoot,
         IReadOnlyList<ChangeFeedSubscribedRoot> roots,
+        bool following,
         CancellationToken cancellationToken)
     {
         var stateStore = new UsnChangeFeedStateStore(StatePath(volumeRoot));
@@ -188,7 +198,9 @@ public sealed class UsnDrainRunner
         var admission = Admit(state, roots, descriptor, cancellationToken);
         if (admission.States.Count == 0)
         {
-            return Announce(admission, descriptor, state, cancellationToken);
+            return following
+                ? new VolumeDrain(0, 0, 0, false, "takip durdu: hiçbir kök kabul edilmedi")
+                : Announce(admission, descriptor, state, cancellationToken);
         }
 
         var journalId = descriptor.JournalId;
@@ -217,6 +229,19 @@ public sealed class UsnDrainRunner
 
         var securityChanged = projections.Any(projection => projection.LastSecurityChanged);
         var rebuilt = RebuildGappedRoots(feed, batch, descriptor, cancellationToken);
+        var anchorage = DescribeAnchorage(cursor, descriptor, GappedRoots(batch).Count, rebuilt.Count);
+
+        if (following)
+        {
+            return Follow(
+                feed,
+                batch,
+                rebuilt,
+                stateStore,
+                journalId,
+                securityChanged || (state?.PendingSecurityChange ?? false),
+                anchorage);
+        }
 
         using var commitScope = _store.EnterOwnerScope(cancellationToken);
 
@@ -227,7 +252,7 @@ public sealed class UsnDrainRunner
 
         Discard(state);
 
-        if (securityChanged)
+        if (securityChanged || (state?.PendingSecurityChange ?? false))
         {
             _store.NoteSecurityChange();
         }
@@ -252,7 +277,7 @@ public sealed class UsnDrainRunner
         }
         else
         {
-            stateStore.Write(journalId, feed.AcceptedUsn, resynchronized);
+            stateStore.Write(journalId, CursorOf(resynchronized), resynchronized);
         }
 
         return new VolumeDrain(
@@ -260,7 +285,41 @@ public sealed class UsnDrainRunner
             deliveries.Sum(delivery => delivery.Batch.Events.Count),
             deliveries.Count(delivery => delivery.Batch.HasGap),
             batch.Roots.Any(root => root.Batch.IsFaulted),
-            batch.Roots.FirstOrDefault(root => root.Batch.IsFaulted)?.Batch.Diagnostics);
+            Combine(
+                batch.Roots.FirstOrDefault(root => root.Batch.IsFaulted)?.Batch.Diagnostics,
+                Combine(DescribeGaps(deliveries), anchorage)));
+    }
+
+    private VolumeDrain Follow(
+        UsnVolumeChangeFeed feed,
+        UsnVolumeBatch batch,
+        IReadOnlyDictionary<string, UsnChangeFeedState> rebuilt,
+        UsnChangeFeedStateStore stateStore,
+        ulong journalId,
+        bool securityPending,
+        string? anchorage)
+    {
+        if (!_store.ReadLease().IsHeld(_utcNow()))
+        {
+            return new VolumeDrain(0, 0, 0, false, Combine("takip durdu: kira düştü", anchorage));
+        }
+
+        feed.Accept();
+
+        var followed = Capture(feed, batch, rebuilt);
+        if (followed.Count == 0)
+        {
+            return new VolumeDrain(
+                0,
+                0,
+                0,
+                false,
+                Combine("takip durdu: kök durumu yakalanamadı", anchorage));
+        }
+
+        stateStore.Write(journalId, CursorOf(followed), followed, securityPending);
+
+        return new VolumeDrain(0, 0, 0, false, anchorage);
     }
 
     private Admission Admit(
@@ -412,7 +471,12 @@ public sealed class UsnDrainRunner
             .Enqueue(string.Empty, descriptor.JournalId, 0, 0, admission.Deliveries)
             .Count;
 
-        return new VolumeDrain(entries, 0, admission.Deliveries.Count, false, null);
+        return new VolumeDrain(
+            entries,
+            0,
+            admission.Deliveries.Count,
+            false,
+            DescribeGaps(admission.Deliveries));
     }
 
     private int? AnnounceGap(
@@ -554,6 +618,67 @@ public sealed class UsnDrainRunner
     private sealed record Admission(
         IReadOnlyList<UsnChangeFeedState> States,
         IReadOnlyList<ChangeFeedRootDelivery> Deliveries);
+
+    internal static string? DescribeGaps(IReadOnlyList<ChangeFeedRootDelivery> deliveries)
+    {
+        ArgumentNullException.ThrowIfNull(deliveries);
+
+        var groups = deliveries
+            .Where(delivery => delivery.Batch.HasGap)
+            .GroupBy(delivery => delivery.Batch.GapReason)
+            .OrderByDescending(group => group.Count())
+            .ThenBy(group => group.Key)
+            .ToArray();
+
+        if (groups.Length == 0)
+        {
+            return null;
+        }
+
+        return "boşluk: " + string.Join(
+            ", ",
+            groups.Select(group =>
+                $"{group.Key}x{group.Count()} ({group.First().RootPath})"));
+    }
+
+    internal static long CursorOf(IReadOnlyList<UsnChangeFeedState> states)
+    {
+        ArgumentNullException.ThrowIfNull(states);
+
+        if (states.Count == 0)
+        {
+            throw new ArgumentException("En az bir kök durumu gerekiyor.", nameof(states));
+        }
+
+        return states.Min(state => state.NextUsn);
+    }
+
+    internal static string? DescribeAnchorage(
+        long cursor,
+        UsnJournalDescriptor descriptor,
+        int gappedRoots,
+        int reanchoredRoots)
+    {
+        if (gappedRoots == 0)
+        {
+            return null;
+        }
+
+        return $"imleç={cursor} pencere=[{descriptor.FirstUsn}..{descriptor.NextUsn}] " +
+            $"yeniden-çapa={reanchoredRoots}/{gappedRoots}";
+    }
+
+    internal static string? Combine(string? primary, string? secondary)
+    {
+        if (string.IsNullOrWhiteSpace(primary))
+        {
+            return string.IsNullOrWhiteSpace(secondary) ? null : secondary;
+        }
+
+        return string.IsNullOrWhiteSpace(secondary)
+            ? primary
+            : $"{primary} | {secondary}";
+    }
 
     private sealed record VolumeDrain(
         int Entries,

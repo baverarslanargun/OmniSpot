@@ -60,6 +60,31 @@ public sealed class ChangeFeedIndexBridgeTests
     }
 
     [Fact]
+    public async Task APartialHandOver_KeepsTheLeaseButClaimsNoCoverage()
+    {
+        var channel = new ScriptedChannel();
+        channel.Respond(Ok());
+        channel.Respond(ChangeFeedResponse.Granted(
+            "Son boşaltma bütçesi aşıldı; kira yine de verildi, devir eksik."));
+        channel.Respond(Delivered(
+            Page(Root, Event(ChangeFeedEventKind.Created, @"C:\Kok.txt")),
+            receipt: "makbuz"));
+        channel.Respond(Ok());
+
+        var result = await Bridge(channel).AdoptAsync(new[] { Root }, default);
+
+        Assert.True(
+            result.LeaseHeld,
+            "Kira alınmalı; toparlanmanın tek yolu kuyruğu tüketmek.");
+        Assert.Equal(ChangeFeedAdoptionStatus.Incomplete, result.Status);
+        Assert.Contains("devir eksik", result.Diagnostics);
+        Assert.False(
+            IndexLifecycleService.CoversDowntime(result, 1),
+            "Eksik devir kapsam saymaz: servisin okuyamadığı aralık ne boşluk " +
+            "kaydına ne de watcher'a düştü; o açılışta tam tarama yapılmalı.");
+    }
+
+    [Fact]
     public async Task Adoption_AppliesEveryEventBeforeItAcknowledges()
     {
         var channel = new ScriptedChannel();

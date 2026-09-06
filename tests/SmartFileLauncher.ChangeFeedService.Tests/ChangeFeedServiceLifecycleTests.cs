@@ -244,4 +244,28 @@ public sealed class ChangeFeedServiceLifecycleTests
             }
         }
     }
+
+    [Fact]
+    public void AQuietFollowRound_StaysOutOfTheLog()
+    {
+        Assert.False(ChangeFeedDrainWorker.IsNotableFollow(
+            new UsnDrainResult(UsnDrainOutcome.LeaseHeld, 0, 0, 0, 0, 0)));
+    }
+
+    [Fact]
+    public void AFollowRoundThatReanchored_IsWorthALine()
+    {
+        Assert.True(ChangeFeedDrainWorker.IsNotableFollow(
+            new UsnDrainResult(
+                UsnDrainOutcome.LeaseHeld, 0, 0, 0, 0, 0,
+                "imleç=40 pencere=[100..200] yeniden-çapa=6/6")));
+    }
+
+    [Fact]
+    public void ARealDrain_IsNeverLoggedAsAFollowRound()
+    {
+        Assert.False(ChangeFeedDrainWorker.IsNotableFollow(
+            new UsnDrainResult(
+                UsnDrainOutcome.Completed, 1, 0, 1, 3, 0, "bir tanı")));
+    }
 }
