@@ -60,6 +60,47 @@ public sealed class ChangeFeedServiceCompositionTests
     }
 
     [Fact]
+    public void ProductionAdmissionService_IsWiredForDeliveryWithRealParts()
+    {
+        var service = ChangeFeedAdmissionWorker.CreateAdmissionService();
+
+        var ledger = FieldValue<ChangeFeedDeliveryLedger>(
+            typeof(ChangeFeedAdmissionService),
+            "_ledger",
+            service);
+
+        Assert.NotNull(ledger);
+
+        var authorizerFactory = FieldValue<Func<string, ChangeFeedPathAuthorizer>>(
+            typeof(ChangeFeedAdmissionService),
+            "_authorizerFactory",
+            service);
+
+        Assert.Equal(
+            typeof(ChangeFeedPathAuthorizer).GetMethod(
+                nameof(ChangeFeedPathAuthorizer.ForCurrentCaller)),
+            authorizerFactory.Method);
+
+        var budget = FieldValue<long>(
+            typeof(ChangeFeedAdmissionService),
+            "_pageBudget",
+            service);
+
+        Assert.Equal(ChangeFeedProtocol.MaximumResponseBytes, budget);
+
+        var handoffDrainer = FieldValue<Func<string, CancellationToken, bool>>(
+            typeof(ChangeFeedAdmissionService),
+            "_handoffDrainer",
+            service);
+
+        Assert.Equal(
+            typeof(ChangeFeedDrainWorker).GetMethod(
+                nameof(ChangeFeedDrainWorker.DrainToCurrentBoundary),
+                BindingFlags.Static | BindingFlags.NonPublic),
+            handoffDrainer.Method);
+    }
+
+    [Fact]
     public void DrainRunner_ReadsTheSubscriptionFromTheSameLayoutItWasGiven()
     {
         var root = Path.Combine(

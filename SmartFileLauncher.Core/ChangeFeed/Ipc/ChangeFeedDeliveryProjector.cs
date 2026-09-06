@@ -31,74 +31,130 @@ public sealed class ChangeFeedDeliveryProjector
 
     public ChangeFeedDeliveryPage Project(
         ChangeFeedSubscription? subscription,
-        ChangeFeedQueueSlice slice)
+        ChangeFeedQueueSlice slice) =>
+        Walk(subscription, slice, ChangeFeedDeliveryPosition.Start).Page;
+
+    public ChangeFeedDeliveryWalk Walk(
+        ChangeFeedSubscription? subscription,
+        ChangeFeedQueueSlice slice,
+        ChangeFeedDeliveryPosition start,
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(slice);
+        ArgumentNullException.ThrowIfNull(start);
 
         var builder = new PageBuilder(_measure, _pageBudget);
         var completed = 0L;
-        var truncated = false;
+        ChangeFeedDeliveryPosition? next = null;
 
         foreach (var entry in slice.Entries)
         {
-            if (truncated)
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (entry.Sequence < start.Sequence)
             {
-                break;
+                completed = entry.Sequence;
+                continue;
             }
 
-            var entryComplete = true;
+            var resuming = entry.Sequence == start.Sequence;
+            var stopped = false;
 
-            foreach (var delivery in ChangeFeedGenerationFilter.Current(subscription, entry))
+            for (var index = resuming ? start.DeliveryIndex : 0;
+                 index < entry.Roots.Count;
+                 index++)
             {
-                if (Project(delivery, builder))
+                var delivery = entry.Roots[index];
+
+                if (subscription is null ||
+                    !ChangeFeedGenerationFilter.IsCurrent(subscription, delivery))
                 {
                     continue;
                 }
 
-                entryComplete = false;
-                truncated = true;
+                var firstEvent = resuming && index == start.DeliveryIndex ? start.EventIndex : 0;
+
+                if (Project(delivery, firstEvent, builder) is { } unconsumed)
+                {
+                    next = new ChangeFeedDeliveryPosition(entry.Sequence, index, unconsumed);
+                    stopped = true;
+                    break;
+                }
+            }
+
+            if (stopped)
+            {
                 break;
             }
 
-            if (entryComplete)
+            completed = entry.Sequence;
+        }
+
+        var hasMore = next is not null || slice.HasMore || completed < LastSequence(slice);
+
+        return new ChangeFeedDeliveryWalk(
+            new ChangeFeedDeliveryPage(builder.Build(), completed, hasMore),
+            next);
+    }
+
+    private int? Project(ChangeFeedRootDelivery delivery, int firstEvent, PageBuilder builder)
+    {
+        var events = delivery.Batch.Events;
+        var authorizer = _authorizerFactory(delivery.RootPath);
+        RootBuilder? root = null;
+
+        if (firstEvent == 0)
+        {
+            var producerGap = delivery.Batch.HasGap
+                ? delivery.Batch.GapReason
+                : ChangeFeedGapReason.None;
+
+            var producerFault = delivery.Batch.IsFaulted
+                ? delivery.Batch.FaultReason
+                : ChangeFeedFaultReason.None;
+
+            if (producerGap != ChangeFeedGapReason.None ||
+                producerFault != ChangeFeedFaultReason.None)
             {
-                completed = entry.Sequence;
+                if (!builder.TryOpen(delivery.RootPath, out var opened))
+                {
+                    return 0;
+                }
+
+                root = opened;
+                root.Note(producerGap, producerFault, withheld: false);
             }
         }
 
-        var hasMore = truncated || slice.HasMore || completed < LastSequence(slice);
-        return new ChangeFeedDeliveryPage(builder.Build(), completed, hasMore);
-    }
-
-    private bool Project(ChangeFeedRootDelivery delivery, PageBuilder builder)
-    {
-        var producerGap = delivery.Batch.HasGap
-            ? delivery.Batch.GapReason
-            : ChangeFeedGapReason.None;
-
-        var producerFault = delivery.Batch.IsFaulted
-            ? delivery.Batch.FaultReason
-            : ChangeFeedFaultReason.None;
-
-        var projection = _authorizerFactory(delivery.RootPath).Project(delivery.Batch.Events);
-
-        if (projection.Events.Count == 0 &&
-            !projection.Withheld &&
-            producerGap == ChangeFeedGapReason.None &&
-            producerFault == ChangeFeedFaultReason.None)
+        for (var index = firstEvent; index < events.Count; index++)
         {
-            return true;
-        }
+            var projection = authorizer.Project(events[index]);
 
-        if (!builder.TryOpen(delivery.RootPath, out var root))
-        {
-            return false;
-        }
+            if (projection.Published is null && !projection.Withheld)
+            {
+                continue;
+            }
 
-        root.Note(producerGap, producerFault, projection.Withheld);
+            if (root is null)
+            {
+                if (!builder.TryOpen(delivery.RootPath, out var opened))
+                {
+                    return index;
+                }
 
-        foreach (var change in projection.Events)
-        {
+                root = opened;
+            }
+
+            if (projection.Withheld)
+            {
+                root.Note(ChangeFeedGapReason.None, ChangeFeedFaultReason.None, withheld: true);
+            }
+
+            if (projection.Published is not { } change)
+            {
+                continue;
+            }
+
             var cost = _measure.Event(change);
 
             if (cost > root.Capacity)
@@ -109,11 +165,11 @@ public sealed class ChangeFeedDeliveryProjector
 
             if (!builder.TryAdd(root, change, cost))
             {
-                return false;
+                return index;
             }
         }
 
-        return true;
+        return null;
     }
 
     private static long LastSequence(ChangeFeedQueueSlice slice) =>

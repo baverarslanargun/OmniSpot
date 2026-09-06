@@ -10,6 +10,18 @@ public interface IChangeFeedStore
 
     void DeleteSubscription();
 
+    ChangeFeedQueueEpoch ReadEpoch();
+
+    ChangeFeedSecurityStamp ReadSecurityStamp();
+
+    void NoteSecurityChange();
+
+    ChangeFeedWatcherLease ReadLease();
+
+    ChangeFeedWatcherLease HoldLease(TimeSpan duration);
+
+    void ReleaseLease();
+
     ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null);
 
     IReadOnlyList<ChangeFeedQueueEntry> Enqueue(

@@ -77,6 +77,57 @@ public sealed class FileWatcherServiceTests
     }
 
     [Fact]
+    public async Task PausedDispatch_KeepsEventsUntilDispatchIsResumed()
+    {
+        var watcher = new FileWatcherService(debounceMs: 1);
+        var delivered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        watcher.OnChange += _ => delivered.TrySetResult();
+
+        try
+        {
+            watcher.Start(dispatchPaused: true);
+            watcher.TriggerEvent(new FileChangeEvent
+            {
+                ChangeType = FileChangeType.Created,
+                FullPath = "captured-while-paused"
+            });
+
+            await Task.Delay(150);
+            Assert.False(delivered.Task.IsCompleted);
+            Assert.True(watcher.IsDispatchPaused);
+
+            watcher.ResumeDispatch();
+
+            await delivered.Task.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.False(watcher.IsDispatchPaused);
+        }
+        finally
+        {
+            watcher.Dispose();
+        }
+    }
+
+    [Fact]
+    public void FatalWatcherFault_DisablesTheWatcher()
+    {
+        var watcher = new FileWatcherService(debounceMs: 1);
+        try
+        {
+            watcher.Start();
+
+            watcher.TriggerFault(new IOException("Test: watcher fault."));
+
+            Assert.False(watcher.IsWatching);
+        }
+        finally
+        {
+            watcher.Dispose();
+        }
+    }
+
+    [Fact]
     public async Task Dispose_FromOnChange_DoesNotWaitOnItsOwnProcessor()
     {
         var watcher = new FileWatcherService(debounceMs: 1);
@@ -334,6 +385,49 @@ public sealed class FileWatcherServiceTests
         {
             watcher.Dispose();
         }
+    }
+
+    [Fact]
+    public void AWatcherError_StopsTheWatcherAndReportsAFault()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("kok");
+        using var watcher = new FileWatcherService(debounceMs: 1);
+        var faults = 0;
+        var errors = 0;
+        watcher.OnFault += _ => Interlocked.Increment(ref faults);
+        watcher.OnError += _ => Interlocked.Increment(ref errors);
+
+        watcher.Watch(root);
+        watcher.Start();
+        Assert.True(watcher.IsWatching);
+
+        watcher.SimulateWatcherError(new IOException("Test: izleme sürdürülemiyor."));
+
+        Assert.False(
+            watcher.IsWatching,
+            "FileSystemWatcher.Error sonrası izleyici çalışıyor sayılmamalı.");
+        Assert.Equal(1, Volatile.Read(ref faults));
+        Assert.Equal(1, Volatile.Read(ref errors));
+    }
+
+    [Fact]
+    public async Task AWatcherError_StopsDeliveringLaterChanges()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("kok");
+        using var watcher = new FileWatcherService(debounceMs: 1);
+        var delivered = 0;
+        watcher.OnChange += _ => Interlocked.Increment(ref delivered);
+
+        watcher.Watch(root);
+        watcher.Start();
+        watcher.SimulateWatcherError(new IOException("Test: izleme sürdürülemiyor."));
+
+        File.WriteAllText(Path.Combine(root, "sonra.txt"), "içerik");
+        await Task.Delay(400);
+
+        Assert.Equal(0, Volatile.Read(ref delivered));
     }
 
     [Fact]

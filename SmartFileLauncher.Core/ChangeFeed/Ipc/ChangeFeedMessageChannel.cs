@@ -28,6 +28,13 @@ public static class ChangeFeedMessageChannel
         Converters = { new JsonStringEnumConverter() }
     };
 
+    public static long MeasureResponse<T>(T message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        return JsonSerializer.SerializeToUtf8Bytes(message, SerializerOptions).Length;
+    }
+
     public static Task WriteRequestAsync<T>(Stream stream, T message, CancellationToken cancellationToken) =>
         WriteAsync(stream, message, ChangeFeedProtocol.MaximumRequestBytes, cancellationToken);
 

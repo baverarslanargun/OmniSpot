@@ -39,6 +39,21 @@ public sealed class ChangeFeedRootPage
         PayloadTooLarge;
 }
 
+public sealed class ChangeFeedDeliveryWalk
+{
+    public ChangeFeedDeliveryWalk(
+        ChangeFeedDeliveryPage page,
+        ChangeFeedDeliveryPosition? nextPosition)
+    {
+        Page = page ?? throw new ArgumentNullException(nameof(page));
+        NextPosition = nextPosition;
+    }
+
+    public ChangeFeedDeliveryPage Page { get; }
+
+    public ChangeFeedDeliveryPosition? NextPosition { get; }
+}
+
 public sealed class ChangeFeedDeliveryPage
 {
     public ChangeFeedDeliveryPage(

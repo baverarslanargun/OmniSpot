@@ -146,6 +146,7 @@ public partial class MainWindow : Window {
 
         _indexLifecycle.ProgressChanged += HandleIndexProgress;
         _indexLifecycle.Error += HandleIndexError;
+        _indexLifecycle.Notice += HandleIndexNotice;
         _indexLifecycle.FileChanged += HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged += HandleReconciliationProgress;
         _indexLifecycle.ReconciliationStateChanged += HandleReconciliationStateChanged;
@@ -315,6 +316,7 @@ public partial class MainWindow : Window {
         ShutdownDiagnostics();
         _indexLifecycle.ProgressChanged -= HandleIndexProgress;
         _indexLifecycle.Error -= HandleIndexError;
+        _indexLifecycle.Notice -= HandleIndexNotice;
         _indexLifecycle.FileChanged -= HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged -= HandleReconciliationProgress;
         _indexLifecycle.ReconciliationStateChanged -= HandleReconciliationStateChanged;
@@ -394,6 +396,10 @@ public partial class MainWindow : Window {
 
     private void HandleIndexError(string error) {
         Log($"⚠️ {error}");
+    }
+
+    private void HandleIndexNotice(string notice) {
+        Log($"🔗 {notice}");
     }
 
     private void HandleReconciliationProgress(

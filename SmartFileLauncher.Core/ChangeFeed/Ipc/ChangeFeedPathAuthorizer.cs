@@ -23,6 +23,10 @@ public sealed class ChangeFeedRootProjection
     public bool Withheld { get; }
 }
 
+public readonly record struct ChangeFeedEventProjection(
+    ChangeFeedEvent? Published,
+    bool Withheld);
+
 public sealed class ChangeFeedPathAuthorizer
 {
     private readonly string _rootPath;
@@ -51,61 +55,68 @@ public sealed class ChangeFeedPathAuthorizer
 
         foreach (var change in events)
         {
-            var next = Publishable(change.FullPath);
+            var projection = Project(change);
 
-            if (change.Kind != ChangeFeedEventKind.Renamed)
+            if (projection.Published is { } visible)
             {
-                if (next && change.OldPath is null)
-                {
-                    published.Add(new ChangeFeedEvent(
-                        change.Kind,
-                        change.FullPath,
-                        change.IsDirectory));
-                }
-                else
-                {
-                    withheld = true;
-                }
-
-                continue;
+                published.Add(visible);
             }
 
-            var oldVisible = change.OldPath is not null && Publishable(change.OldPath);
-
-            if (next && oldVisible)
-            {
-                published.Add(new ChangeFeedEvent(
-                    ChangeFeedEventKind.Renamed,
-                    change.FullPath,
-                    change.IsDirectory,
-                    change.OldPath));
-                continue;
-            }
-
-            if (oldVisible)
-            {
-                published.Add(new ChangeFeedEvent(
-                    ChangeFeedEventKind.Deleted,
-                    change.OldPath!,
-                    change.IsDirectory));
-                withheld = true;
-                continue;
-            }
-
-            if (next)
-            {
-                published.Add(new ChangeFeedEvent(
-                    ChangeFeedEventKind.Created,
-                    change.FullPath,
-                    change.IsDirectory));
-                withheld = true;
-                continue;
-            }
-
-            withheld = true;
+            withheld |= projection.Withheld;
         }
 
         return new ChangeFeedRootProjection(_rootPath, published, withheld);
+    }
+
+    public ChangeFeedEventProjection Project(ChangeFeedEvent change)
+    {
+        ArgumentNullException.ThrowIfNull(change);
+
+        var next = Publishable(change.FullPath);
+
+        if (change.Kind != ChangeFeedEventKind.Renamed)
+        {
+            return next && change.OldPath is null
+                ? new ChangeFeedEventProjection(
+                    new ChangeFeedEvent(change.Kind, change.FullPath, change.IsDirectory),
+                    false)
+                : new ChangeFeedEventProjection(null, true);
+        }
+
+        var oldVisible = change.OldPath is not null && Publishable(change.OldPath);
+
+        if (next && oldVisible)
+        {
+            return new ChangeFeedEventProjection(
+                new ChangeFeedEvent(
+                    ChangeFeedEventKind.Renamed,
+                    change.FullPath,
+                    change.IsDirectory,
+                    change.OldPath),
+                false);
+        }
+
+        if (oldVisible)
+        {
+            return new ChangeFeedEventProjection(
+                new ChangeFeedEvent(
+                    ChangeFeedEventKind.Deleted,
+                    change.OldPath!,
+                    change.IsDirectory),
+                true);
+        }
+
+        if (next)
+        {
+            return new ChangeFeedEventProjection(
+                new ChangeFeedEvent(
+                    ChangeFeedEventKind.Created,
+                    change.FullPath,
+                    change.IsDirectory),
+                true);
+        }
+
+        return new ChangeFeedEventProjection(null, true);
     }
 
     private bool Publishable(string path)

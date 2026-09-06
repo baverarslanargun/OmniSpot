@@ -10,13 +10,34 @@ public sealed class ChangeFeedAdmissionService
 {
     private readonly ChangeFeedRootAdmission _admission;
     private readonly Func<string, IChangeFeedStore> _storeFactory;
+    private readonly ChangeFeedDeliveryLedger _ledger;
+    private readonly Func<string, ChangeFeedPathAuthorizer> _authorizerFactory;
+    private readonly Func<string, CancellationToken, bool>? _handoffDrainer;
+    private readonly TimeSpan _handoffDrainBudget;
+    private readonly long _pageBudget;
 
     public ChangeFeedAdmissionService(
         ChangeFeedRootAdmission admission,
-        Func<string, IChangeFeedStore> storeFactory)
+        Func<string, IChangeFeedStore> storeFactory,
+        ChangeFeedDeliveryLedger? ledger = null,
+        Func<string, ChangeFeedPathAuthorizer>? authorizerFactory = null,
+        long pageBudget = ChangeFeedProtocol.MaximumResponseBytes,
+        Func<string, CancellationToken, bool>? handoffDrainer = null,
+        TimeSpan? handoffDrainBudget = null)
     {
         _admission = admission ?? throw new ArgumentNullException(nameof(admission));
         _storeFactory = storeFactory ?? throw new ArgumentNullException(nameof(storeFactory));
+        _ledger = ledger ?? new ChangeFeedDeliveryLedger();
+        _authorizerFactory = authorizerFactory ?? ChangeFeedPathAuthorizer.ForCurrentCaller;
+        _pageBudget = pageBudget;
+        _handoffDrainer = handoffDrainer;
+        _handoffDrainBudget = handoffDrainBudget ?? ChangeFeedProtocol.HandoffDrainBudget;
+
+        if (_handoffDrainBudget <= TimeSpan.Zero ||
+            _handoffDrainBudget >= ChangeFeedProtocol.IoTimeout)
+        {
+            throw new ArgumentOutOfRangeException(nameof(handoffDrainBudget));
+        }
     }
 
     public ChangeFeedResponse Handle(
@@ -43,6 +64,15 @@ public sealed class ChangeFeedAdmissionService
                 ChangeFeedRequestKind.RemoveRoot =>
                     RemoveRoot(pipe, request.RootPath, cancellationToken),
                 ChangeFeedRequestKind.ListRoots => ListRoots(pipe, cancellationToken),
+                ChangeFeedRequestKind.Pull => Pull(pipe, request.Token, cancellationToken),
+                ChangeFeedRequestKind.Acknowledge =>
+                    Acknowledge(pipe, request.Token, cancellationToken),
+                ChangeFeedRequestKind.HoldLease =>
+                    HoldLease(pipe, request.LeaseSeconds, cancellationToken),
+                ChangeFeedRequestKind.DrainAndHoldLease =>
+                    DrainAndHoldLease(pipe, request.LeaseSeconds, cancellationToken),
+                ChangeFeedRequestKind.ReleaseLease =>
+                    ReleaseLease(pipe, cancellationToken),
                 _ => ChangeFeedResponse.Failed(
                     ChangeFeedResponseStatus.InvalidRequest,
                     "Bilinmeyen istek türü.")
@@ -95,6 +125,111 @@ public sealed class ChangeFeedAdmissionService
             store.WriteSubscription(new ChangeFeedSubscription(caller.Value, replaced));
             return ChangeFeedResponse.Ok(replaced.Select(root => root.RootPath).ToArray());
         }
+    }
+
+    private ChangeFeedResponse HoldLease(
+        NamedPipeServerStream pipe,
+        int leaseSeconds,
+        CancellationToken cancellationToken)
+    {
+        var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
+
+        if (leaseSeconds <= 0 ||
+            leaseSeconds > ChangeFeedWatcherLease.MaximumDuration.TotalSeconds)
+        {
+            return ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.InvalidRequest,
+                "Kira süresi pozitif ve en çok " +
+                $"{ChangeFeedWatcherLease.MaximumDuration.TotalSeconds:F0} saniye olmalıdır.");
+        }
+
+        var store = _storeFactory(caller.Value);
+        using (store.EnterOwnerScope(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            store.HoldLease(TimeSpan.FromSeconds(leaseSeconds));
+        }
+
+        return ChangeFeedResponse.Ok();
+    }
+
+    private ChangeFeedResponse ReleaseLease(
+        NamedPipeServerStream pipe,
+        CancellationToken cancellationToken)
+    {
+        var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
+
+        var store = _storeFactory(caller.Value);
+        using (store.EnterOwnerScope(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            store.ReleaseLease();
+        }
+
+        return ChangeFeedResponse.Ok();
+    }
+
+    private ChangeFeedResponse DrainAndHoldLease(
+        NamedPipeServerStream pipe,
+        int leaseSeconds,
+        CancellationToken cancellationToken)
+    {
+        var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
+
+        if (leaseSeconds <= 0 ||
+            leaseSeconds > ChangeFeedWatcherLease.MaximumDuration.TotalSeconds)
+        {
+            return ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.InvalidRequest,
+                "Kira süresi pozitif ve en çok " +
+                $"{ChangeFeedWatcherLease.MaximumDuration.TotalSeconds:F0} saniye olmalıdır.");
+        }
+
+        if (_handoffDrainer is null)
+        {
+            return ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.Unavailable,
+                "Son boşaltma kullanılamıyor; watcher kirası alınmadı.");
+        }
+
+        var store = _storeFactory(caller.Value);
+        using (store.EnterOwnerScope(cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            store.ReleaseLease();
+
+            using var budget = CancellationTokenSource.CreateLinkedTokenSource(
+                cancellationToken);
+            budget.CancelAfter(_handoffDrainBudget);
+
+            bool drained;
+            try
+            {
+                drained = _handoffDrainer(caller.Value, budget.Token);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                drained = false;
+            }
+
+            if (!drained)
+            {
+                return ChangeFeedResponse.Failed(
+                    ChangeFeedResponseStatus.Unavailable,
+                    budget.IsCancellationRequested
+                        ? "Son boşaltma bütçesi aşıldı; watcher kirası alınmadı."
+                        : "Son boşaltma tamamlanamadı; watcher kirası alınmadı.");
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            store.HoldLease(TimeSpan.FromSeconds(leaseSeconds));
+        }
+
+        return ChangeFeedResponse.Ok();
     }
 
     private static ChangeFeedRootGeneration CarryOrRenew(
@@ -159,6 +294,77 @@ public sealed class ChangeFeedAdmissionService
                 ExistingRoots(store).Select(root => root.RootPath).ToArray());
         }
     }
+
+    private ChangeFeedResponse Pull(
+        NamedPipeServerStream pipe,
+        string? token,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
+            var result = Session(pipe, caller).Pull(caller.Value, token, cancellationToken);
+
+            return result.Status == ChangeFeedDeliveryStatus.Ok
+                ? ChangeFeedResponse.Delivered(ChangeFeedDeliveryContract.ToWire(
+                    result.Page!,
+                    result.Continuation,
+                    result.Receipt))
+                : Refused(result.Status);
+        }
+        catch (ChangeFeedImpersonationException)
+        {
+            return ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.RootUnauthorized,
+                "Çağıranın kimliği doğrulanamadı; teslim yapılmadı.");
+        }
+    }
+
+    private ChangeFeedResponse Acknowledge(
+        NamedPipeServerStream pipe,
+        string? token,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
+            var status = Session(pipe, caller)
+                .Acknowledge(caller.Value, token, cancellationToken);
+
+            return status == ChangeFeedDeliveryStatus.Ok
+                ? ChangeFeedResponse.Ok()
+                : Refused(status);
+        }
+        catch (ChangeFeedImpersonationException)
+        {
+            return ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.RootUnauthorized,
+                "Çağıranın kimliği doğrulanamadı; hiçbir kayıt silinmedi.");
+        }
+    }
+
+    private ChangeFeedPullSession Session(NamedPipeServerStream pipe, SecurityIdentifier caller) =>
+        new(
+            _storeFactory(caller.Value),
+            _ledger,
+            (subscription, slice, start, cancellationToken) =>
+                ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid =>
+                    sid.Equals(caller)
+                        ? new ChangeFeedDeliveryProjector(
+                            _authorizerFactory,
+                            new ChangeFeedWireMeasure(),
+                            _pageBudget).Walk(subscription, slice, start, cancellationToken)
+                        : throw new ChangeFeedImpersonationException(
+                            "Çağıranın kimliği istek ortasında değişti.")));
+
+    private static ChangeFeedResponse Refused(ChangeFeedDeliveryStatus status) =>
+        status == ChangeFeedDeliveryStatus.NoSubscription
+            ? ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.NoSubscription,
+                "Bu sahip için abonelik kaydı yok.")
+            : ChangeFeedResponse.Failed(
+                ChangeFeedResponseStatus.StaleChain,
+                "Teslim zinciri geçersiz; baştan çekilmelidir.");
 
     private static IReadOnlyList<ChangeFeedSubscribedRoot> ExistingRoots(IChangeFeedStore store) =>
         store.ReadSubscription()?.Roots ?? Array.Empty<ChangeFeedSubscribedRoot>();

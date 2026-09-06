@@ -174,6 +174,450 @@ public sealed class ChangeFeedIpcRoundTripTests
     }
 
     [Fact]
+    public async Task Client_RefusesAServerSpeakingAnotherProtocolVersion()
+    {
+        var pipeName = "OmniSpot.Test." + Guid.NewGuid().ToString("N");
+        using var server = ChangeFeedPipeFactory.Create(pipeName, true, CurrentSid());
+
+        var serving = Task.Run(async () =>
+        {
+            await server.WaitForConnectionAsync(CancellationToken.None);
+            await ChangeFeedMessageChannel.ReadRequestAsync<ChangeFeedRequest>(
+                server,
+                CancellationToken.None);
+            await ChangeFeedMessageChannel.WriteResponseAsync(
+                server,
+                new ChangeFeedResponse(
+                    ChangeFeedProtocol.Version - 1,
+                    ChangeFeedResponseStatus.Ok),
+                CancellationToken.None);
+        });
+
+        var client = new ChangeFeedClient(
+            pipeName,
+            new HashSet<SecurityIdentifier> { CurrentSid() });
+
+        var response = await client.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.ListRoots),
+            CancellationToken.None);
+
+        await serving;
+
+        Assert.Equal(ChangeFeedResponseStatus.VersionMismatch, response.Status);
+    }
+
+    [Fact]
+    public async Task Pull_DeliversTheBacklogOverTheRealPipeAndAckDrainsIt()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+        var file = System.IO.Path.Combine(root, "yeni.txt");
+        File.WriteAllText(file, "x");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        Enqueue(harness, file);
+
+        var pull = await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Pull));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, pull.Status);
+        var page = Assert.Single(pull.Delivery!.Roots);
+        Assert.Equal(file, Assert.Single(page.Events).Path);
+        Assert.NotNull(pull.Delivery.Receipt);
+        Assert.Null(pull.Delivery.Continuation);
+        Assert.NotEmpty(harness.OwnerStore().ReadPending().Entries);
+
+        var ack = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.Acknowledge,
+            null,
+            pull.Delivery.Receipt));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, ack.Status);
+        Assert.Empty(harness.OwnerStore().ReadPending().Entries);
+    }
+
+    [Fact]
+    public async Task PullAndAck_TouchTheTrustedStoreOutsideTheCallersToken()
+    {
+        using var harness = new Harness(guardImpersonation: true);
+        var root = harness.Workspace.CreateDirectory("Projeler");
+        var file = System.IO.Path.Combine(root, "yeni.txt");
+        File.WriteAllText(file, "x");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        Enqueue(harness, file);
+
+        var pull = await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Pull));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, pull.Status);
+        Assert.Equal(file, Assert.Single(Assert.Single(pull.Delivery!.Roots).Events).Path);
+
+        var ack = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.Acknowledge,
+            null,
+            pull.Delivery.Receipt));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, ack.Status);
+        Assert.Empty(harness.OwnerStore().ReadPending().Entries);
+        Assert.Empty(harness.ImpersonatedStoreCalls);
+    }
+
+    [Fact]
+    public async Task Pull_DecidesPathAccessUnderTheCallersOwnToken()
+    {
+        using var harness = new Harness(guardImpersonation: true, observeAuthorization: true);
+        var root = harness.Workspace.CreateDirectory("Projeler");
+        var child = Directory.CreateDirectory(System.IO.Path.Combine(root, "Alt")).FullName;
+        var file = System.IO.Path.Combine(child, "yeni.txt");
+        File.WriteAllText(file, "x");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        Enqueue(harness, file);
+
+        var pull = await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Pull));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, pull.Status);
+        Assert.Equal(file, Assert.Single(Assert.Single(pull.Delivery!.Roots).Events).Path);
+        Assert.Empty(harness.ImpersonatedStoreCalls);
+
+        var decisions = harness.AuthorizationContexts;
+        Assert.NotEmpty(decisions);
+        Assert.All(decisions, sid => Assert.Equal(CurrentSid(), sid));
+    }
+
+    [Theory]
+    [InlineData(ChangeFeedRequestKind.AddRoot)]
+    [InlineData(ChangeFeedRequestKind.RemoveRoot)]
+    [InlineData(ChangeFeedRequestKind.ListRoots)]
+    [InlineData(ChangeFeedRequestKind.Pull)]
+    [InlineData(ChangeFeedRequestKind.Acknowledge)]
+    [InlineData(ChangeFeedRequestKind.HoldLease)]
+    [InlineData(ChangeFeedRequestKind.DrainAndHoldLease)]
+    [InlineData(ChangeFeedRequestKind.ReleaseLease)]
+    public async Task EveryRequestKind_ReachesAHandler(ChangeFeedRequestKind kind)
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+
+        var response = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            kind,
+            root,
+            new string('a', ChangeFeedDeliveryLedger.TokenLength),
+            LeaseSeconds: 60));
+
+        Assert.NotEqual("Bilinmeyen istek türü.", response.Message);
+        Assert.Null(harness.ListenerFault);
+    }
+
+    [Fact]
+    public async Task HoldLease_LandsInTheCallersOwnStoreAndReleaseClearsIt()
+    {
+        using var harness = new Harness();
+
+        var held = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.HoldLease,
+            LeaseSeconds: 120));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, held.Status);
+        Assert.True(harness.OwnerStore().ReadLease().IsHeld(DateTime.UtcNow));
+
+        var released = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.ReleaseLease));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, released.Status);
+        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+        Assert.Null(harness.ListenerFault);
+    }
+
+    [Fact]
+    public async Task DrainAndHoldLease_HoldsTheLeaseOnlyAfterTheFinalDrainSucceeds()
+    {
+        using var harness = new Harness(handoffDrainer: (_, _) => true);
+
+        var response = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.DrainAndHoldLease,
+            LeaseSeconds: 120));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, response.Status);
+        Assert.Equal(1, harness.HandoffDrainCount);
+        Assert.True(harness.OwnerStore().ReadLease().IsHeld(DateTime.UtcNow));
+    }
+
+    [Fact]
+    public async Task DrainAndHoldLease_AbandonsTheLeaseWhenTheFinalDrainOutlivesItsBudget()
+    {
+        using var harness = new Harness(
+            handoffDrainer: (_, cancellationToken) =>
+            {
+                cancellationToken.WaitHandle.WaitOne(TimeSpan.FromSeconds(30));
+                cancellationToken.ThrowIfCancellationRequested();
+                return true;
+            },
+            handoffDrainBudget: TimeSpan.FromMilliseconds(200));
+
+        var elapsed = System.Diagnostics.Stopwatch.StartNew();
+        var response = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.DrainAndHoldLease,
+            LeaseSeconds: 120));
+        elapsed.Stop();
+
+        Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
+        Assert.Contains("bütçesi", response.Message);
+        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+        Assert.True(
+            elapsed.Elapsed < ChangeFeedProtocol.IoTimeout,
+            $"Son boşaltma {elapsed.Elapsed.TotalSeconds:F1} saniye tuttu; IPC bütçesini aşıyor.");
+    }
+
+    [Fact]
+    public void TheHandoffDrainBudget_StaysInsideTheIoBudget()
+    {
+        Assert.True(ChangeFeedProtocol.HandoffDrainBudget > TimeSpan.Zero);
+        Assert.True(ChangeFeedProtocol.HandoffDrainBudget < ChangeFeedProtocol.IoTimeout);
+    }
+
+    [Fact]
+    public async Task DrainAndHoldLease_DoesNotHoldTheLeaseWhenTheFinalDrainFails()
+    {
+        using var harness = new Harness(handoffDrainer: (_, _) => false);
+
+        var response = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.DrainAndHoldLease,
+            LeaseSeconds: 120));
+
+        Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
+        Assert.Equal(1, harness.HandoffDrainCount);
+        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+    }
+
+    [Fact]
+    public async Task DrainAndHoldLease_PreemptsAStaleLeaseBeforeTheFinalDrain()
+    {
+        Harness? current = null;
+        var leaseWasHeldDuringDrain = false;
+        using var harness = new Harness(handoffDrainer: (_, _) =>
+        {
+            leaseWasHeldDuringDrain = current!.OwnerStore()
+                .ReadLease()
+                .IsHeld(DateTime.UtcNow);
+            return !leaseWasHeldDuringDrain;
+        });
+        current = harness;
+
+        Assert.Equal(
+            ChangeFeedResponseStatus.Ok,
+            (await harness.SendAsync(new ChangeFeedRequest(
+                ChangeFeedProtocol.Version,
+                ChangeFeedRequestKind.HoldLease,
+                LeaseSeconds: 120))).Status);
+
+        var response = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.DrainAndHoldLease,
+            LeaseSeconds: 120));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, response.Status);
+        Assert.False(leaseWasHeldDuringDrain);
+        Assert.True(harness.OwnerStore().ReadLease().IsHeld(DateTime.UtcNow));
+    }
+
+    [Fact]
+    public async Task DrainAndHoldLease_HoldsTheOwnerGateAcrossTheFinalDrainAndLeaseWrite()
+    {
+        using var drainEntered = new ManualResetEventSlim();
+        using var releaseDrain = new ManualResetEventSlim();
+        using var contenderEntered = new ManualResetEventSlim();
+        using var harness = new Harness(handoffDrainer: (_, cancellationToken) =>
+        {
+            drainEntered.Set();
+            releaseDrain.Wait(cancellationToken);
+            return true;
+        });
+
+        var handoff = harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.DrainAndHoldLease,
+            LeaseSeconds: 120));
+
+        Assert.True(drainEntered.Wait(TimeSpan.FromSeconds(5)));
+
+        var contender = Task.Run(() =>
+        {
+            using (harness.OwnerStore().EnterOwnerScope())
+            {
+                contenderEntered.Set();
+            }
+        });
+
+        Assert.False(
+            contenderEntered.Wait(TimeSpan.FromMilliseconds(200)),
+            "Son drain sürerken aynı sahip deposu kilidi alınabildi.");
+
+        releaseDrain.Set();
+        Assert.Equal(ChangeFeedResponseStatus.Ok, (await handoff).Status);
+        await contender.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(contenderEntered.IsSet);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-30)]
+    public async Task HoldLease_WithANonPositiveDurationIsRefusedAndWritesNothing(int seconds)
+    {
+        using var harness = new Harness();
+
+        var response = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.HoldLease,
+            LeaseSeconds: seconds));
+
+        Assert.Equal(ChangeFeedResponseStatus.InvalidRequest, response.Status);
+        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+    }
+
+    [Fact]
+    public async Task HoldLease_BeyondTheMaximumIsRefusedInsteadOfSilentlyCapped()
+    {
+        using var harness = new Harness();
+        var seconds = (int)ChangeFeedWatcherLease.MaximumDuration.TotalSeconds;
+
+        var accepted = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.HoldLease,
+            LeaseSeconds: seconds));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, accepted.Status);
+
+        await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.ReleaseLease));
+
+        var refused = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.HoldLease,
+            LeaseSeconds: seconds + 1));
+
+        Assert.Equal(ChangeFeedResponseStatus.InvalidRequest, refused.Status);
+        Assert.Equal(ChangeFeedWatcherLease.None, harness.OwnerStore().ReadLease());
+    }
+
+    [Fact]
+    public async Task LeaseRequests_AreServedOutsideImpersonation()
+    {
+        using var harness = new Harness(guardImpersonation: true);
+
+        await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.HoldLease,
+            LeaseSeconds: 120));
+        await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.DrainAndHoldLease,
+            LeaseSeconds: 120));
+        await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.ReleaseLease));
+
+        Assert.Empty(harness.ImpersonatedStoreCalls);
+        Assert.All(harness.HandoffDrainContexts, identity => Assert.Null(identity));
+    }
+
+    [Fact]
+    public async Task AHeldLease_DoesNotBlockPullOrAcknowledge()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+
+        await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.AddRoot,
+            root));
+        await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.HoldLease,
+            LeaseSeconds: 120));
+
+        var pull = await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Pull));
+
+        Assert.Equal(ChangeFeedResponseStatus.Ok, pull.Status);
+        Assert.NotNull(pull.Delivery);
+    }
+
+    [Fact]
+    public async Task Pull_WithoutASubscriptionIsRefusedWithADefinedStatus()
+    {
+        using var harness = new Harness();
+
+        var pull = await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Pull));
+
+        Assert.Equal(ChangeFeedResponseStatus.NoSubscription, pull.Status);
+        Assert.Null(pull.Delivery);
+    }
+
+    [Fact]
+    public async Task Acknowledge_WithAnInventedTokenIsRefusedAndDeletesNothing()
+    {
+        using var harness = new Harness();
+        var root = harness.Workspace.CreateDirectory("Projeler");
+        var file = System.IO.Path.Combine(root, "yeni.txt");
+        File.WriteAllText(file, "x");
+
+        await harness.SendAsync(
+            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+
+        Enqueue(harness, file);
+
+        var ack = await harness.SendAsync(new ChangeFeedRequest(
+            ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.Acknowledge,
+            null,
+            new string('a', 64)));
+
+        Assert.Equal(ChangeFeedResponseStatus.StaleChain, ack.Status);
+        Assert.NotEmpty(harness.OwnerStore().ReadPending().Entries);
+    }
+
+    private static void Enqueue(Harness harness, string file)
+    {
+        var store = harness.OwnerStore();
+        var subscribed = store.ReadSubscription()!.Roots[0];
+
+        store.Enqueue(
+            "ntfs-vsn:0x000000000000ABCD",
+            7,
+            100,
+            200,
+            new[]
+            {
+                new ChangeFeedRootDelivery(
+                    subscribed.RootPath,
+                    ChangeFeedBatch.Ok(new[]
+                    {
+                        new ChangeFeedEvent(ChangeFeedEventKind.Created, file, false)
+                    }),
+                    subscribed.Generation)
+            });
+    }
+
+    [Fact]
     public async Task AddRoot_RefusesToGrowTheSubscriptionBeyondItsRootCeiling()
     {
         using var harness = new Harness();
@@ -471,7 +915,9 @@ public sealed class ChangeFeedIpcRoundTripTests
             .Select(property => property.Name)
             .ToArray();
 
-        Assert.Equal(new[] { "Version", "Kind", "RootPath" }, members);
+        Assert.Equal(
+            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds" },
+            members);
     }
 
     [Fact]
@@ -1237,12 +1683,116 @@ public sealed class ChangeFeedIpcRoundTripTests
         return identity.User!;
     }
 
+    private sealed class ServiceContextStore : IChangeFeedStore
+    {
+        private readonly IChangeFeedStore _inner;
+        private readonly List<string> _violations;
+
+        public ServiceContextStore(IChangeFeedStore inner, List<string> violations)
+        {
+            _inner = inner;
+            _violations = violations;
+        }
+
+        public IDisposable EnterOwnerScope(CancellationToken cancellationToken = default) =>
+            Guarded(nameof(EnterOwnerScope), () => _inner.EnterOwnerScope(cancellationToken));
+
+        public ChangeFeedSubscription? ReadSubscription() =>
+            Guarded(nameof(ReadSubscription), _inner.ReadSubscription);
+
+        public void WriteSubscription(ChangeFeedSubscription subscription) =>
+            Guarded(nameof(WriteSubscription), () =>
+            {
+                _inner.WriteSubscription(subscription);
+                return true;
+            });
+
+        public void DeleteSubscription() =>
+            Guarded(nameof(DeleteSubscription), () =>
+            {
+                _inner.DeleteSubscription();
+                return true;
+            });
+
+        public ChangeFeedQueueEpoch ReadEpoch() =>
+            Guarded(nameof(ReadEpoch), _inner.ReadEpoch);
+
+        public ChangeFeedSecurityStamp ReadSecurityStamp() =>
+            Guarded(nameof(ReadSecurityStamp), _inner.ReadSecurityStamp);
+
+        public void NoteSecurityChange() =>
+            Guarded(nameof(NoteSecurityChange), () =>
+            {
+                _inner.NoteSecurityChange();
+                return true;
+            });
+
+        public ChangeFeedWatcherLease ReadLease() =>
+            Guarded(nameof(ReadLease), _inner.ReadLease);
+
+        public ChangeFeedWatcherLease HoldLease(TimeSpan duration) =>
+            Guarded(nameof(HoldLease), () => _inner.HoldLease(duration));
+
+        public void ReleaseLease() =>
+            Guarded(nameof(ReleaseLease), () =>
+            {
+                _inner.ReleaseLease();
+                return true;
+            });
+
+        public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
+            Guarded(nameof(ReadPending), () => _inner.ReadPending(budget));
+
+        public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
+            string volumeId,
+            ulong journalId,
+            long fromUsn,
+            long toUsn,
+            IReadOnlyList<ChangeFeedRootDelivery> roots) =>
+            Guarded(
+                nameof(Enqueue),
+                () => _inner.Enqueue(volumeId, journalId, fromUsn, toUsn, roots));
+
+        public void Acknowledge(long sequence) =>
+            Guarded(nameof(Acknowledge), () =>
+            {
+                _inner.Acknowledge(sequence);
+                return true;
+            });
+
+        public int DiscardUncommitted(string volumeId, ulong journalId, long committedUsn) =>
+            Guarded(
+                nameof(DiscardUncommitted),
+                () => _inner.DiscardUncommitted(volumeId, journalId, committedUsn));
+
+        private TResult Guarded<TResult>(string member, Func<TResult> work)
+        {
+            using var impersonated = WindowsIdentity.GetCurrent(ifImpersonating: true);
+
+            if (impersonated is not null)
+            {
+                lock (_violations)
+                {
+                    _violations.Add(member);
+                }
+            }
+
+            return work();
+        }
+    }
+
     private sealed class Harness : IDisposable
     {
         private readonly CancellationTokenSource _cancellation = new();
         private readonly Task _listening;
 
-        public Harness(bool listen = true, bool faultObserverThrows = false)
+        public Harness(
+            bool listen = true,
+            bool faultObserverThrows = false,
+            bool guardImpersonation = false,
+            bool observeAuthorization = false,
+            Func<string, CancellationToken, bool>? handoffDrainer = null,
+            TimeSpan? handoffDrainBudget = null)
         {
             Workspace = new TemporaryDirectory();
             TrustedRoot = Path.Combine(Workspace.Path, "Guvenilir");
@@ -1250,7 +1800,38 @@ public sealed class ChangeFeedIpcRoundTripTests
 
             var service = new ChangeFeedAdmissionService(
                 new ChangeFeedRootAdmission(new UsnFileSystemIdentityProbe()),
-                ownerSid => new FileSystemChangeFeedStore(Layout(ownerSid)));
+                ownerSid => guardImpersonation
+                    ? new ServiceContextStore(
+                        new FileSystemChangeFeedStore(Layout(ownerSid)),
+                        ImpersonatedStoreCalls)
+                    : new FileSystemChangeFeedStore(Layout(ownerSid)),
+                null,
+                observeAuthorization
+                    ? rootPath => new ChangeFeedPathAuthorizer(rootPath, directory =>
+                    {
+                        using var impersonated = WindowsIdentity.GetCurrent(ifImpersonating: true);
+
+                        lock (AuthorizationContexts)
+                        {
+                            AuthorizationContexts.Add(impersonated?.User);
+                        }
+
+                        return Directory.Exists(directory);
+                    })
+                    : null,
+                handoffDrainer: (ownerSid, cancellationToken) =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    Interlocked.Increment(ref _handoffDrainCount);
+                    using var impersonated = WindowsIdentity.GetCurrent(ifImpersonating: true);
+                    lock (HandoffDrainContexts)
+                    {
+                        HandoffDrainContexts.Add(impersonated?.User);
+                    }
+
+                    return handoffDrainer?.Invoke(ownerSid, cancellationToken) ?? true;
+                },
+                handoffDrainBudget: handoffDrainBudget);
 
             Server = new ChangeFeedPipeServer(
                 service,
@@ -1279,6 +1860,16 @@ public sealed class ChangeFeedIpcRoundTripTests
         }
 
         public List<Exception> Faults { get; } = new();
+
+        public List<string> ImpersonatedStoreCalls { get; } = new();
+
+        public List<SecurityIdentifier?> AuthorizationContexts { get; } = new();
+
+        public List<SecurityIdentifier?> HandoffDrainContexts { get; } = new();
+
+        private int _handoffDrainCount;
+
+        public int HandoffDrainCount => Volatile.Read(ref _handoffDrainCount);
 
         public int FaultCount
         {

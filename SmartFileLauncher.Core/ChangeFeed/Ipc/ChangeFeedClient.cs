@@ -56,9 +56,15 @@ public sealed class ChangeFeedClient
                 .WriteRequestAsync(pipe, request, deadline.Token)
                 .ConfigureAwait(false);
 
-            return await ChangeFeedMessageChannel
+            var response = await ChangeFeedMessageChannel
                 .ReadResponseAsync<ChangeFeedResponse>(pipe, deadline.Token)
                 .ConfigureAwait(false);
+
+            return response.Version == ChangeFeedProtocol.Version
+                ? response
+                : ChangeFeedResponse.Failed(
+                    ChangeFeedResponseStatus.VersionMismatch,
+                    $"Sunucu sürümü {response.Version}, beklenen {ChangeFeedProtocol.Version}.");
         }
         catch (ChangeFeedUntrustedServerException)
         {

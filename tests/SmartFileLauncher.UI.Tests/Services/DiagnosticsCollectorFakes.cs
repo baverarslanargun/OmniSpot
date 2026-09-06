@@ -13,6 +13,7 @@ internal sealed class FakeIndexLifecycle : IIndexLifecycleService
     public event Action<IndexProgress>? ProgressChanged { add { } remove { } }
     public event Action<FileChangeEvent>? FileChanged { add { } remove { } }
     public event Action<string>? Error { add { } remove { } }
+    public event Action<string>? Notice { add { } remove { } }
     public event Action<int, int, int>? ReconciliationProgressChanged { add { } remove { } }
     public event Action<bool>? ReconciliationStateChanged { add { } remove { } }
 

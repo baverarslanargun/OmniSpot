@@ -9,6 +9,9 @@ public sealed class ChangeFeedStoreLayout
     public const string StoreFolderName = "ChangeFeed";
     public const string SubscriptionFileName = "subscription.json";
     public const string SequenceFileName = "sequence.txt";
+    public const string EpochFileName = "epoch.txt";
+    public const string SecurityFileName = "security.txt";
+    public const string LeaseFileName = "lease.txt";
     public const string QueueFolderName = "queue";
     public const string StateFolderName = "state";
     public const string TrustedStoreFolderName = "ChangeFeedStore";
@@ -27,6 +30,9 @@ public sealed class ChangeFeedStoreLayout
         OwnerDirectory = ownerDirectory;
         SubscriptionPath = Path.Combine(ownerDirectory, SubscriptionFileName);
         SequencePath = Path.Combine(ownerDirectory, SequenceFileName);
+        EpochPath = Path.Combine(ownerDirectory, EpochFileName);
+        SecurityPath = Path.Combine(ownerDirectory, SecurityFileName);
+        LeasePath = Path.Combine(ownerDirectory, LeaseFileName);
         QueueDirectory = Path.Combine(ownerDirectory, QueueFolderName);
         StateDirectory = Path.Combine(ownerDirectory, StateFolderName);
     }
@@ -44,6 +50,12 @@ public sealed class ChangeFeedStoreLayout
     public string SubscriptionPath { get; }
 
     public string SequencePath { get; }
+
+    public string EpochPath { get; }
+
+    public string SecurityPath { get; }
+
+    public string LeasePath { get; }
 
     public string QueueDirectory { get; }
 
