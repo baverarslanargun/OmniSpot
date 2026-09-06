@@ -341,18 +341,26 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
                 using var deadline = new CancellationTokenSource(HandOverBudget);
                 await DrainLeaseTaskAsync(deadline.Token).ConfigureAwait(false);
 
+                bool released;
                 await _leaseGate.WaitAsync(deadline.Token).ConfigureAwait(false);
                 try
                 {
-                    await ReleaseWithRetryAsync(deadline.Token).ConfigureAwait(false);
+                    released = await ReleaseWithRetryAsync(deadline.Token)
+                        .ConfigureAwait(false);
                 }
                 finally
                 {
                     _leaseGate.Release();
                 }
+
+                if (!released)
+                {
+                    DropTheGuard();
+                }
             }
             catch (Exception failure)
             {
+                DropTheGuard();
                 _indexManager.NotifyExternalError(
                     $"Watcher hatasında devir tamamlanamadı: {failure.Message}");
             }
@@ -360,6 +368,13 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     }
 
     internal Task? WatcherFaultHandOver { get; private set; }
+
+    private void DropTheGuard()
+    {
+        _indexManager.NoteChangeFeedLost();
+        _indexManager.NotifyExternalError(
+            "Watcher öldü ve devir tamamlanamadı; periyodik tam tarama yeniden devrede.");
+    }
 
     private async Task DrainLeaseTaskAsync(CancellationToken cancellationToken)
     {

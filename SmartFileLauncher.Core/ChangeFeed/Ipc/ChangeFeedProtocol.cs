@@ -69,6 +69,9 @@ public sealed record ChangeFeedResponse(
     public static ChangeFeedResponse Delivered(ChangeFeedDeliveryDto delivery) =>
         new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, null, null, delivery);
 
+    public static ChangeFeedResponse Granted(string? warning) =>
+        new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, warning);
+
     public static ChangeFeedResponse Failed(ChangeFeedResponseStatus status, string message) =>
         new(ChangeFeedProtocol.Version, status, message);
 }

@@ -25,6 +25,7 @@ public class IndexManager : IDisposable
     private readonly SemaphoreSlim _reconciliationGate = new(1, 1);
     private readonly SemaphoreSlim _reconciliationSignal = new(0, 1);
     private readonly TimeSpan _reconciliationInterval;
+    private readonly TimeSpan _watcherRevivalDelay;
     private Task _notificationTask = Task.CompletedTask;
     private CancellationTokenSource? _backgroundSyncCts;
     private Task? _backgroundSyncTask;
@@ -44,6 +45,10 @@ public class IndexManager : IDisposable
     private IReadOnlyList<string> _activeRootPaths = Array.Empty<string>();
     private long _reconciliationRunCount;
     private bool _changeFeedCoversDowntime;
+    private volatile bool _changeFeedGuarding;
+    private int _detachedNodeCount;
+    private int _watcherRevivalInFlight;
+    private long _subtreeNodesInspected;
     private long _lastReconciliationAtTicks;
     private long _lastReconciliationDurationTicks;
     private long _lastReconciliationScanDurationTicks;
@@ -98,7 +103,8 @@ public class IndexManager : IDisposable
         TimeSpan? reconciliationInterval = null,
         FileSystemPathGuard? measurementPathGuard = null,
         bool enforceMeasurementPathSafety = false,
-        bool skipReparsePoints = false)
+        bool skipReparsePoints = false,
+        TimeSpan? watcherRevivalDelay = null)
     {
         _tokenizer = tokenizer ?? new BasicTokenizer();
         _db = database;
@@ -110,6 +116,9 @@ public class IndexManager : IDisposable
         _reconciliationInterval = reconciliationInterval ?? TimeSpan.FromMinutes(10);
         if (_reconciliationInterval <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(reconciliationInterval));
+        _watcherRevivalDelay = watcherRevivalDelay ?? TimeSpan.FromSeconds(2);
+        if (_watcherRevivalDelay <= TimeSpan.Zero)
+            throw new ArgumentOutOfRangeException(nameof(watcherRevivalDelay));
         _metadataMap = new Dictionary<string, FileMetadata>(
             StringComparer.OrdinalIgnoreCase);
         _pathToNode = new Dictionary<string, FileSystemNode>(StringComparer.OrdinalIgnoreCase);
@@ -170,8 +179,22 @@ public class IndexManager : IDisposable
 
     internal bool ChangeFeedCoversDowntime => _changeFeedCoversDowntime;
 
-    internal void NoteChangeFeedCoverage(bool coversDowntime) =>
+    internal bool ChangeFeedGuarding => _changeFeedGuarding;
+
+    internal void NoteChangeFeedCoverage(bool coversDowntime)
+    {
         _changeFeedCoversDowntime = coversDowntime;
+        _changeFeedGuarding = coversDowntime;
+    }
+
+    internal void NoteChangeFeedLost()
+    {
+        _changeFeedGuarding = false;
+        RequestReconciliation();
+    }
+
+    internal TimeSpan NextReconciliationDelay() =>
+        _changeFeedGuarding ? Timeout.InfiniteTimeSpan : _reconciliationInterval;
 
     public IndexDiagnosticsReport GetDiagnosticsReport()
     {
@@ -757,6 +780,8 @@ public class IndexManager : IDisposable
                     {
                         _rootNode.AddChild(node);
                     }
+
+                    _detachedNodeCount++;
                 }
             }
 
@@ -794,15 +819,25 @@ public class IndexManager : IDisposable
                     {
                         parentNode.AddChild(node);
                     }
-                    else if (parentPath != null)
+                    else
                     {
-                        foreach (var rootPath in rootPathNodes.Keys)
+                        var attached = false;
+                        if (parentPath != null)
                         {
-                            if (string.Equals(parentPath, rootPath, StringComparison.OrdinalIgnoreCase))
+                            foreach (var rootPath in rootPathNodes.Keys)
                             {
-                                rootPathNodes[rootPath].AddChild(node);
-                                break;
+                                if (string.Equals(parentPath, rootPath, StringComparison.OrdinalIgnoreCase))
+                                {
+                                    rootPathNodes[rootPath].AddChild(node);
+                                    attached = true;
+                                    break;
+                                }
                             }
+                        }
+
+                        if (!attached)
+                        {
+                            _detachedNodeCount++;
                         }
                     }
                 }
@@ -885,7 +920,7 @@ public class IndexManager : IDisposable
             try
             {
                 await _reconciliationSignal
-                    .WaitAsync(_reconciliationInterval, ct)
+                    .WaitAsync(NextReconciliationDelay(), ct)
                     .ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1625,7 +1660,75 @@ public class IndexManager : IDisposable
 
     private void HandleWatcherFault(Exception exception)
     {
+        NoteChangeFeedLost();
         NotifyWatcherFault();
+        BeginWatcherRevival();
+    }
+
+    internal Task? WatcherRevival { get; private set; }
+
+    private const int WatcherRevivalAttempts = 3;
+
+    private void BeginWatcherRevival()
+    {
+        if (_disposed || !_isInitialized || _activeRootPaths.Count == 0)
+        {
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _watcherRevivalInFlight, 1) != 0)
+        {
+            return;
+        }
+
+        var roots = _activeRootPaths;
+        WatcherRevival = Task.Run(() => ReviveWatcherAsync(roots));
+    }
+
+    private async Task ReviveWatcherAsync(IReadOnlyList<string> roots)
+    {
+        try
+        {
+            for (var attempt = 0; attempt < WatcherRevivalAttempts; attempt++)
+            {
+                await Task.Delay(_watcherRevivalDelay).ConfigureAwait(false);
+
+                if (_disposed)
+                {
+                    return;
+                }
+
+                var revived = false;
+                try
+                {
+                    lock (_lock)
+                    {
+                        if (!_disposed)
+                        {
+                            revived = SetupWatchers(roots);
+                        }
+                    }
+                }
+                catch (Exception failure)
+                {
+                    NotifyError($"Watcher yeniden kurulamadı: {failure.Message}");
+                }
+
+                if (revived)
+                {
+                    NotifyError("Watcher yeniden kuruldu; canlı izleme sürüyor.");
+                    RequestReconciliation();
+                    return;
+                }
+            }
+
+            NotifyError(
+                "Watcher yeniden kurulamadı; indeks periyodik tam taramayla güncel tutulacak.");
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _watcherRevivalInFlight, 0);
+        }
     }
 
     private void NotifyWatcherFault()
@@ -1714,6 +1817,52 @@ public class IndexManager : IDisposable
         }
 
         return roots;
+    }
+
+    internal int DetachedNodeCount => _detachedNodeCount;
+
+    internal long SubtreeNodesInspected => Interlocked.Read(ref _subtreeNodesInspected);
+
+    private List<FileSystemNode> CollectIndexedSubtree(string normalizedPath)
+    {
+        return _detachedNodeCount == 0
+            ? CollectSubtreeByWalk(normalizedPath)
+            : CollectSubtreeByScan(normalizedPath);
+    }
+
+    internal List<FileSystemNode> CollectSubtreeByWalk(string normalizedPath)
+    {
+        var collected = new List<FileSystemNode>();
+        if (!_pathToNode.TryGetValue(normalizedPath, out var start))
+        {
+            return collected;
+        }
+
+        var pending = new Stack<FileSystemNode>();
+        pending.Push(start);
+
+        while (pending.Count > 0)
+        {
+            var current = pending.Pop();
+            collected.Add(current);
+            Interlocked.Increment(ref _subtreeNodesInspected);
+
+            foreach (var child in current.Children)
+            {
+                pending.Push(child);
+            }
+        }
+
+        return collected;
+    }
+
+    internal List<FileSystemNode> CollectSubtreeByScan(string normalizedPath)
+    {
+        Interlocked.Add(ref _subtreeNodesInspected, _pathToNode.Count);
+
+        return _pathToNode.Values
+            .Where(node => IsSameOrDescendantPath(node.FullPath, normalizedPath))
+            .ToList();
     }
 
     private static bool IsSameOrDescendantPath(string candidatePath, string parentPath)
@@ -1919,6 +2068,7 @@ public class IndexManager : IDisposable
     {
         _metadataMap.Clear();
         _pathToNode.Clear();
+        _detachedNodeCount = 0;
         _rootNode = null;
         Volatile.Write(ref _publishedSearchState, SearchState.Empty);
     }
@@ -1956,11 +2106,10 @@ public class IndexManager : IDisposable
 
         if (evt.ChangeType != FileChangeType.Deleted)
         {
-            var currentNodes = _pathToNode.Values
-                .Where(node => !ReferenceEquals(node, _rootNode) &&
-                               IsSameOrDescendantPath(node.FullPath, currentPath))
-                .ToArray();
-            currentState = currentState.WithUpserts(currentNodes, _tokenizer);
+            currentState = currentState.WithUpserts(
+                CollectIndexedSubtree(currentPath)
+                    .Where(node => !ReferenceEquals(node, _rootNode)),
+                _tokenizer);
         }
 
         Volatile.Write(ref _publishedSearchState, currentState);
@@ -2110,14 +2259,8 @@ public class IndexManager : IDisposable
         if (!_pathToNode.TryGetValue(path, out var rootNode)) return;
 
         var normalizedRoot = NormalizeIndexedPath(rootNode.FullPath);
-        var descendantPrefix = normalizedRoot.EndsWith(Path.DirectorySeparatorChar)
-            ? normalizedRoot
-            : normalizedRoot + Path.DirectorySeparatorChar;
 
-        var nodesToRemove = _pathToNode.Values
-            .Where(node =>
-                ReferenceEquals(node, rootNode) ||
-                node.FullPath.StartsWith(descendantPrefix, StringComparison.OrdinalIgnoreCase))
+        var nodesToRemove = CollectIndexedSubtree(normalizedRoot)
             .OrderByDescending(node => node.FullPath.Length)
             .ToList();
 

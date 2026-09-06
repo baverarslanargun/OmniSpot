@@ -6,7 +6,8 @@ namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 public sealed record UsnVolumeFeedState(
     ulong JournalId,
     long NextUsn,
-    IReadOnlyList<UsnChangeFeedState> Roots);
+    IReadOnlyList<UsnChangeFeedState> Roots,
+    bool PendingSecurityChange = false);
 
 public sealed class UsnChangeFeedStateStore
 {
@@ -90,7 +91,11 @@ public sealed class UsnChangeFeedStateStore
                     root.SynchronizedFromUsn))
                 .ToArray();
 
-            return new UsnVolumeFeedState(document.JournalId, document.NextUsn, roots);
+            return new UsnVolumeFeedState(
+                document.JournalId,
+                document.NextUsn,
+                roots,
+                document.PendingSecurityChange);
         }
         catch (ArgumentException failure)
         {
@@ -106,7 +111,11 @@ public sealed class UsnChangeFeedStateStore
         }
     }
 
-    public void Write(ulong journalId, long nextUsn, IReadOnlyList<UsnChangeFeedState> roots)
+    public void Write(
+        ulong journalId,
+        long nextUsn,
+        IReadOnlyList<UsnChangeFeedState> roots,
+        bool pendingSecurityChange = false)
     {
         ArgumentNullException.ThrowIfNull(roots);
         ArgumentOutOfRangeException.ThrowIfNegative(nextUsn);
@@ -120,6 +129,7 @@ public sealed class UsnChangeFeedStateStore
         {
             JournalId = journalId,
             NextUsn = nextUsn,
+            PendingSecurityChange = pendingSecurityChange,
             Roots = roots
                 .Select(root => new RootDocument
                 {
@@ -160,6 +170,8 @@ public sealed class UsnChangeFeedStateStore
         public ulong JournalId { get; set; }
 
         public long NextUsn { get; set; }
+
+        public bool PendingSecurityChange { get; set; }
 
         public List<RootDocument> Roots { get; set; } = new();
     }

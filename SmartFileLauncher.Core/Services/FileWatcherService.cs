@@ -10,6 +10,8 @@ namespace SmartFileLauncher.Core.Services;
 
 public class FileWatcherService : IDisposable
 {
+    internal const int WatcherBufferBytes = 64 * 1024;
+
     [ThreadStatic]
     private static FileWatcherService? _dispatchingService;
 
@@ -23,6 +25,7 @@ public class FileWatcherService : IDisposable
     private readonly FileSystemPathGuard? _pathGuard;
     private Task? _processorTask;
     private long _generation;
+    private int _filesystemProbes;
     private int _inFlightCallbacks;
     private bool _isClearing;
     private bool _disposed;
@@ -75,6 +78,19 @@ public class FileWatcherService : IDisposable
             }
         }
     }
+
+    internal IReadOnlyList<int> WatcherBufferSizes
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _watchers.Select(w => w.InternalBufferSize).ToArray();
+            }
+        }
+    }
+
+    internal int FilesystemProbeCount => Volatile.Read(ref _filesystemProbes);
 
     internal Task? ProcessorTask
     {
@@ -140,6 +156,7 @@ public class FileWatcherService : IDisposable
                              | NotifyFilters.LastWrite
                              | NotifyFilters.Size,
                 IncludeSubdirectories = true,
+                InternalBufferSize = WatcherBufferBytes,
                 EnableRaisingEvents = false
             };
 
@@ -298,29 +315,33 @@ public class FileWatcherService : IDisposable
 
     #region Event Handlers
 
-    private void OnFileCreated(object sender, FileSystemEventArgs e)
+    internal void OnFileCreated(object sender, FileSystemEventArgs e)
     {
+        if (ShouldExclude(e.FullPath)) return;
         if (ShouldSkipReparsePath(e.FullPath)) return;
         EnqueueEvent(FileChangeType.Created, e.FullPath, null, IsDirectory(e.FullPath));
     }
 
-    private void OnFileDeleted(object sender, FileSystemEventArgs e)
+    internal void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
+        if (ShouldExclude(e.FullPath)) return;
         if (ShouldSkipReparsePath(e.FullPath)) return;
         bool isDir = string.IsNullOrEmpty(Path.GetExtension(e.FullPath));
         EnqueueEvent(FileChangeType.Deleted, e.FullPath, null, isDir);
     }
 
-    private void OnFileRenamed(object sender, RenamedEventArgs e)
+    internal void OnFileRenamed(object sender, RenamedEventArgs e)
     {
+        if (ShouldExclude(e.FullPath) && ShouldExclude(e.OldFullPath)) return;
         if (ShouldSkipReparsePath(e.FullPath) ||
             ShouldSkipReparsePath(e.OldFullPath))
             return;
         EnqueueEvent(FileChangeType.Renamed, e.FullPath, e.OldFullPath, IsDirectory(e.FullPath));
     }
 
-    private void OnFileChanged(object sender, FileSystemEventArgs e)
+    internal void OnFileChanged(object sender, FileSystemEventArgs e)
     {
+        if (ShouldExclude(e.FullPath)) return;
         if (ShouldSkipReparsePath(e.FullPath)) return;
         if (!IsDirectory(e.FullPath))
         {
@@ -575,8 +596,10 @@ public class FileWatcherService : IDisposable
 
     #region Helpers
 
-    private static bool IsDirectory(string path)
+    private bool IsDirectory(string path)
     {
+        Interlocked.Increment(ref _filesystemProbes);
+
         try
         {
             return Directory.Exists(path);
@@ -715,8 +738,13 @@ public class FileWatcherService : IDisposable
 
     private bool ShouldSkipReparsePath(string path)
     {
-        return _pathGuard != null &&
-               _pathGuard.FindReparsePointInExistingPath(path) != null;
+        if (_pathGuard == null)
+        {
+            return false;
+        }
+
+        Interlocked.Increment(ref _filesystemProbes);
+        return _pathGuard.FindReparsePointInExistingPath(path) != null;
     }
 
     private void ThrowIfDisposed()

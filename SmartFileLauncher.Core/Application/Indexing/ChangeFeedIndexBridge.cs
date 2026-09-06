@@ -138,6 +138,12 @@ public sealed class ChangeFeedIndexBridge
                 Reason($"Kira alınamadı: {lease.Status} {lease.Message}", diagnostics));
         }
 
+        var partialHandOver = !string.IsNullOrWhiteSpace(lease.Message);
+        if (partialHandOver)
+        {
+            diagnostics = Reason(lease.Message!, diagnostics);
+        }
+
         Consumption? consumed;
         try
         {
@@ -172,9 +178,11 @@ public sealed class ChangeFeedIndexBridge
         }
 
         return new ChangeFeedAdoptionResult(
-            consumed.Pages == 0 && consumed.Events == 0 && consumed.Resynchronized == 0
-                ? ChangeFeedAdoptionStatus.NothingToAdopt
-                : ChangeFeedAdoptionStatus.Adopted,
+            partialHandOver
+                ? ChangeFeedAdoptionStatus.Incomplete
+                : consumed.Pages == 0 && consumed.Events == 0 && consumed.Resynchronized == 0
+                    ? ChangeFeedAdoptionStatus.NothingToAdopt
+                    : ChangeFeedAdoptionStatus.Adopted,
             subscribed,
             consumed.Pages,
             consumed.Events,
