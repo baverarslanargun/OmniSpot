@@ -140,6 +140,92 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         }
     }
 
+    public ChangeFeedQueueEpoch ReadEpoch()
+    {
+        using var scope = EnterOwnerScope();
+
+        if (ReadSnapshot(_layout.EpochPath) is { } payload &&
+            System.Text.Encoding.UTF8.GetString(payload).Trim() is { Length: > 0 } value)
+        {
+            return new ChangeFeedQueueEpoch(value);
+        }
+
+        return BumpEpoch();
+    }
+
+    public ChangeFeedSecurityStamp ReadSecurityStamp()
+    {
+        using var scope = EnterOwnerScope();
+
+        if (ReadSnapshot(_layout.SecurityPath) is { } payload &&
+            System.Text.Encoding.UTF8.GetString(payload).Trim() is { Length: > 0 } value)
+        {
+            return new ChangeFeedSecurityStamp(value);
+        }
+
+        return WriteSecurityStamp();
+    }
+
+    public void NoteSecurityChange()
+    {
+        using var scope = EnterOwnerScope();
+
+        WriteSecurityStamp();
+    }
+
+    public ChangeFeedWatcherLease ReadLease()
+    {
+        using var scope = EnterOwnerScope();
+
+        return ReadSnapshot(_layout.LeasePath) is { } payload
+            ? ChangeFeedWatcherLease.FromPersistedValue(
+                System.Text.Encoding.UTF8.GetString(payload).Trim())
+            : ChangeFeedWatcherLease.None;
+    }
+
+    public ChangeFeedWatcherLease HoldLease(TimeSpan duration)
+    {
+        using var scope = EnterOwnerScope();
+
+        var lease = ChangeFeedWatcherLease.Until(DateTime.UtcNow, duration);
+        if (lease == ChangeFeedWatcherLease.None)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(duration),
+                "Kira süresi pozitif olmalıdır.");
+        }
+
+        WriteAtomic(
+            _layout.LeasePath,
+            System.Text.Encoding.UTF8.GetBytes(lease.ToPersistedValue()));
+
+        return lease;
+    }
+
+    public void ReleaseLease()
+    {
+        using var scope = EnterOwnerScope();
+
+        if (File.Exists(_layout.LeasePath))
+        {
+            File.Delete(_layout.LeasePath);
+        }
+    }
+
+    private ChangeFeedSecurityStamp WriteSecurityStamp()
+    {
+        var stamp = ChangeFeedSecurityStamp.New();
+        WriteAtomic(_layout.SecurityPath, System.Text.Encoding.UTF8.GetBytes(stamp.Value));
+        return stamp;
+    }
+
+    private ChangeFeedQueueEpoch BumpEpoch()
+    {
+        var epoch = ChangeFeedQueueEpoch.New();
+        WriteAtomic(_layout.EpochPath, System.Text.Encoding.UTF8.GetBytes(epoch.Value));
+        return epoch;
+    }
+
     public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null)
     {
         using var scope = EnterOwnerScope();
@@ -333,12 +419,20 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
 
         ArgumentOutOfRangeException.ThrowIfNegative(sequence);
 
-        foreach (var file in QueueFiles())
+        var doomed = QueueFiles()
+            .Where(file => SequenceOf(file) is long value && value <= sequence)
+            .ToArray();
+
+        if (doomed.Length == 0)
         {
-            if (SequenceOf(file) is long value && value <= sequence)
-            {
-                File.Delete(file);
-            }
+            return;
+        }
+
+        BumpEpoch();
+
+        foreach (var file in doomed)
+        {
+            File.Delete(file);
         }
     }
 
@@ -350,7 +444,7 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         ArgumentNullException.ThrowIfNull(volumeId);
         ArgumentOutOfRangeException.ThrowIfNegative(committedUsn);
 
-        var discarded = 0;
+        var doomed = new List<string>();
         foreach (var file in QueueFiles())
         {
             ChangeFeedQueueEntry entry;
@@ -367,12 +461,23 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
                 entry.JournalId == journalId &&
                 entry.ToUsn > committedUsn)
             {
-                File.Delete(file);
-                discarded++;
+                doomed.Add(file);
             }
         }
 
-        return discarded;
+        if (doomed.Count == 0)
+        {
+            return 0;
+        }
+
+        BumpEpoch();
+
+        foreach (var file in doomed)
+        {
+            File.Delete(file);
+        }
+
+        return doomed.Count;
     }
 
     private IReadOnlyList<ChangeFeedQueueEntry> Repair(string[] files, Exception failure)
@@ -471,6 +576,8 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         long toUsn,
         IReadOnlyList<ChangeFeedRootDelivery> deliveries)
     {
+        BumpEpoch();
+
         var groups = deliveries.Count == 0
             ? new List<IReadOnlyList<ChangeFeedRootDelivery>>()
             : Partition(volumeId, journalId, fromUsn, toUsn, deliveries);

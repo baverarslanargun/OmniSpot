@@ -33,7 +33,8 @@ internal sealed class ChangeFeedAdmissionWorker : BackgroundService
         new(
             new ChangeFeedRootAdmission(new UsnFileSystemIdentityProbe()),
             ownerSid => new FileSystemChangeFeedStore(
-                ChangeFeedStoreLayout.ForTrustedOwner(ownerSid)));
+                ChangeFeedStoreLayout.ForTrustedOwner(ownerSid)),
+            handoffDrainer: ChangeFeedDrainWorker.DrainToCurrentBoundary);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

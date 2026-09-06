@@ -132,7 +132,7 @@ public sealed class ChangeFeedWireContractTests
             ChangeFeedResponse.Ok(new[] { @"C:\Projeler" }));
 
         Assert.Equal(
-            new[] { "Message", "Roots", "Status", "Version" },
+            new[] { "Delivery", "Message", "Roots", "Status", "Version" },
             FieldNames(payload));
     }
 
@@ -146,7 +146,7 @@ public sealed class ChangeFeedWireContractTests
                 @"C:\Projeler"));
 
         Assert.Equal(
-            new[] { "Kind", "RootPath", "Version" },
+            new[] { "Kind", "LeaseSeconds", "RootPath", "Token", "Version" },
             FieldNames(payload));
     }
 

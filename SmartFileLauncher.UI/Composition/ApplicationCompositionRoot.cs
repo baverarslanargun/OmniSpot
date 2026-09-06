@@ -2,6 +2,7 @@ using System.IO;
 using SmartFileLauncher.Core.Application.Connectivity;
 using SmartFileLauncher.Core.Application.Files;
 using SmartFileLauncher.Core.Application.Indexing;
+using SmartFileLauncher.Core.ChangeFeed.Ipc;
 using SmartFileLauncher.Core.Application.Search;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Diagnostics;
@@ -86,7 +87,12 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 : new IndexedLocationProvider();
         _indexLifecycle = new IndexLifecycleService(
             indexManager,
-            locationProvider);
+            locationProvider,
+            _measurementRun == null
+                ? new ChangeFeedIndexBridge(
+                    new ChangeFeedClientChannel(),
+                    new IndexManagerChangeFeedTarget(indexManager))
+                : null);
         var indexMaintenance = new IndexMaintenanceService(
             _indexLifecycle.DatabasePath);
         _indexMaintenance = _measurementRun == null

@@ -81,6 +81,183 @@ public sealed class UsnDrainRunnerTests : IDisposable
     }
 
     [Fact]
+    public void AHeldLease_StopsTheDrainBeforeTheJournalIsOpened()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        store.HoldLease(TimeSpan.FromMinutes(5));
+
+        var factory = new CountingReaderFactory(CreateReader());
+        var result = new UsnDrainRunner(
+            Layout(),
+            store,
+            factory,
+            _probe,
+            new FakeUsnSubtreeReader()).Run();
+
+        Assert.Equal(UsnDrainOutcome.LeaseHeld, result.Outcome);
+        Assert.Equal(0, factory.OpenCount);
+        Assert.Empty(store.ReadPending().Entries);
+        Assert.Null(ReadState());
+    }
+
+    [Fact]
+    public void AHeldLease_LeavesTheCursorWhereItWas()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+        var before = ReadState();
+
+        store.HoldLease(TimeSpan.FromMinutes(5));
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.FileCreate, "rapor.txt")
+                .Build());
+
+        var result = CreateRunner(store, reader).Run();
+
+        Assert.Equal(UsnDrainOutcome.LeaseHeld, result.Outcome);
+        Assert.Empty(store.ReadPending().Entries);
+        Assert.Equal(before!.NextUsn, ReadState()!.NextUsn);
+    }
+
+    [Fact]
+    public void AnExpiredLease_LetsTheServiceTakeOver()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        store.HoldLease(TimeSpan.FromMinutes(1));
+
+        var result = CreateRunner(
+            store,
+            CreateReader(),
+            () => DateTime.UtcNow.AddMinutes(2)).Run();
+
+        Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
+        Assert.NotEmpty(store.ReadPending().Entries);
+    }
+
+    [Fact]
+    public void AReleasedLease_LetsTheServiceTakeOverAtOnce()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        store.HoldLease(TimeSpan.FromMinutes(5));
+
+        store.ReleaseLease();
+        var result = CreateRunner(store, CreateReader()).Run();
+
+        Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
+        Assert.NotEmpty(store.ReadPending().Entries);
+    }
+
+    [Fact]
+    public void ALeaseTakenMidRound_AbandonsTheWriteAndTheCursor()
+    {
+        var inner = CreateStore();
+        Subscribe(inner, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(inner, reader).Run();
+        inner.Acknowledge(long.MaxValue);
+        var before = ReadState();
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.FileCreate, "rapor.txt")
+                .Build());
+
+        var store = new LeaseAfterFirstReadStore(inner);
+        var result = CreateRunner(store, reader).Run();
+
+        Assert.Equal(UsnDrainOutcome.LeasePreempted, result.Outcome);
+        Assert.Equal(0, result.EntriesWritten);
+        Assert.Empty(inner.ReadPending().Entries);
+        Assert.Equal(before!.NextUsn, ReadState()!.NextUsn);
+    }
+
+    [Fact]
+    public void ALeaseTakenBeforeAnEmptyRoundStillHoldsTheCursor()
+    {
+        var inner = CreateStore();
+        Subscribe(inner, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(inner, reader).Run();
+        inner.Acknowledge(long.MaxValue);
+        var before = ReadState();
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, 4242, UsnReason.FileCreate, "baska.txt")
+                .Build());
+
+        var result = CreateRunner(new LeaseAfterFirstReadStore(inner), reader).Run();
+
+        Assert.Equal(UsnDrainOutcome.LeasePreempted, result.Outcome);
+        Assert.Equal(before!.NextUsn, ReadState()!.NextUsn);
+    }
+
+    [Fact]
+    public void ALeaseTakenBeforeAGapAnnouncement_WritesNothing()
+    {
+        var store = CreateStore();
+        var doomed = _firstRoot.CreateDirectory("gidecek");
+        Subscribe(store, doomed);
+        Directory.Delete(doomed, recursive: true);
+
+        var result = CreateRunner(new LeaseAfterFirstReadStore(store), CreateReader()).Run();
+
+        Assert.Equal(UsnDrainOutcome.LeasePreempted, result.Outcome);
+        Assert.Empty(store.ReadPending().Entries);
+    }
+
+    [Fact]
+    public async Task HoldLease_CannotLandWhileTheDrainIsCommitting()
+    {
+        var inner = CreateStore();
+        Subscribe(inner, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(inner, reader).Run();
+        inner.Acknowledge(long.MaxValue);
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.FileCreate, "rapor.txt")
+                .Build());
+
+        var order = new List<string>();
+        using var committing = new ManualResetEventSlim();
+        var store = new SlowCommitStore(inner, order, committing);
+
+        var holder = Task.Run(() =>
+        {
+            Assert.True(committing.Wait(TimeSpan.FromSeconds(10)));
+            CreateStore().HoldLease(TimeSpan.FromMinutes(5));
+
+            lock (order)
+            {
+                order.Add("kira");
+            }
+        });
+
+        var result = CreateRunner(store, reader).Run();
+        await holder.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
+        Assert.Equal(new[] { "yazma", "kira" }, order);
+    }
+
+    [Fact]
     public void Run_WritesEventsIntoTheQueueAndAdvancesTheCursor()
     {
         var store = CreateStore();
@@ -375,6 +552,215 @@ public sealed class UsnDrainRunnerTests : IDisposable
         Assert.Empty(store.ReadPending().Entries);
     }
 
+    [Fact]
+    public void ASecurityChangeInTheJournal_StampsTheOwner()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+
+        var before = store.ReadSecurityStamp();
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(
+                    1500,
+                    50,
+                    RootReference(_firstRoot),
+                    UsnReason.SecurityChange | UsnReason.Close,
+                    "rapor.txt")
+                .Build());
+
+        CreateRunner(store, reader).Run();
+
+        Assert.False(
+            before.Matches(store.ReadSecurityStamp()),
+            "İzin değişikliği sahibin güvenlik damgasını değiştirmedi.");
+    }
+
+    [Fact]
+    public void ASecurityChangeAlongsideAGap_StillStampsTheOwner()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+
+        var before = store.ReadSecurityStamp();
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(
+                    1500,
+                    50,
+                    RootReference(_firstRoot),
+                    UsnReason.SecurityChange | UsnReason.Close,
+                    "rapor.txt")
+                .AddVersion2(
+                    1600,
+                    RootReference(_firstRoot),
+                    RootReference(_firstRoot),
+                    UsnReason.FileDelete | UsnReason.Close,
+                    "kok")
+                .Build());
+
+        var result = CreateRunner(store, reader).Run();
+
+        Assert.True(result.RootsGapped > 0, "Kurulum bir boşluk üretmeliydi.");
+        Assert.False(
+            before.Matches(store.ReadSecurityStamp()),
+            "Boşluk üreten bir turda izin değişikliği damgayı düşürdü.");
+    }
+
+    [Fact]
+    public void AContentChangeInTheJournal_LeavesTheStampAlone()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        CreateRunner(store, reader).Run();
+        store.Acknowledge(long.MaxValue);
+
+        var before = store.ReadSecurityStamp();
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(
+            2000,
+            new UsnRecordBuffer()
+                .AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.FileCreate, "yeni.txt")
+                .Build());
+
+        CreateRunner(store, reader).Run();
+
+        Assert.True(
+            before.Matches(store.ReadSecurityStamp()),
+            "Sıradan bir değişiklik güvenlik damgasını değiştirdi.");
+    }
+
+    private sealed class SlowCommitStore : IChangeFeedStore
+    {
+        private readonly IChangeFeedStore _inner;
+        private readonly List<string> _order;
+        private readonly ManualResetEventSlim _committing;
+
+        public SlowCommitStore(
+            IChangeFeedStore inner,
+            List<string> order,
+            ManualResetEventSlim committing)
+        {
+            _inner = inner;
+            _order = order;
+            _committing = committing;
+        }
+
+        public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
+            string volumeId,
+            ulong journalId,
+            long fromUsn,
+            long toUsn,
+            IReadOnlyList<ChangeFeedRootDelivery> roots)
+        {
+            _committing.Set();
+            Thread.Sleep(300);
+            var written = _inner.Enqueue(volumeId, journalId, fromUsn, toUsn, roots);
+
+            lock (_order)
+            {
+                _order.Add("yazma");
+            }
+
+            return written;
+        }
+
+        public IDisposable EnterOwnerScope(CancellationToken cancellationToken = default) =>
+            _inner.EnterOwnerScope(cancellationToken);
+
+        public ChangeFeedSubscription? ReadSubscription() => _inner.ReadSubscription();
+
+        public void WriteSubscription(ChangeFeedSubscription subscription) =>
+            _inner.WriteSubscription(subscription);
+
+        public void DeleteSubscription() => _inner.DeleteSubscription();
+
+        public ChangeFeedQueueEpoch ReadEpoch() => _inner.ReadEpoch();
+
+        public ChangeFeedSecurityStamp ReadSecurityStamp() => _inner.ReadSecurityStamp();
+
+        public void NoteSecurityChange() => _inner.NoteSecurityChange();
+
+        public ChangeFeedWatcherLease ReadLease() => _inner.ReadLease();
+
+        public ChangeFeedWatcherLease HoldLease(TimeSpan duration) =>
+            _inner.HoldLease(duration);
+
+        public void ReleaseLease() => _inner.ReleaseLease();
+
+        public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
+            _inner.ReadPending(budget);
+
+        public void Acknowledge(long sequence) => _inner.Acknowledge(sequence);
+
+        public int DiscardUncommitted(string volumeId, ulong journalId, long committedUsn) =>
+            _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
+    }
+
+    private sealed class LeaseAfterFirstReadStore : IChangeFeedStore
+    {
+        private readonly IChangeFeedStore _inner;
+        private int _reads;
+
+        public LeaseAfterFirstReadStore(IChangeFeedStore inner) => _inner = inner;
+
+        public ChangeFeedWatcherLease ReadLease() =>
+            ++_reads == 1
+                ? ChangeFeedWatcherLease.None
+                : ChangeFeedWatcherLease.Until(DateTime.UtcNow, TimeSpan.FromMinutes(5));
+
+        public IDisposable EnterOwnerScope(CancellationToken cancellationToken = default) =>
+            _inner.EnterOwnerScope(cancellationToken);
+
+        public ChangeFeedSubscription? ReadSubscription() => _inner.ReadSubscription();
+
+        public void WriteSubscription(ChangeFeedSubscription subscription) =>
+            _inner.WriteSubscription(subscription);
+
+        public void DeleteSubscription() => _inner.DeleteSubscription();
+
+        public ChangeFeedQueueEpoch ReadEpoch() => _inner.ReadEpoch();
+
+        public ChangeFeedSecurityStamp ReadSecurityStamp() => _inner.ReadSecurityStamp();
+
+        public void NoteSecurityChange() => _inner.NoteSecurityChange();
+
+        public ChangeFeedWatcherLease HoldLease(TimeSpan duration) =>
+            _inner.HoldLease(duration);
+
+        public void ReleaseLease() => _inner.ReleaseLease();
+
+        public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
+            _inner.ReadPending(budget);
+
+        public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
+            string volumeId,
+            ulong journalId,
+            long fromUsn,
+            long toUsn,
+            IReadOnlyList<ChangeFeedRootDelivery> roots) =>
+            _inner.Enqueue(volumeId, journalId, fromUsn, toUsn, roots);
+
+        public void Acknowledge(long sequence) => _inner.Acknowledge(sequence);
+
+        public int DiscardUncommitted(string volumeId, ulong journalId, long committedUsn) =>
+            _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
+    }
+
     private sealed class FailingEnqueueStore : IChangeFeedStore
     {
         private readonly IChangeFeedStore _inner;
@@ -390,6 +776,19 @@ public sealed class UsnDrainRunnerTests : IDisposable
             _inner.WriteSubscription(subscription);
 
         public void DeleteSubscription() => _inner.DeleteSubscription();
+
+        public ChangeFeedQueueEpoch ReadEpoch() => _inner.ReadEpoch();
+
+        public ChangeFeedSecurityStamp ReadSecurityStamp() => _inner.ReadSecurityStamp();
+
+        public void NoteSecurityChange() => _inner.NoteSecurityChange();
+
+        public ChangeFeedWatcherLease ReadLease() => _inner.ReadLease();
+
+        public ChangeFeedWatcherLease HoldLease(TimeSpan duration) =>
+            _inner.HoldLease(duration);
+
+        public void ReleaseLease() => _inner.ReleaseLease();
 
         public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
             _inner.ReadPending(budget);
@@ -415,8 +814,15 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
     private UsnDrainRunner CreateRunner(
         IChangeFeedStore store,
-        FakeUsnJournalReader reader) =>
-        new(Layout(), store, new SingleReaderFactory(reader), _probe, new FakeUsnSubtreeReader());
+        FakeUsnJournalReader reader,
+        Func<DateTime>? utcNow = null) =>
+        new(
+            Layout(),
+            store,
+            new SingleReaderFactory(reader),
+            _probe,
+            new FakeUsnSubtreeReader(),
+            utcNow);
 
     private UsnVolumeFeedState? ReadState()
     {
@@ -459,6 +865,24 @@ public sealed class UsnDrainRunnerTests : IDisposable
         }
 
         public IUsnJournalReader Open(string volumeRootPath) => _reader;
+    }
+
+    private sealed class CountingReaderFactory : IUsnJournalReaderFactory
+    {
+        private readonly IUsnJournalReader _reader;
+
+        public CountingReaderFactory(IUsnJournalReader reader)
+        {
+            _reader = reader;
+        }
+
+        public int OpenCount { get; private set; }
+
+        public IUsnJournalReader Open(string volumeRootPath)
+        {
+            OpenCount++;
+            return _reader;
+        }
     }
 
     private sealed class ThrowingReaderFactory : IUsnJournalReaderFactory

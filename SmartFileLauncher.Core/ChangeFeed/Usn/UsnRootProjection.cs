@@ -38,6 +38,8 @@ public sealed class UsnRootProjection
 
     public int LastSkippedSubtreeDirectoryCount { get; private set; }
 
+    public bool LastSecurityChanged { get; private set; }
+
     internal int DirectoryCount => _directories.Count;
 
     public ChangeFeedGapReason CheckRoot()
@@ -67,6 +69,8 @@ public sealed class UsnRootProjection
             ? records
             : records.Where(record => record.Usn >= SynchronizedFromUsn).ToArray();
 
+        LastSecurityChanged = false;
+
         var scope = new UsnProjectionScope(_directories);
         var projection = UsnEventProjector.Project(
             new UsnProjectionContext(
@@ -75,6 +79,8 @@ public sealed class UsnRootProjection
                 VolumeSerialNumber,
                 cancellationToken),
             visible);
+
+        LastSecurityChanged = projection.SecurityChanged;
 
         if (projection.GapReason != ChangeFeedGapReason.None)
         {

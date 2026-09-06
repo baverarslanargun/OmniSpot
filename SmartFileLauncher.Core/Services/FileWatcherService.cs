@@ -27,10 +27,13 @@ public class FileWatcherService : IDisposable
     private bool _isClearing;
     private bool _disposed;
     private volatile bool _isWatching;
+    private volatile bool _dispatchPaused;
 
     public event Action<FileChangeEvent>? OnChange;
 
     public event Action<Exception>? OnError;
+
+    public event Action<Exception>? OnFault;
 
     public FileWatcherService(int debounceMs = 100, bool skipReparsePoints = false)
     {
@@ -59,6 +62,8 @@ public class FileWatcherService : IDisposable
     public int PendingEventCount => _eventQueue.Count;
 
     public bool IsWatching => _isWatching;
+
+    public bool IsDispatchPaused => _dispatchPaused;
 
     internal int WatchedPathCount
     {
@@ -161,7 +166,7 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    public void Start()
+    public void Start(bool dispatchPaused = false)
     {
         lock (_stateLock)
         {
@@ -175,6 +180,7 @@ public class FileWatcherService : IDisposable
             }
 
             Interlocked.Increment(ref _generation);
+            _dispatchPaused = dispatchPaused;
             _isWatching = true;
 
             try
@@ -187,6 +193,7 @@ public class FileWatcherService : IDisposable
             catch
             {
                 _isWatching = false;
+                _dispatchPaused = false;
                 Interlocked.Increment(ref _generation);
 
                 foreach (var watcher in _watchers)
@@ -195,6 +202,18 @@ public class FileWatcherService : IDisposable
                 }
 
                 throw;
+            }
+        }
+    }
+
+    public void ResumeDispatch()
+    {
+        lock (_stateLock)
+        {
+            ThrowIfDisposed();
+            if (_isWatching)
+            {
+                _dispatchPaused = false;
             }
         }
     }
@@ -211,6 +230,7 @@ public class FileWatcherService : IDisposable
             }
 
             _isWatching = false;
+            _dispatchPaused = false;
             Interlocked.Increment(ref _generation);
 
             if (!ReferenceEquals(_dispatchingService, this))
@@ -241,6 +261,7 @@ public class FileWatcherService : IDisposable
             try
             {
                 _isWatching = false;
+                _dispatchPaused = false;
                 Interlocked.Increment(ref _generation);
 
                 foreach (var watcher in _watchers)
@@ -309,7 +330,8 @@ public class FileWatcherService : IDisposable
 
     private void OnWatcherError(object sender, ErrorEventArgs e)
     {
-        NotifyError(e.GetException());
+        TransitionToFaulted(processorStopped: false);
+        NotifyError(e.GetException(), fatal: true);
     }
 
     #endregion
@@ -453,43 +475,52 @@ public class FileWatcherService : IDisposable
                 var elapsed = (DateTime.UtcNow - lastProcessTime).TotalMilliseconds;
                 if (elapsed >= _debounceMs && pending.Count > 0)
                 {
-                    foreach (var queued in pending)
+                    var dispatchPaused = false;
+                    lock (_stateLock)
                     {
-                        var shouldDispatch = false;
-                        lock (_stateLock)
-                        {
-                            if (_isWatching && queued.Generation == Volatile.Read(ref _generation))
-                            {
-                                _inFlightCallbacks++;
-                                shouldDispatch = true;
-                            }
-                        }
-
-                        if (!shouldDispatch)
-                            continue;
-
-                        var previousDispatchingService = _dispatchingService;
-                        try
-                        {
-                            _dispatchingService = this;
-                            OnChange?.Invoke(queued.Event);
-                        }
-                        catch (Exception ex)
-                        {
-                            NotifyError(ex);
-                        }
-                        finally
-                        {
-                            _dispatchingService = previousDispatchingService;
-                            lock (_stateLock)
-                            {
-                                _inFlightCallbacks--;
-                                Monitor.PulseAll(_stateLock);
-                            }
-                        }
+                        dispatchPaused = _isWatching && _dispatchPaused;
                     }
 
-                    ResetPending(Volatile.Read(ref _generation));
+                    if (!dispatchPaused)
+                    {
+                        foreach (var queued in pending)
+                        {
+                            var shouldDispatch = false;
+                            lock (_stateLock)
+                            {
+                                if (_isWatching && queued.Generation == Volatile.Read(ref _generation))
+                                {
+                                    _inFlightCallbacks++;
+                                    shouldDispatch = true;
+                                }
+                            }
+
+                            if (!shouldDispatch)
+                                continue;
+
+                            var previousDispatchingService = _dispatchingService;
+                            try
+                            {
+                                _dispatchingService = this;
+                                OnChange?.Invoke(queued.Event);
+                            }
+                            catch (Exception ex)
+                            {
+                                NotifyError(ex, fatal: false);
+                            }
+                            finally
+                            {
+                                _dispatchingService = previousDispatchingService;
+                                lock (_stateLock)
+                                {
+                                    _inFlightCallbacks--;
+                                    Monitor.PulseAll(_stateLock);
+                                }
+                            }
+                        }
+
+                        ResetPending(Volatile.Read(ref _generation));
+                    }
                 }
 
                 await Task.Delay(50, ct).ConfigureAwait(false);
@@ -500,30 +531,42 @@ public class FileWatcherService : IDisposable
         }
         catch (Exception ex)
         {
-            lock (_stateLock)
-            {
-                if (!_disposed)
-                {
-                    _isWatching = false;
-                    Interlocked.Increment(ref _generation);
-                    _processorTask = null;
-                    foreach (var watcher in _watchers)
-                    {
-                        try { watcher.EnableRaisingEvents = false; }
-                        catch { }
-                    }
-                }
-            }
+            TransitionToFaulted(processorStopped: true);
 
             var previousDispatchingService = _dispatchingService;
             try
             {
                 _dispatchingService = this;
-                NotifyError(ex);
+                NotifyError(ex, fatal: true);
             }
             finally
             {
                 _dispatchingService = previousDispatchingService;
+            }
+        }
+    }
+
+    private void TransitionToFaulted(bool processorStopped)
+    {
+        lock (_stateLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _isWatching = false;
+            _dispatchPaused = false;
+            Interlocked.Increment(ref _generation);
+            if (processorStopped)
+            {
+                _processorTask = null;
+            }
+
+            foreach (var watcher in _watchers)
+            {
+                try { watcher.EnableRaisingEvents = false; }
+                catch { }
             }
         }
     }
@@ -552,9 +595,18 @@ public class FileWatcherService : IDisposable
         _eventQueue.Enqueue((evt, generation));
     }
 
+    internal void SimulateWatcherError(Exception exception) =>
+        OnWatcherError(this, new ErrorEventArgs(exception));
+
     internal void TriggerError(Exception exception)
     {
-        NotifyError(exception);
+        NotifyError(exception, fatal: false);
+    }
+
+    internal void TriggerFault(Exception exception)
+    {
+        TransitionToFaulted(processorStopped: false);
+        NotifyError(exception, fatal: true);
     }
 
     public void ClearPendingEvents()
@@ -628,11 +680,24 @@ public class FileWatcherService : IDisposable
         GC.SuppressFinalize(this);
     }
 
-    private void NotifyError(Exception exception)
+    private void NotifyError(Exception exception, bool fatal)
     {
         try
         {
             OnError?.Invoke(exception);
+        }
+        catch
+        {
+        }
+
+        if (!fatal)
+        {
+            return;
+        }
+
+        try
+        {
+            OnFault?.Invoke(exception);
         }
         catch
         {

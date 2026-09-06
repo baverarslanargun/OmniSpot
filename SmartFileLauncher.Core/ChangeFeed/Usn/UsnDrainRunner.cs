@@ -8,6 +8,8 @@ namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 public enum UsnDrainOutcome
 {
     Completed,
+    LeaseHeld,
+    LeasePreempted,
     NoSubscription,
     SubscriptionRejected,
     Faulted
@@ -29,23 +31,31 @@ public sealed class UsnDrainRunner
     private readonly IUsnJournalReaderFactory _readerFactory;
     private readonly IUsnIdentityProbe _identityProbe;
     private readonly IUsnSubtreeReader? _subtreeReader;
+    private readonly Func<DateTime> _utcNow;
 
     public UsnDrainRunner(
         ChangeFeedStoreLayout layout,
         IChangeFeedStore store,
         IUsnJournalReaderFactory readerFactory,
         IUsnIdentityProbe identityProbe,
-        IUsnSubtreeReader? subtreeReader = null)
+        IUsnSubtreeReader? subtreeReader = null,
+        Func<DateTime>? utcNow = null)
     {
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _readerFactory = readerFactory ?? throw new ArgumentNullException(nameof(readerFactory));
         _identityProbe = identityProbe ?? throw new ArgumentNullException(nameof(identityProbe));
         _subtreeReader = subtreeReader;
+        _utcNow = utcNow ?? (() => DateTime.UtcNow);
     }
 
     public UsnDrainResult Run(CancellationToken cancellationToken = default)
     {
+        if (_store.ReadLease().IsHeld(_utcNow()))
+        {
+            return new UsnDrainResult(UsnDrainOutcome.LeaseHeld, 0, 0, 0, 0, 0);
+        }
+
         var subscription = _store.ReadSubscription();
         if (subscription is null)
         {
@@ -74,11 +84,22 @@ public sealed class UsnDrainRunner
         var entries = 0;
         var events = 0;
         var gapped = 0;
+        var leaseArrived = false;
         string? diagnostics = null;
 
         if (partition.Unsupported.Count > 0)
         {
-            entries += AnnounceGap(partition.Unsupported, ChangeFeedGapReason.RootUnavailable);
+            var announced = AnnounceGap(
+                partition.Unsupported,
+                ChangeFeedGapReason.RootUnavailable,
+                cancellationToken);
+
+            if (announced is null)
+            {
+                return new UsnDrainResult(UsnDrainOutcome.LeasePreempted, 0, 0, 0, 0, 0);
+            }
+
+            entries += announced.Value;
             gapped += partition.Unsupported.Count;
             diagnostics = $"Desteklenmeyen kök: {partition.Unsupported[0].RootPath}";
         }
@@ -94,11 +115,28 @@ public sealed class UsnDrainRunner
             }
             catch (Exception failure) when (IsVolumeFailure(failure))
             {
-                entries += AnnounceGap(group.Roots, ChangeFeedGapReason.JournalUnavailable);
+                var announced = AnnounceGap(
+                    group.Roots,
+                    ChangeFeedGapReason.JournalUnavailable,
+                    cancellationToken);
+
+                if (announced is null)
+                {
+                    leaseArrived = true;
+                    break;
+                }
+
+                entries += announced.Value;
                 faulted++;
                 gapped += group.Roots.Count;
                 diagnostics ??= $"{group.VolumeRoot}: {failure.Message}";
                 continue;
+            }
+
+            if (result.LeaseArrived)
+            {
+                leaseArrived = true;
+                break;
             }
 
             drained++;
@@ -113,9 +151,11 @@ public sealed class UsnDrainRunner
             }
         }
 
-        var outcome = drained == 0 && faulted > 0
-            ? UsnDrainOutcome.Faulted
-            : UsnDrainOutcome.Completed;
+        var outcome = leaseArrived
+            ? UsnDrainOutcome.LeasePreempted
+            : drained == 0 && faulted > 0
+                ? UsnDrainOutcome.Faulted
+                : UsnDrainOutcome.Completed;
 
         return new UsnDrainResult(outcome, drained, faulted, entries, events, gapped, diagnostics);
     }
@@ -140,14 +180,7 @@ public sealed class UsnDrainRunner
         using var reader = _readerFactory.Open(volumeRoot);
         var descriptor = reader.QueryJournal();
 
-        if (state is not null && state.JournalId == descriptor.JournalId)
-        {
-            _store.DiscardUncommitted(
-                VolumeIdOf(state.Roots),
-                state.JournalId,
-                state.NextUsn);
-        }
-        else
+        if (state is not null && state.JournalId != descriptor.JournalId)
         {
             state = null;
         }
@@ -155,7 +188,7 @@ public sealed class UsnDrainRunner
         var admission = Admit(state, roots, descriptor, cancellationToken);
         if (admission.States.Count == 0)
         {
-            return Announce(admission, descriptor);
+            return Announce(admission, descriptor, state, cancellationToken);
         }
 
         var journalId = descriptor.JournalId;
@@ -182,6 +215,23 @@ public sealed class UsnDrainRunner
                 GenerationOf(roots, root.Root.RootPath)));
         }
 
+        var securityChanged = projections.Any(projection => projection.LastSecurityChanged);
+        var rebuilt = RebuildGappedRoots(feed, batch, descriptor, cancellationToken);
+
+        using var commitScope = _store.EnterOwnerScope(cancellationToken);
+
+        if (_store.ReadLease().IsHeld(_utcNow()))
+        {
+            return VolumeDrain.LeaseTaken;
+        }
+
+        Discard(state);
+
+        if (securityChanged)
+        {
+            _store.NoteSecurityChange();
+        }
+
         var entries = 0;
         if (deliveries.Count > 0)
         {
@@ -195,7 +245,7 @@ public sealed class UsnDrainRunner
 
         feed.Accept();
 
-        var resynchronized = Resynchronize(feed, batch, descriptor, cancellationToken);
+        var resynchronized = Capture(feed, batch, rebuilt);
         if (resynchronized.Count == 0)
         {
             stateStore.Delete();
@@ -267,18 +317,41 @@ public sealed class UsnDrainRunner
         return new Admission(states, deliveries);
     }
 
-    private IReadOnlyList<UsnChangeFeedState> Resynchronize(
+    private IReadOnlyDictionary<string, UsnChangeFeedState> RebuildGappedRoots(
         UsnVolumeChangeFeed feed,
         UsnVolumeBatch batch,
         UsnJournalDescriptor descriptor,
         CancellationToken cancellationToken)
     {
-        var gapped = batch.Roots
-            .Where(root => root.Batch.HasGap)
-            .Select(root => root.Root.RootPath)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var gapped = GappedRoots(batch);
+        var rebuilt = new Dictionary<string, UsnChangeFeedState>(
+            StringComparer.OrdinalIgnoreCase);
 
+        foreach (var projection in feed.Roots)
+        {
+            if (!gapped.Contains(projection.RootPath))
+            {
+                continue;
+            }
+
+            if (TryBootstrap(projection.RootPath, descriptor, cancellationToken, out var state) &&
+                state.ToChangeFeedRootIdentity() == projection.RootIdentity)
+            {
+                rebuilt[projection.RootPath] = state;
+            }
+        }
+
+        return rebuilt;
+    }
+
+    private static IReadOnlyList<UsnChangeFeedState> Capture(
+        UsnVolumeChangeFeed feed,
+        UsnVolumeBatch batch,
+        IReadOnlyDictionary<string, UsnChangeFeedState> rebuilt)
+    {
+        var gapped = GappedRoots(batch);
         var states = new List<UsnChangeFeedState>(feed.Roots.Count);
+
         foreach (var projection in feed.Roots)
         {
             if (!gapped.Contains(projection.RootPath))
@@ -287,18 +360,49 @@ public sealed class UsnDrainRunner
                 continue;
             }
 
-            if (TryBootstrap(projection.RootPath, descriptor, cancellationToken, out var rebuilt) &&
-                rebuilt.ToChangeFeedRootIdentity() == projection.RootIdentity)
+            if (rebuilt.TryGetValue(projection.RootPath, out var state))
             {
-                states.Add(rebuilt);
+                states.Add(state);
             }
         }
 
         return states;
     }
 
-    private VolumeDrain Announce(Admission admission, UsnJournalDescriptor descriptor)
+    private static HashSet<string> GappedRoots(UsnVolumeBatch batch) =>
+        batch.Roots
+            .Where(root => root.Batch.HasGap)
+            .Select(root => root.Root.RootPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private void Discard(UsnVolumeFeedState? state)
     {
+        if (state is null)
+        {
+            return;
+        }
+
+        _store.DiscardUncommitted(
+            VolumeIdOf(state.Roots),
+            state.JournalId,
+            state.NextUsn);
+    }
+
+    private VolumeDrain Announce(
+        Admission admission,
+        UsnJournalDescriptor descriptor,
+        UsnVolumeFeedState? state,
+        CancellationToken cancellationToken)
+    {
+        using var commitScope = _store.EnterOwnerScope(cancellationToken);
+
+        if (_store.ReadLease().IsHeld(_utcNow()))
+        {
+            return VolumeDrain.LeaseTaken;
+        }
+
+        Discard(state);
+
         if (admission.Deliveries.Count == 0)
         {
             return new VolumeDrain(0, 0, 0, false, null);
@@ -311,10 +415,19 @@ public sealed class UsnDrainRunner
         return new VolumeDrain(entries, 0, admission.Deliveries.Count, false, null);
     }
 
-    private int AnnounceGap(
+    private int? AnnounceGap(
         IReadOnlyList<ChangeFeedSubscribedRoot> roots,
-        ChangeFeedGapReason reason) =>
-        _store.Enqueue(
+        ChangeFeedGapReason reason,
+        CancellationToken cancellationToken)
+    {
+        using var commitScope = _store.EnterOwnerScope(cancellationToken);
+
+        if (_store.ReadLease().IsHeld(_utcNow()))
+        {
+            return null;
+        }
+
+        return _store.Enqueue(
             string.Empty,
             0,
             0,
@@ -325,6 +438,7 @@ public sealed class UsnDrainRunner
                     ChangeFeedBatch.Gap(reason),
                     root.Generation))
                 .ToArray()).Count;
+    }
 
     private static ChangeFeedRootGeneration GenerationOf(
         IReadOnlyList<ChangeFeedSubscribedRoot> roots,
@@ -446,5 +560,10 @@ public sealed class UsnDrainRunner
         int Events,
         int Gapped,
         bool Faulted,
-        string? Diagnostics);
+        string? Diagnostics,
+        bool LeaseArrived = false)
+    {
+        public static VolumeDrain LeaseTaken { get; } =
+            new(0, 0, 0, false, null, true);
+    }
 }

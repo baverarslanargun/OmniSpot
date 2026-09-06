@@ -9,6 +9,7 @@ public interface IIndexLifecycleService : IDisposable
     event Action<IndexProgress>? ProgressChanged;
     event Action<FileChangeEvent>? FileChanged;
     event Action<string>? Error;
+    event Action<string>? Notice;
     event Action<int, int, int>? ReconciliationProgressChanged;
     event Action<bool>? ReconciliationStateChanged;
 

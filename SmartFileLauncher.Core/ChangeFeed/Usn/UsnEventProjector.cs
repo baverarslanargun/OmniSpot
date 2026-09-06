@@ -11,7 +11,8 @@ internal sealed record UsnProjectionContext(
 internal sealed record UsnProjectionResult(
     IReadOnlyList<ChangeFeedEvent> Events,
     ChangeFeedGapReason GapReason,
-    int SkippedSubtreeDirectoryCount = 0);
+    int SkippedSubtreeDirectoryCount = 0,
+    bool SecurityChanged = false);
 
 internal static class UsnEventProjector
 {
@@ -24,6 +25,9 @@ internal static class UsnEventProjector
         UsnReason.NamedDataTruncation |
         UsnReason.BasicInfoChange;
 
+    private const UsnReason SecurityReasons =
+        UsnReason.SecurityChange | UsnReason.ReparsePointChange;
+
     private const UsnReason RootBreakingReasons =
         UsnReason.FileDelete | UsnReason.RenameOldName | UsnReason.RenameNewName;
 
@@ -34,6 +38,8 @@ internal static class UsnEventProjector
         var aggregates = new Dictionary<UsnFileReference, Aggregate>();
         var scope = context.Scope;
         var skippedSubtreeDirectories = 0;
+        var securityChanged = records.Any(
+            record => (record.Reason & SecurityReasons) != 0);
 
         foreach (var record in records)
         {
@@ -43,7 +49,8 @@ internal static class UsnEventProjector
                 {
                     return new UsnProjectionResult(
                         Array.Empty<ChangeFeedEvent>(),
-                        ChangeFeedGapReason.RootIdentityChanged);
+                        ChangeFeedGapReason.RootIdentityChanged,
+                        SecurityChanged: securityChanged);
                 }
 
                 continue;
@@ -51,7 +58,7 @@ internal static class UsnEventProjector
 
             if (!UsnDirectoryNames.IsSingleSegment(record.Name))
             {
-                return Invalid();
+                return Invalid(securityChanged);
             }
 
             string? recordPath = null;
@@ -62,7 +69,7 @@ internal static class UsnEventProjector
                         Path.Combine(parentPath, record.Name),
                         out recordPath))
                 {
-                    return Invalid();
+                    return Invalid(securityChanged);
                 }
 
                 Accumulate(aggregates, record, recordPath);
@@ -73,7 +80,7 @@ internal static class UsnEventProjector
                 var mapped = UpdateDirectoryMap(context, record, recordPath);
                 if (mapped < 0)
                 {
-                    return Invalid();
+                    return Invalid(securityChanged);
                 }
 
                 skippedSubtreeDirectories += mapped;
@@ -83,11 +90,15 @@ internal static class UsnEventProjector
         return new UsnProjectionResult(
             Emit(aggregates),
             ChangeFeedGapReason.None,
-            skippedSubtreeDirectories);
+            skippedSubtreeDirectories,
+            securityChanged);
     }
 
-    private static UsnProjectionResult Invalid() =>
-        new(Array.Empty<ChangeFeedEvent>(), ChangeFeedGapReason.FeedStateInvalid);
+    private static UsnProjectionResult Invalid(bool securityChanged) =>
+        new(
+            Array.Empty<ChangeFeedEvent>(),
+            ChangeFeedGapReason.FeedStateInvalid,
+            SecurityChanged: securityChanged);
 
     private static void Accumulate(
         Dictionary<UsnFileReference, Aggregate> aggregates,
