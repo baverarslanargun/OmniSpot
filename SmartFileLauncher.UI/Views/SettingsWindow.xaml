@@ -273,7 +273,30 @@
                                    Margin="0,12,0,0"/>
                     </StackPanel>
                 </Border>
-                
+
+                <Border Background="White"
+                        CornerRadius="12"
+                        Padding="16"
+                        Margin="0,16,0,0">
+                    <StackPanel>
+                        <TextBlock Text="🔁 Uygulama" Style="{StaticResource SectionHeader}"/>
+
+                        <StackPanel Orientation="Horizontal">
+                            <Button x:Name="RestartApplicationButton"
+                                    Content="🔁 Yeniden Başlat"
+                                    Style="{StaticResource SecondaryButton}"
+                                    Click="RestartApplication_Click"
+                                    Padding="12,8"/>
+                        </StackPanel>
+
+                        <TextBlock Text="💡 OmniSpot kapanır ve yeniden açılır. İndeks silinmez. Kaydedilmemiş ayar değişiklikleri uygulanmaz."
+                                   FontSize="11"
+                                   Foreground="#86868B"
+                                   TextWrapping="Wrap"
+                                   Margin="0,12,0,0"/>
+                    </StackPanel>
+                </Border>
+
             </StackPanel>
         </ScrollViewer>
         

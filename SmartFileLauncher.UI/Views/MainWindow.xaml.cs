@@ -272,6 +272,7 @@ public partial class MainWindow : Window {
         settingsWindow.Owner = this;
         settingsWindow.SettingsChanged += OnSettingsChanged;
         settingsWindow.IndexRebuildRequested += OnIndexRebuildRequested;
+        settingsWindow.RestartRequested += OnRestartRequested;
         settingsWindow.ShowDialog();
         
         if (!_isPreparedForShutdown) {
@@ -285,6 +286,10 @@ public partial class MainWindow : Window {
     }
 
     private void OnIndexRebuildRequested(object? sender, EventArgs e) {
+        ForceExit();
+    }
+
+    private void OnRestartRequested(object? sender, EventArgs e) {
         ForceExit();
     }
     

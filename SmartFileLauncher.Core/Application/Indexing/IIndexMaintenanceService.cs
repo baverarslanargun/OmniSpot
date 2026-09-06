@@ -10,4 +10,5 @@ public interface IIndexMaintenanceService
     IndexStorageStatus GetStatus();
     bool OpenIndexFolder();
     void ScheduleRebuild();
+    void ScheduleRestart();
 }
