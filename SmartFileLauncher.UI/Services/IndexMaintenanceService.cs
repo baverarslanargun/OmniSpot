@@ -48,6 +48,52 @@ public sealed class IndexMaintenanceService : IIndexMaintenanceService
         return true;
     }
 
+    public void ScheduleRestart()
+    {
+        var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
+        if (string.IsNullOrEmpty(executablePath))
+        {
+            throw new InvalidOperationException("Uygulama yolu bulunamadı.");
+        }
+
+        var batchPath = Path.Combine(
+            Path.GetTempPath(),
+            $"omnispot_restart_{Environment.ProcessId}.bat");
+
+        File.WriteAllText(
+            batchPath,
+            BuildRestartScript(executablePath, Environment.ProcessId));
+
+        Process.Start(new ProcessStartInfo
+        {
+            FileName = batchPath,
+            CreateNoWindow = true,
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Hidden
+        });
+    }
+
+    internal static string BuildRestartScript(string executablePath, int processId) =>
+        $@"@echo off
+setlocal
+set /a waitAttempts=0
+
+:wait_for_process
+tasklist /FI ""PID eq {processId}"" /NH 2>nul | findstr /R /C:""[ ]{processId}[ ]"" >nul
+if errorlevel 1 goto relaunch
+set /a waitAttempts+=1
+if %waitAttempts% GEQ 120 goto cleanup
+timeout /t 1 /nobreak >nul
+goto wait_for_process
+
+:relaunch
+start """" ""{executablePath}""
+
+:cleanup
+endlocal
+del ""%~f0""
+";
+
     public void ScheduleRebuild()
     {
         var executablePath = Process.GetCurrentProcess().MainModule?.FileName;

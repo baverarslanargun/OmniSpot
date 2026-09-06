@@ -227,5 +227,11 @@ public sealed class ApplicationCompositionRoot : IDisposable
             throw new InvalidOperationException(
                 $"İndeks yeniden oluşturma {profileName} profilinde devre dışıdır.");
         }
+
+        public void ScheduleRestart()
+        {
+            throw new InvalidOperationException(
+                $"Yeniden başlatma {profileName} profilinde devre dışıdır.");
+        }
     }
 }

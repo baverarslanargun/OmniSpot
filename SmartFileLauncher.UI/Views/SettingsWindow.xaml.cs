@@ -20,6 +20,7 @@ public partial class SettingsWindow : Window
     
     public event EventHandler<AppSettings>? SettingsChanged;
     public event EventHandler? IndexRebuildRequested;
+    public event EventHandler? RestartRequested;
 
     public SettingsWindow(
         AppSettings settings,
@@ -103,6 +104,37 @@ public partial class SettingsWindow : Window
         {
             System.Windows.MessageBox.Show(
                 $"İndeks yeniden oluşturulamadı: {ex.Message}\n\nLütfen uygulamayı manuel olarak yeniden başlatın.",
+                "Hata",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+        }
+    }
+
+    private void RestartApplication_Click(object sender, RoutedEventArgs e)
+    {
+        var result = System.Windows.MessageBox.Show(
+            "OmniSpot kapanıp yeniden açılacak. İndeks silinmez.\n\n" +
+            "Kaydedilmemiş ayar değişiklikleri uygulanmaz. Devam etmek istiyor musunuz?",
+            "Yeniden Başlat",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes)
+        {
+            return;
+        }
+
+        try
+        {
+            _indexMaintenance.ScheduleRestart();
+            _log?.Invoke("🔁 OmniSpot yeniden başlatılıyor...");
+            Close();
+            RestartRequested?.Invoke(this, EventArgs.Empty);
+        }
+        catch (Exception ex)
+        {
+            System.Windows.MessageBox.Show(
+                $"Yeniden başlatılamadı: {ex.Message}\n\nLütfen uygulamayı manuel olarak kapatıp açın.",
                 "Hata",
                 MessageBoxButton.OK,
                 MessageBoxImage.Error);
