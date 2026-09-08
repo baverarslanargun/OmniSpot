@@ -7,7 +7,7 @@ public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
 {
     private readonly ITokenizer _tokenizer;
     private readonly Func<CancellationToken, SearchSnapshot>? _snapshotProvider;
-    private readonly Func<CancellationToken, SearchState>? _searchStateProvider;
+    private readonly Func<CancellationToken, ISearchStateReader>? _searchStateProvider;
 
     public SearchDiagnosticsService(
         ITokenizer tokenizer,
@@ -21,7 +21,7 @@ public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
 
     public SearchDiagnosticsService(
         ITokenizer tokenizer,
-        Func<CancellationToken, SearchState> searchStateProvider)
+        Func<CancellationToken, ISearchStateReader> searchStateProvider)
     {
         _tokenizer = tokenizer
             ?? throw new ArgumentNullException(nameof(tokenizer));

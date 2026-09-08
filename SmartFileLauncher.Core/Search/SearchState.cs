@@ -6,7 +6,7 @@ using SmartFileLauncher.Core.Utilities;
 
 namespace SmartFileLauncher.Core.Search;
 
-public sealed class SearchState
+public sealed class SearchState : ISearchStateReader
 {
     private static readonly StringComparer PathComparer = StringComparer.OrdinalIgnoreCase;
 
@@ -40,6 +40,19 @@ public sealed class SearchState
         0);
 
     internal int MissingParentCount => _missingParentCount;
+    public bool ContainsPath(string path) => _itemsByPath.ContainsKey(path);
+
+    ISearchStateReader ISearchStateReader.WithUpserts(
+        IEnumerable<FileSystemNode> nodes,
+        ITokenizer tokenizer) => WithUpserts(nodes, tokenizer);
+
+    ISearchStateReader ISearchStateReader.WithoutPathAndDescendants(string path) =>
+        WithoutPathAndDescendants(path);
+
+    ISearchStateReader ISearchStateReader.WithChanges(
+        IEnumerable<string> removedPaths,
+        IEnumerable<FileSystemNode> upserts,
+        ITokenizer tokenizer) => WithChanges(removedPaths, upserts, tokenizer);
 
     internal ImmutableArray<string> TokensFor(string path) =>
         _tokensByPath.TryGetValue(path, out var tokens) ? tokens : ImmutableArray<string>.Empty;
@@ -260,6 +273,17 @@ public sealed class SearchState
         }
 
         return state;
+    }
+
+    internal SearchState WithChanges(
+        IEnumerable<string> removedPaths,
+        IEnumerable<FileSystemNode> upserts,
+        ITokenizer tokenizer)
+    {
+        var state = this;
+        foreach (var path in removedPaths)
+            state = state.WithoutPath(path);
+        return state.WithUpserts(upserts, tokenizer);
     }
 
     public SearchState WithoutPathAndDescendants(string path)

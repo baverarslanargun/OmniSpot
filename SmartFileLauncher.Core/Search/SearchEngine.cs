@@ -6,7 +6,7 @@ namespace SmartFileLauncher.Core.Search;
 public class SearchEngine
 {
     private readonly Func<CancellationToken, SearchSnapshot>? _snapshotProvider;
-    private readonly Func<CancellationToken, SearchState>? _searchStateProvider;
+    private readonly Func<CancellationToken, ISearchStateReader>? _searchStateProvider;
     private readonly ITokenizer _tokenizer;
     private readonly IScoringStrategy _scoring;
 
@@ -31,7 +31,7 @@ public class SearchEngine
     }
 
     public SearchEngine(
-        Func<CancellationToken, SearchState> searchStateProvider,
+        Func<CancellationToken, ISearchStateReader> searchStateProvider,
         ITokenizer tokenizer,
         IScoringStrategy scoring)
     {
@@ -56,7 +56,7 @@ public class SearchEngine
 
         if (_searchStateProvider != null)
         {
-            return Search(_searchStateProvider(cancellationToken), query, tokens, maxResults, cancellationToken);
+            return Search(_searchStateProvider(cancellationToken).ForQuery(), query, tokens, maxResults, cancellationToken);
         }
 
         return Search(
@@ -118,7 +118,7 @@ public class SearchEngine
     }
 
     private IReadOnlyList<SearchResult> Search(
-        SearchState state,
+        ISearchStateReader state,
         string query,
         IReadOnlyList<string> tokens,
         int maxResults,

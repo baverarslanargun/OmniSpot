@@ -26,7 +26,7 @@ public interface IIndexLifecycleService : IDisposable
     IndexTokenMatches GetTokenMatches(
         string token,
         CancellationToken cancellationToken = default);
-    SearchState CreateSearchState(
+    ISearchStateReader CreateSearchState(
         CancellationToken cancellationToken = default);
     IndexStats GetStats();
     IndexDiagnosticsReport GetDiagnosticsReport();

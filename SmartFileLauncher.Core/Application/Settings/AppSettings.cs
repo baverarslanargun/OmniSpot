@@ -15,6 +15,7 @@ public sealed class AppSettings
     public int DiagnosticsMetricIntervalSeconds { get; set; } = 5;
     public string DiagnosticsLogDirectory { get; set; } = string.Empty;
     public bool RememberDiagnosticsLogDirectory { get; set; } = true;
+    public bool CompactSearchStateEnabled { get; set; }
 
     public void ResetToDefaults()
     {
@@ -31,5 +32,6 @@ public sealed class AppSettings
         DiagnosticsMetricIntervalSeconds = 5;
         DiagnosticsLogDirectory = string.Empty;
         RememberDiagnosticsLogDirectory = true;
+        CompactSearchStateEnabled = false;
     }
 }

@@ -15,8 +15,7 @@ public sealed class RealTreeMemoryBreakdownTests
     [
         "node_tree",
         "node_metadata",
-        "path_to_node",
-        "metadata_map"
+        "path_to_node"
     ];
 
     private static readonly string[] ExpectedStages =

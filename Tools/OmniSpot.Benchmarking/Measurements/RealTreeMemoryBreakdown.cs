@@ -119,14 +119,6 @@ internal static class RealTreeMemoryBreakdown
             () => BuildPathToNode(clones));
         cancellationToken.ThrowIfCancellationRequested();
 
-        MeasureStage(
-            indexStages,
-            "metadata_map",
-            "IndexManager._metadataMap sözlüğü (FileMetadata nesneleri hariç)",
-            () => BuildMetadataMap(clones));
-
-        cancellationToken.ThrowIfCancellationRequested();
-
         GC.KeepAlive(pathToNode);
         long? indexStagesTotal = indexStages.All(stage => stage.Measurable)
             ? indexStages.Sum(stage => stage.RetainedBytes!.Value)
@@ -412,19 +404,6 @@ internal static class RealTreeMemoryBreakdown
         return pathToNode;
     }
 
-    private static Dictionary<string, FileMetadata> BuildMetadataMap(FileSystemNode[] clones)
-    {
-        var metadataMap = new Dictionary<string, FileMetadata>(PathComparer);
-        foreach (var clone in clones)
-        {
-            if (clone.Metadata is { } metadata)
-            {
-                metadataMap[clone.FullPath] = metadata;
-            }
-        }
-
-        return metadataMap;
-    }
 }
 
 internal static class MemoryBreakdownFormatter
