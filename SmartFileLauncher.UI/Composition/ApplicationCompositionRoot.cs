@@ -71,15 +71,19 @@ public sealed class ApplicationCompositionRoot : IDisposable
             ? settingsStore.LoadStrict()
             : settingsStore.Load();
         var tokenizer = new BasicTokenizer();
+        var searchStateLayout = _settings.CompactSearchStateEnabled
+            ? SearchStateLayout.Compact
+            : SearchStateLayout.Legacy;
         var indexManager = _measurementRun == null
-            ? new IndexManager(tokenizer)
+            ? new IndexManager(tokenizer, searchStateLayout)
             : IndexManager.CreateWithDatabasePath(
                 _measurementRun.DatabasePath,
                 tokenizer,
                 enforceMeasurementPathSafety:
                     _startupOptions.Profile == MeasurementProfile.EmptyProduction,
                 skipReparsePoints:
-                    _startupOptions.Profile == MeasurementProfile.ProductionCopy);
+                    _startupOptions.Profile == MeasurementProfile.ProductionCopy,
+                layout: searchStateLayout);
         IIndexedLocationProvider locationProvider = _measurementRun == null
             ? new IndexedLocationProvider()
             : _startupOptions.Profile == MeasurementProfile.EmptyProduction

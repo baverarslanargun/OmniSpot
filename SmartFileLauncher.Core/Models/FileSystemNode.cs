@@ -1,8 +1,8 @@
 using System.Collections.Generic;
 namespace SmartFileLauncher.Core.Models;
 public class FileSystemNode {
-    private readonly object _childrenLock = new();
-    private readonly List<FileSystemNode> _children = new();
+    private List<FileSystemNode>? _children;
+    private Func<IReadOnlyList<FileSystemNode>>? _childrenFactory;
 
     public string Name { get; }
     public string FullPath { get; }
@@ -10,8 +10,11 @@ public class FileSystemNode {
     public FileSystemNode? Parent { get; private set; }
     public IReadOnlyList<FileSystemNode> Children {
         get {
-            lock (_childrenLock) {
-                return _children.ToArray();
+            var children = GetChildrenList();
+            if (children == null) return Array.Empty<FileSystemNode>();
+
+            lock (children) {
+                return children.ToArray();
             }
         }
     }
@@ -20,18 +23,40 @@ public class FileSystemNode {
         Name = name; FullPath = fullPath; IsDirectory = isDirectory;
     }
 
+    internal FileSystemNode(string name, string fullPath, bool isDirectory,
+        FileSystemNode? parent, Func<IReadOnlyList<FileSystemNode>>? childrenFactory)
+        : this(name, fullPath, isDirectory) {
+        Parent = parent;
+        _childrenFactory = childrenFactory;
+    }
+
+    private List<FileSystemNode>? GetChildrenList() {
+        var factory = Volatile.Read(ref _childrenFactory);
+        var children = Volatile.Read(ref _children);
+        if (children == null && factory != null) {
+            var created = factory().ToList();
+            children = Interlocked.CompareExchange(ref _children, created, null) ?? created;
+            Interlocked.Exchange(ref _childrenFactory, null);
+        }
+        return children;
+    }
+
     public void AddChild(FileSystemNode child) {
         ArgumentNullException.ThrowIfNull(child);
 
-        lock (_childrenLock) {
+        var children = GetChildrenList() ?? LazyInitializer.EnsureInitialized(ref _children);
+        lock (children) {
             child.Parent = this;
-            _children.Add(child);
+            children.Add(child);
         }
     }
 
     public bool RemoveChild(string fullPath) {
-        lock (_childrenLock) {
-            var removed = _children.RemoveAll(child =>
+        var children = GetChildrenList();
+        if (children == null) return false;
+
+        lock (children) {
+            var removed = children.RemoveAll(child =>
                 string.Equals(child.FullPath, fullPath, StringComparison.OrdinalIgnoreCase));
             return removed > 0;
         }

@@ -257,7 +257,7 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         cancellationToken.ThrowIfCancellationRequested();
-        return _indexManager.RootNode?.Children ?? Array.Empty<FileSystemNode>();
+        return _indexManager.GetIndexedRootNodes();
     }
 
     public IndexTokenMatches GetTokenMatches(
@@ -271,7 +271,7 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
             matches.Take(3).Select(item => item.Name).ToArray());
     }
 
-    public SearchState CreateSearchState(
+    public ISearchStateReader CreateSearchState(
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);

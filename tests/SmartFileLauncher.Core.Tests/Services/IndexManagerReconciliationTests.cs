@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 using SmartFileLauncher.Core.Tests.TestInfrastructure;
 using Xunit;
@@ -241,6 +242,179 @@ public sealed class IndexManagerReconciliationTests
         finally
         {
             manager.Dispose();
+        }
+    }
+
+    [Fact]
+    public async Task SparseReconciliationPublishesOneDeltaAndKeepsUnchangedItems()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        for (var index = 0; index < 100; index++)
+            workspace.CreateFile(Path.Combine("root", $"stable{index:D3}.txt"));
+        var modified = workspace.CreateFile(Path.Combine("root", "modified.txt"), "old");
+        var removed = workspace.CreateFile(Path.Combine("root", "removed.txt"));
+        using var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        using var watcher = new FileWatcherService(debounceMs: 1);
+        using var manager = new IndexManager(database, watcher);
+        await manager.InitializeAsync(root);
+        await WaitForReconciliationAsync(manager, 1);
+        watcher.Stop();
+        var before = manager.CurrentSearchState;
+        var publishes = manager.GetDiagnosticsReport().RepublishCount;
+        var incremental = manager.IncrementalReconciliationPublishCount;
+        File.Delete(removed);
+        File.WriteAllText(modified, "longer modified contents");
+        var added = workspace.CreateFile(Path.Combine("root", "new", "nested", "created.txt"));
+
+        Assert.True(await manager.EnsureSyncedAsync(root));
+
+        var after = manager.CurrentSearchState;
+        Assert.Equal(publishes + 1, manager.GetDiagnosticsReport().RepublishCount);
+        Assert.Equal(incremental + 1, manager.IncrementalReconciliationPublishCount);
+        Assert.Same(before.Get("stable000").Single(), after.Get("stable000").Single());
+        Assert.Single(before.Get("removed"));
+        Assert.Empty(after.Get("removed"));
+        Assert.Equal(3L, before.Get("modified").Single().SizeBytes);
+        Assert.Equal(new FileInfo(modified).Length, after.Get("modified").Single().SizeBytes);
+        Assert.Equal(added, after.Get("created").Single().FullPath);
+        Assert.Equal(SearchState.Create(manager.IndexedEntries.Select(pair => pair.Value)
+                .Where(node => !ReferenceEquals(node, manager.RootNode)), new BasicTokenizer()).GetAllItems()
+                .OrderBy(item => item.FullPath, StringComparer.Ordinal),
+            after.GetAllItems().OrderBy(item => item.FullPath, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task DenseSubtreeRemovalCountsDescendantsForFullRebuild()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        for (var index = 0; index < 100; index++)
+            workspace.CreateFile(Path.Combine("root", $"stable{index:D3}.txt"));
+        var removed = workspace.CreateDirectory(Path.Combine("root", "removed"));
+        for (var index = 0; index < 30; index++)
+            workspace.CreateFile(Path.Combine("root", "removed", $"child{index:D3}.txt"));
+        using var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        using var watcher = new FileWatcherService(debounceMs: 1);
+        using var manager = new IndexManager(database, watcher);
+        await manager.InitializeAsync(root);
+        await WaitForReconciliationAsync(manager, 1);
+        watcher.Stop();
+        var before = manager.CurrentSearchState;
+        var incremental = manager.IncrementalReconciliationPublishCount;
+        Directory.Delete(removed, recursive: true);
+        Assert.True(await manager.EnsureSyncedAsync(root));
+        Assert.Equal(incremental, manager.IncrementalReconciliationPublishCount);
+        Assert.NotSame(before.Get("stable000").Single(), manager.CurrentSearchState.Get("stable000").Single());
+        Assert.Single(before.Get("child000"));
+        Assert.Empty(manager.CurrentSearchState.Get("child000"));
+    }
+
+    [Fact]
+    public async Task ReaderKeepsOldBatchAndQueuedWatcherChangeSurvivesPublication()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        for (var index = 0; index < 100; index++)
+            workspace.CreateFile(Path.Combine("root", $"stable{index:D3}.txt"));
+        using var tokenizer = new BlockingTokenizer();
+        using var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        using var watcher = new FileWatcherService(debounceMs: 1);
+        using var manager = new IndexManager(database, watcher, tokenizer);
+        await manager.InitializeAsync(root);
+        await WaitForReconciliationAsync(manager, 1);
+        watcher.Stop();
+        var before = manager.CurrentSearchState;
+        workspace.CreateFile(Path.Combine("root", "blockedone.txt"));
+        workspace.CreateFile(Path.Combine("root", "blockedtwo.txt"));
+        tokenizer.Armed = true;
+        var reconciliation = manager.EnsureSyncedAsync(root);
+        Task? watcherChange = null;
+        try
+        {
+            Assert.True(tokenizer.Entered.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Same(before, manager.CurrentSearchState);
+            var eventPath = workspace.CreateFile(Path.Combine("root", "watcheronly.txt"));
+            watcherChange = Task.Run(() => manager.ApplyFileChange(new()
+            {
+                ChangeType = FileChangeType.Created, FullPath = eventPath, IsDirectory = false
+            }));
+        }
+        finally
+        {
+            tokenizer.Release.Set();
+            await reconciliation;
+            if (watcherChange != null) await watcherChange;
+        }
+        Assert.Empty(before.Get("blockedone"));
+        Assert.Single(manager.CurrentSearchState.Get("blockedone"));
+        Assert.Single(manager.CurrentSearchState.Get("blockedtwo"));
+        Assert.Single(manager.CurrentSearchState.Get("watcheronly"));
+    }
+
+    [Fact]
+    public async Task FailedDeltaPublicationFallsBackToTheAppliedIndexAndClearsCollector()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        for (var index = 0; index < 100; index++)
+            workspace.CreateFile(Path.Combine("root", $"stable{index:D3}.txt"));
+        var tokenizer = new FaultingTokenizer();
+        using var database = new IndexDatabase(Path.Combine(workspace.Path, "index.db"));
+        using var watcher = new FileWatcherService(debounceMs: 1);
+        using var manager = new IndexManager(database, watcher, tokenizer);
+        await manager.InitializeAsync(root);
+        await WaitForReconciliationAsync(manager, 1);
+        watcher.Stop();
+        var before = manager.CurrentSearchState;
+        workspace.CreateFile(Path.Combine("root", "fault.txt"));
+        tokenizer.FailNext = true;
+        Assert.False(await manager.EnsureSyncedAsync(root));
+        Assert.Empty(before.Get("fault"));
+        Assert.Single(manager.CurrentSearchState.Get("fault"));
+        var incremental = manager.IncrementalReconciliationPublishCount;
+        workspace.CreateFile(Path.Combine("root", "afterfailure.txt"));
+        Assert.True(await manager.EnsureSyncedAsync(root));
+        Assert.Equal(incremental + 1, manager.IncrementalReconciliationPublishCount);
+        Assert.Single(manager.CurrentSearchState.Get("afterfailure"));
+    }
+
+    private sealed class FaultingTokenizer : ITokenizer
+    {
+        private readonly BasicTokenizer _inner = new();
+        internal bool FailNext;
+        public IEnumerable<string> Tokenize(string text)
+        {
+            if (FailNext && text == "fault.txt")
+            {
+                FailNext = false;
+                throw new InvalidOperationException("Sentetik yayım hatası.");
+            }
+            return _inner.Tokenize(text);
+        }
+    }
+
+    private sealed class BlockingTokenizer : ITokenizer, IDisposable
+    {
+        private readonly BasicTokenizer _inner = new();
+        internal volatile bool Armed;
+        internal ManualResetEventSlim Entered { get; } = new();
+        internal ManualResetEventSlim Release { get; } = new();
+        public IEnumerable<string> Tokenize(string text)
+        {
+            if (Armed && text.StartsWith("blocked", StringComparison.Ordinal))
+            {
+                Armed = false;
+                Entered.Set();
+                if (!Release.Wait(TimeSpan.FromSeconds(10)))
+                    throw new TimeoutException("Test yayım bariyeri açılmadı.");
+            }
+            return _inner.Tokenize(text);
+        }
+        public void Dispose()
+        {
+            Entered.Dispose();
+            Release.Dispose();
         }
     }
 

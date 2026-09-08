@@ -11,7 +11,7 @@ using SmartFileLauncher.Core.Search;
 
 namespace SmartFileLauncher.Core.Services;
 
-public class IndexManager : IDisposable
+public partial class IndexManager : IDisposable
 {
     private readonly IndexDatabase _db;
     private readonly FileWatcherService _watcher;
@@ -30,10 +30,12 @@ public class IndexManager : IDisposable
     private CancellationTokenSource? _backgroundSyncCts;
     private Task? _backgroundSyncTask;
     
-    private Dictionary<string, FileMetadata> _metadataMap;
     private FileSystemNode? _rootNode;
-    private Dictionary<string, FileSystemNode> _pathToNode;
-    private SearchState _publishedSearchState = SearchState.Empty;
+    private readonly Dictionary<string, FileSystemNode> _pathToNode;
+    private ISearchStateReader _publishedSearchState = SearchState.Empty;
+    private readonly SearchStateLayout _layout;
+    private HashSet<string>? _reconciliationChangedPaths;
+    private long _incrementalReconciliationPublishCount;
     
     private volatile bool _disposed;
     private bool _isInitialized;
@@ -75,11 +77,17 @@ public class IndexManager : IDisposable
     {
     }
 
+    public IndexManager(ITokenizer? tokenizer, SearchStateLayout layout)
+        : this(new IndexDatabase(), new FileWatcherService(), tokenizer, layout: layout)
+    {
+    }
+
     public static IndexManager CreateWithDatabasePath(
         string databasePath,
         ITokenizer? tokenizer = null,
         bool enforceMeasurementPathSafety = true,
-        bool skipReparsePoints = false)
+        bool skipReparsePoints = false,
+        SearchStateLayout layout = SearchStateLayout.Legacy)
     {
         if (string.IsNullOrWhiteSpace(databasePath))
             throw new ArgumentException("Database yolu boş olamaz.", nameof(databasePath));
@@ -93,7 +101,8 @@ public class IndexManager : IDisposable
                 ? FileSystemPathGuard.Default
                 : null,
             enforceMeasurementPathSafety: enforceMeasurementPathSafety,
-            skipReparsePoints: skipReparsePoints);
+            skipReparsePoints: skipReparsePoints,
+            layout: layout);
     }
 
     internal IndexManager(
@@ -104,9 +113,12 @@ public class IndexManager : IDisposable
         FileSystemPathGuard? measurementPathGuard = null,
         bool enforceMeasurementPathSafety = false,
         bool skipReparsePoints = false,
-        TimeSpan? watcherRevivalDelay = null)
+        TimeSpan? watcherRevivalDelay = null,
+        SearchStateLayout layout = SearchStateLayout.Legacy)
     {
         _tokenizer = tokenizer ?? new BasicTokenizer();
+        _layout = layout;
+        _publishedSearchState = ISearchStateReader.Empty(layout);
         _db = database;
         _watcher = watcher;
         _measurementPathGuard = measurementPathGuard;
@@ -119,8 +131,6 @@ public class IndexManager : IDisposable
         _watcherRevivalDelay = watcherRevivalDelay ?? TimeSpan.FromSeconds(2);
         if (_watcherRevivalDelay <= TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(watcherRevivalDelay));
-        _metadataMap = new Dictionary<string, FileMetadata>(
-            StringComparer.OrdinalIgnoreCase);
         _pathToNode = new Dictionary<string, FileSystemNode>(StringComparer.OrdinalIgnoreCase);
 
         _watcher.OnChange += HandleFileChange;
@@ -130,10 +140,12 @@ public class IndexManager : IDisposable
 
     #region Properties
 
-    public SearchState CurrentSearchState => Volatile.Read(ref _publishedSearchState);
+    public ISearchStateReader CurrentSearchState => Volatile.Read(ref _publishedSearchState);
+    internal long IncrementalReconciliationPublishCount => Interlocked.Read(ref _incrementalReconciliationPublishCount);
     internal IReadOnlyList<KeyValuePair<string, FileSystemNode>> IndexedEntries {
         get {
             lock (_lock) {
+                if (UsesCompactCatalog) return CreateCompactNodeProjection().Nodes.ToList();
                 return _pathToNode.ToList();
             }
         }
@@ -141,9 +153,13 @@ public class IndexManager : IDisposable
     internal IReadOnlyDictionary<string, FileMetadata> MetadataMap {
         get {
             lock (_lock) {
-                return _metadataMap.ToDictionary(
+                if (UsesCompactCatalog) return CurrentSearchState.GetAllItems()
+                    .Where(item => !item.IsDirectory).ToDictionary(
+                        item => item.FullPath, CreateCompactMetadata, StringComparer.OrdinalIgnoreCase);
+                return _pathToNode.Where(entry =>
+                    !entry.Value.IsDirectory && entry.Value.Metadata != null).ToDictionary(
                     entry => entry.Key,
-                    entry => CloneMetadata(entry.Value),
+                    entry => CloneMetadata(entry.Value.Metadata!),
                     StringComparer.OrdinalIgnoreCase);
             }
         }
@@ -151,6 +167,7 @@ public class IndexManager : IDisposable
     public FileSystemNode? RootNode {
         get {
             lock (_lock) {
+                if (UsesCompactCatalog) return CreateCompactNodeProjection().Root;
                 return _rootNode;
             }
         }
@@ -166,6 +183,7 @@ public class IndexManager : IDisposable
         {
             lock (_lock)
             {
+                if (UsesCompactCatalog) return CurrentSearchState.ItemCount + (_compactSingleRootPath is null ? 0 : 1);
                 return _pathToNode.Count;
             }
         }
@@ -324,6 +342,7 @@ public class IndexManager : IDisposable
             }
         }, ct).ConfigureAwait(false);
 
+        ReleaseCompactStartupWorkspace();
         _activeRootPaths = paths;
         _isInitialized = true;
 
@@ -370,6 +389,11 @@ public class IndexManager : IDisposable
 
     public async Task RescanAsync(string rootPath, CancellationToken ct = default)
     {
+        if (UsesCompactCatalog)
+        {
+            await RescanCompactAsync(rootPath, ct).ConfigureAwait(false);
+            return;
+        }
         await _lifecycleGate.WaitAsync(ct);
         try
         {
@@ -406,6 +430,11 @@ public class IndexManager : IDisposable
 
     private async Task BootstrapScanAsync(string rootPath, CancellationToken ct)
     {
+        if (UsesCompactCatalog)
+        {
+            await BootstrapCompactScanAsync(rootPath, ct).ConfigureAwait(false);
+            return;
+        }
         EnsureMeasurementDirectorySafe(rootPath);
         var sw = Stopwatch.StartNew();
 
@@ -478,6 +507,11 @@ public class IndexManager : IDisposable
 
     private async Task BootstrapScanMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
+        if (UsesCompactCatalog)
+        {
+            await BootstrapCompactScanMultiAsync(rootPaths, ct).ConfigureAwait(false);
+            return;
+        }
         foreach (var rootPath in rootPaths)
         {
             EnsureMeasurementDirectorySafe(rootPath);
@@ -592,6 +626,7 @@ public class IndexManager : IDisposable
                 var dirNode = new FileSystemNode(dirName, dir, true);
                 parentNode.AddChild(dirNode);
                 _pathToNode[dir] = dirNode;
+                _reconciliationChangedPaths?.Add(dir);
 
 
                 var indexedDir = new IndexedDirectory
@@ -651,9 +686,7 @@ public class IndexManager : IDisposable
                     };
                     parentNode.AddChild(fileNode);
                     _pathToNode[file] = fileNode;
-
-
-                    _metadataMap[file] = fileNode.Metadata!;
+                    _reconciliationChangedPaths?.Add(file);
 
                     var indexedFile = new IndexedFile
                     {
@@ -713,6 +746,7 @@ public class IndexManager : IDisposable
 
     private async Task<bool> LoadFromCacheMultiAsync(List<string> rootPaths, CancellationToken ct)
     {
+        if (UsesCompactCatalog) return await LoadCompactFromCacheMultiAsync(rootPaths, ct).ConfigureAwait(false);
         var sw = Stopwatch.StartNew();
 
         lock (_lock)
@@ -806,7 +840,6 @@ public class IndexManager : IDisposable
                 };
 
                 _pathToNode[file.FullPath] = node;
-                _metadataMap[file.FullPath] = node.Metadata!;
 
                 if (file.DirectoryId > 0 && dirMap.TryGetValue(file.DirectoryId, out var parentDir))
                 {
@@ -1118,10 +1151,6 @@ public class IndexManager : IDisposable
 
             if (changes > 0)
             {
-                lock (_lock)
-                {
-                    PublishSearchStateFromCurrentIndex();
-                }
                 Interlocked.Exchange(ref _lastReconciliationRepublished, 1);
                 ReportProgress(
                     $"İndeks uzlaştırıldı: {changes} değişiklik.",
@@ -1153,106 +1182,123 @@ public class IndexManager : IDisposable
         ReconciliationSnapshot snapshot,
         CancellationToken ct)
     {
+        if (UsesCompactCatalog) return ApplyCompactReconciliationSnapshot(rootPaths, snapshot, ct);
         try
         {
             lock (_lock)
             {
-            var changes = 0;
-            var cachedNodes = _pathToNode.Values
-                .Where(node => rootPaths.Any(root =>
-                    IsSameOrDescendantPath(node.FullPath, root)))
-                .OrderBy(node => node.FullPath.Length)
-                .ToList();
-
-            var removedDirectories = new List<string>();
-            foreach (var node in cachedNodes)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                if (rootPaths.Any(root =>
-                        string.Equals(root, node.FullPath, StringComparison.OrdinalIgnoreCase)))
+                _reconciliationChangedPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                try
                 {
-                    continue;
-                }
+                    var changes = 0;
+                    var cachedNodes = _pathToNode.Values
+                        .Where(node => rootPaths.Any(root =>
+                            IsSameOrDescendantPath(node.FullPath, root)))
+                        .OrderBy(node => node.FullPath.Length)
+                        .ToList();
 
-                if (removedDirectories.Any(parent =>
-                        IsSameOrDescendantPath(node.FullPath, parent)))
-                {
-                    continue;
-                }
-
-                if (!ShouldRemoveCachedNode(node, snapshot))
-                    continue;
-
-                DeletePersistedPath(node.FullPath, node.IsDirectory);
-                RemoveFromIndex(node.FullPath);
-                changes++;
-
-                if (node.IsDirectory)
-                {
-                    removedDirectories.Add(node.FullPath);
-                }
-            }
-
-            foreach (var entry in snapshot.Entries.Values
-                         .Where(entry => entry.IsDirectory)
-                         .OrderBy(entry => entry.Path.Length))
-            {
-                ct.ThrowIfCancellationRequested();
-
-                if (_pathToNode.TryGetValue(entry.Path, out var existing))
-                {
-                    if (existing.IsDirectory)
+                    var removedDirectories = new List<string>();
+                    foreach (var node in cachedNodes)
                     {
-                        changes += UpdatePersistedDirectory(existing, entry);
-                    }
-                    continue;
-                }
+                        ct.ThrowIfCancellationRequested();
 
-                if (snapshot.ProtectedScopes.Any(scope =>
-                        IsSameOrDescendantPath(entry.Path, scope)))
-                {
-                    continue;
-                }
+                        if (rootPaths.Any(root =>
+                                string.Equals(root, node.FullPath, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            continue;
+                        }
 
-                if (rootPaths.Any(root =>
-                        string.Equals(root, entry.Path, StringComparison.OrdinalIgnoreCase)))
-                {
-                    AddRootDirectoryToIndex(entry.Path, ct);
-                }
-                else
-                {
-                    AddPathToIndex(entry.Path, isDirectory: true, ct);
-                }
+                        if (removedDirectories.Any(parent =>
+                                IsSameOrDescendantPath(node.FullPath, parent)))
+                        {
+                            continue;
+                        }
 
-                if (_pathToNode.ContainsKey(entry.Path))
-                {
-                    changes++;
-                }
-            }
+                        if (!ShouldRemoveCachedNode(node, snapshot))
+                            continue;
 
-            foreach (var entry in snapshot.Entries.Values
-                         .Where(entry => !entry.IsDirectory)
-                         .OrderBy(entry => entry.Path.Length))
-            {
-                ct.ThrowIfCancellationRequested();
-
-                if (!_pathToNode.TryGetValue(entry.Path, out var existing))
-                {
-                    AddPathToIndex(entry.Path, isDirectory: false, ct);
-                    if (_pathToNode.ContainsKey(entry.Path))
-                    {
+                        DeletePersistedPath(node.FullPath, node.IsDirectory);
+                        RemoveFromIndex(node.FullPath);
                         changes++;
+
+                        if (node.IsDirectory)
+                        {
+                            removedDirectories.Add(node.FullPath);
+                        }
                     }
-                    continue;
+
+                    foreach (var entry in snapshot.Entries.Values
+                                 .Where(entry => entry.IsDirectory)
+                                 .OrderBy(entry => entry.Path.Length))
+                    {
+                        ct.ThrowIfCancellationRequested();
+
+                        if (_pathToNode.TryGetValue(entry.Path, out var existing))
+                        {
+                            if (existing.IsDirectory)
+                            {
+                                var updated = UpdatePersistedDirectory(existing, entry);
+                                changes += updated;
+                                if (updated > 0)
+                                    _reconciliationChangedPaths.Add(entry.Path);
+                            }
+                            continue;
+                        }
+
+                        if (snapshot.ProtectedScopes.Any(scope =>
+                                IsSameOrDescendantPath(entry.Path, scope)))
+                        {
+                            continue;
+                        }
+
+                        if (rootPaths.Any(root =>
+                                string.Equals(root, entry.Path, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            AddRootDirectoryToIndex(entry.Path, ct);
+                        }
+                        else
+                        {
+                            AddPathToIndex(entry.Path, isDirectory: true, ct);
+                        }
+
+                        if (_pathToNode.ContainsKey(entry.Path))
+                        {
+                            changes++;
+                        }
+                    }
+
+                    foreach (var entry in snapshot.Entries.Values
+                                 .Where(entry => !entry.IsDirectory)
+                                 .OrderBy(entry => entry.Path.Length))
+                    {
+                        ct.ThrowIfCancellationRequested();
+
+                        if (!_pathToNode.TryGetValue(entry.Path, out var existing))
+                        {
+                            AddPathToIndex(entry.Path, isDirectory: false, ct);
+                            if (_pathToNode.ContainsKey(entry.Path))
+                            {
+                                changes++;
+                            }
+                            continue;
+                        }
+
+                        if (existing.IsDirectory)
+                            continue;
+
+                        var fileUpdated = UpdatePersistedFile(existing, entry);
+                        changes += fileUpdated;
+                        if (fileUpdated > 0)
+                            _reconciliationChangedPaths.Add(entry.Path);
+                    }
+                    if (changes > 0)
+                        PublishReconciliationChanges(_reconciliationChangedPaths);
+                    return changes;
                 }
-
-                if (existing.IsDirectory)
-                    continue;
-
-                changes += UpdatePersistedFile(existing, entry);
-            }
-                return changes;
+                finally
+                {
+                    _reconciliationChangedPaths = null;
+                }
             }
         }
         catch
@@ -1423,6 +1469,7 @@ public class IndexManager : IDisposable
 
             _rootNode.AddChild(node);
             _pathToNode[rootPath] = node;
+            _reconciliationChangedPaths?.Add(rootPath);
 
             var processedItems = 0;
             ScanDirectoryRecursive(
@@ -1447,7 +1494,8 @@ public class IndexManager : IDisposable
 
     private ReconciliationSnapshot CaptureDiskSnapshot(
         IReadOnlyList<string> rootPaths,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool followReparsePoints = false)
     {
         var snapshot = new ReconciliationSnapshot();
 
@@ -1457,7 +1505,7 @@ public class IndexManager : IDisposable
 
             if (Directory.Exists(rootPath))
             {
-                CaptureDirectoryTree(rootPath, snapshot, ct);
+                CaptureDirectoryTree(rootPath, snapshot, ct, followReparsePoints);
             }
             else if (File.Exists(rootPath))
             {
@@ -1471,7 +1519,8 @@ public class IndexManager : IDisposable
     private void CaptureDirectoryTree(
         string rootPath,
         ReconciliationSnapshot snapshot,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool followReparsePoints = false)
     {
         var pending = new Stack<string>();
         pending.Push(rootPath);
@@ -1509,7 +1558,7 @@ public class IndexManager : IDisposable
                     directoryInfo.LastWriteTimeUtc.Ticks,
                     SizeBytes: 0);
 
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                if (!followReparsePoints && (attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     snapshot.ProtectedScopes.Add(directoryPath);
                     snapshot.Errors.Add($"{directoryPath}: reparse point traversal skipped");
@@ -1832,6 +1881,7 @@ public class IndexManager : IDisposable
 
     internal List<FileSystemNode> CollectSubtreeByWalk(string normalizedPath)
     {
+        if (UsesCompactCatalog) return CollectCompactSubtreeNodes(normalizedPath);
         var collected = new List<FileSystemNode>();
         if (!_pathToNode.TryGetValue(normalizedPath, out var start))
         {
@@ -1858,6 +1908,7 @@ public class IndexManager : IDisposable
 
     internal List<FileSystemNode> CollectSubtreeByScan(string normalizedPath)
     {
+        if (UsesCompactCatalog) return CollectCompactSubtreeNodes(normalizedPath);
         Interlocked.Add(ref _subtreeNodesInspected, _pathToNode.Count);
 
         return _pathToNode.Values
@@ -1881,6 +1932,7 @@ public class IndexManager : IDisposable
 
     private bool TryHandleFileChange(FileChangeEvent evt)
     {
+        if (UsesCompactCatalog) return TryHandleCompactFileChange(evt);
         string? error = null;
         var processed = false;
 
@@ -2066,21 +2118,27 @@ public class IndexManager : IDisposable
 
     private void ResetInMemoryIndex()
     {
-        _metadataMap.Clear();
+        if (UsesCompactCatalog)
+        {
+            ResetCompactInMemoryIndex();
+            return;
+        }
         _pathToNode.Clear();
         _detachedNodeCount = 0;
         _rootNode = null;
-        Volatile.Write(ref _publishedSearchState, SearchState.Empty);
+        Volatile.Write(ref _publishedSearchState, ISearchStateReader.Empty(_layout));
     }
 
     private void PublishSearchStateFromCurrentIndex()
     {
+        if (UsesCompactCatalog) return;
         var startedAt = DateTime.Now;
         var timestamp = Stopwatch.GetTimestamp();
 
         Volatile.Write(
             ref _publishedSearchState,
-            SearchState.Create(
+            ISearchStateReader.Create(
+                _layout,
                 _pathToNode.Values.Where(node => !ReferenceEquals(node, _rootNode)),
                 _tokenizer));
 
@@ -2089,6 +2147,42 @@ public class IndexManager : IDisposable
         Interlocked.Exchange(
             ref _lastRepublishDurationTicks,
             Stopwatch.GetElapsedTime(timestamp).Ticks);
+    }
+
+    private void PublishReconciliationChanges(HashSet<string> changedPaths)
+    {
+        var current = CurrentSearchState;
+        changedPaths.RemoveWhere(path => !current.ContainsPath(path) && !_pathToNode.ContainsKey(path));
+        var indexedCount = _pathToNode.Count;
+        if (_rootNode != null && _pathToNode.TryGetValue(_rootNode.FullPath, out var root) && ReferenceEquals(root, _rootNode))
+        {
+            indexedCount--;
+            changedPaths.Remove(_rootNode.FullPath);
+        }
+        var itemCount = Math.Max(current.ItemCount, indexedCount);
+        if (itemCount == 0 || (long)changedPaths.Count * 10 >= itemCount)
+        {
+            PublishSearchStateFromCurrentIndex();
+            return;
+        }
+
+        var startedAt = DateTime.Now;
+        var timestamp = Stopwatch.GetTimestamp();
+        var removed = new List<string>();
+        var upserts = new List<FileSystemNode>();
+        foreach (var path in changedPaths)
+        {
+            if (_pathToNode.TryGetValue(path, out var node) && !ReferenceEquals(node, _rootNode))
+                upserts.Add(node);
+            else
+                removed.Add(path);
+        }
+
+        Volatile.Write(ref _publishedSearchState, current.WithChanges(removed, upserts, _tokenizer));
+        Interlocked.Increment(ref _incrementalReconciliationPublishCount);
+        Interlocked.Increment(ref _republishCount);
+        Interlocked.Exchange(ref _lastRepublishAtTicks, startedAt.Ticks);
+        Interlocked.Exchange(ref _lastRepublishDurationTicks, Stopwatch.GetElapsedTime(timestamp).Ticks);
     }
 
     private void PublishSearchStateForFileChange(FileChangeEvent evt)
@@ -2151,6 +2245,7 @@ public class IndexManager : IDisposable
 
             parentNode.AddChild(node);
             _pathToNode[directoryPath] = node;
+            _reconciliationChangedPaths?.Add(directoryPath);
 
             var processedItems = 0;
             var complete = ScanDirectoryRecursive(
@@ -2243,7 +2338,7 @@ public class IndexManager : IDisposable
 
             parentNode.AddChild(node);
             _pathToNode[filePath] = node;
-            _metadataMap[filePath] = node.Metadata!;
+            _reconciliationChangedPaths?.Add(filePath);
             return true;
         }
         catch (Exception ex)
@@ -2268,7 +2363,7 @@ public class IndexManager : IDisposable
         {
             node.Parent?.RemoveChild(node.FullPath);
             _pathToNode.Remove(node.FullPath);
-            _metadataMap.Remove(node.FullPath);
+            _reconciliationChangedPaths?.Add(node.FullPath);
         }
     }
 
@@ -2325,11 +2420,12 @@ public class IndexManager : IDisposable
         var normalizedPath = NormalizeIndexedPath(path);
         lock (_lock)
         {
+            if (UsesCompactCatalog) return CreateCompactNodeProjection().GetNode(normalizedPath);
             return _pathToNode.TryGetValue(normalizedPath, out var node) ? node : null;
         }
     }
 
-    public SearchState CreateSearchState(
+    public ISearchStateReader CreateSearchState(
         CancellationToken cancellationToken = default)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
@@ -2339,20 +2435,23 @@ public class IndexManager : IDisposable
 
     public void IncrementOpenCount(string path)
     {
+        if (UsesCompactCatalog)
+        {
+            IncrementCompactOpenCount(path);
+            return;
+        }
         lock (_lock)
         {
             var normalizedPath = NormalizeIndexedPath(path);
             _db.IncrementOpenCount(normalizedPath);
 
-            if (_metadataMap.TryGetValue(normalizedPath, out var meta))
+            if (_pathToNode.TryGetValue(normalizedPath, out var node) &&
+                !node.IsDirectory && node.Metadata is { } metadata)
             {
-                meta.OpenCount++;
-                if (_pathToNode.TryGetValue(normalizedPath, out var node))
-                {
-                    Volatile.Write(
-                        ref _publishedSearchState,
-                        CurrentSearchState.WithUpserts(new[] { node }, _tokenizer));
-                }
+                metadata.OpenCount++;
+                Volatile.Write(
+                    ref _publishedSearchState,
+                    CurrentSearchState.WithUpserts(new[] { node }, _tokenizer));
             }
         }
     }

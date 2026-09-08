@@ -65,9 +65,14 @@ güncel source ve yakın testlerden doğrulanmıştır.
 - En yakın mevcut doğruluk kanıtları
   `SearchBehaviorTests`, `SearchConcurrencyTests` ve
   `IndexManagerReconciliationTests` içindedir. Türkçe `I/İ/ı/i`
-  regresyonu için özel test bulunmadığı sözleşmede açık test boşluğudur.
+  regresyonu artık `SearchTextNormalizationTests` içinde kapsanır.
 
 ## 3. Repo ve çıktı yerleşimi
+
+`realtree --breakdown`, araç `0.3.2` itibarıyla kaldırılan `_metadataMap`
+sözlüğünü kararlı indeks belleğine katmaz; `metadata_map` aşaması üretilmez.
+Çıktı alanlarının biçimi korunur. Önceki araç sürümünün bileşen toplamları
+güncel toplamla aynı yapıymış gibi karşılaştırılmamalıdır.
 
 - Araç projesi: `Tools/OmniSpot.Benchmarking`
 - Varsayılan solution: araç projeye eklenmez; normal build/test yavaşlamaz.

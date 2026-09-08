@@ -362,6 +362,7 @@ public class IndexDatabase : IDisposable
         ExecuteNonQuery("PRAGMA synchronous=NORMAL;");
 
         EnsureSchema();
+        PruneRedundantIndexes();
         RepairOrphanedRows();
     }
 
@@ -395,6 +396,19 @@ public class IndexDatabase : IDisposable
             CreateSchema();
             SetMetadata(IndexMetadata.Keys.SchemaVersion, CurrentSchemaVersion.ToString());
         }
+    }
+
+    private void PruneRedundantIndexes()
+    {
+        using var transaction = BeginTransaction();
+        using var command = CreateCommand(@"
+            DROP INDEX IF EXISTS idx_directories_path;
+            DROP INDEX IF EXISTS idx_files_path;
+            DROP INDEX IF EXISTS idx_tokens_token;
+        ");
+        command.Transaction = transaction;
+        command.ExecuteNonQuery();
+        transaction.Commit();
     }
 
     private void RepairOrphanedRows()
@@ -450,7 +464,6 @@ public class IndexDatabase : IDisposable
                 IsHidden INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (ParentId) REFERENCES Directories(Id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_directories_path ON Directories(FullPath);
             CREATE INDEX IF NOT EXISTS idx_directories_parent ON Directories(ParentId);
         ");
 
@@ -470,7 +483,6 @@ public class IndexDatabase : IDisposable
                 IsSystem INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (DirectoryId) REFERENCES Directories(Id) ON DELETE CASCADE
             );
-            CREATE INDEX IF NOT EXISTS idx_files_path ON Files(FullPath);
             CREATE INDEX IF NOT EXISTS idx_files_directory ON Files(DirectoryId);
             CREATE INDEX IF NOT EXISTS idx_files_extension ON Files(Extension);
             CREATE INDEX IF NOT EXISTS idx_files_name ON Files(FileName);
@@ -481,7 +493,6 @@ public class IndexDatabase : IDisposable
                 Id INTEGER PRIMARY KEY AUTOINCREMENT,
                 Token TEXT NOT NULL UNIQUE
             );
-            CREATE INDEX IF NOT EXISTS idx_tokens_token ON Tokens(Token);
         ");
 
         ExecuteNonQuery(@"
@@ -543,6 +554,7 @@ public class IndexDatabase : IDisposable
             ON CONFLICT(FullPath) DO UPDATE SET
                 Name = excluded.Name,
                 ParentId = excluded.ParentId,
+                Depth = excluded.Depth,
                 LastWriteTimeUtc = excluded.LastWriteTimeUtc,
                 LastIndexedTimeUtc = excluded.LastIndexedTimeUtc,
                 IsHidden = excluded.IsHidden
@@ -570,6 +582,15 @@ public class IndexDatabase : IDisposable
             return ReadDirectory(reader);
         }
         return null;
+    }
+
+    internal void UpdateDirectoryIdentity(long id, string path, string name)
+    {
+        using var cmd = CreateCommand("UPDATE Directories SET FullPath = @path, Name = @name WHERE Id = @id");
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@name", name);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.ExecuteNonQuery();
     }
 
     public void DeleteDirectory(string path)
@@ -652,6 +673,16 @@ public class IndexDatabase : IDisposable
         return null;
     }
 
+    internal void UpdateFileIdentity(long id, string path, string name, string extension)
+    {
+        using var cmd = CreateCommand("UPDATE Files SET FullPath = @path, FileName = @name, Extension = @extension WHERE Id = @id");
+        cmd.Parameters.AddWithValue("@path", path);
+        cmd.Parameters.AddWithValue("@name", name);
+        cmd.Parameters.AddWithValue("@extension", extension);
+        cmd.Parameters.AddWithValue("@id", id);
+        cmd.ExecuteNonQuery();
+    }
+
     public void DeleteFile(string path)
     {
         using var cmd = CreateCommand("DELETE FROM Files WHERE FullPath = @path");
@@ -664,6 +695,15 @@ public class IndexDatabase : IDisposable
         using var cmd = CreateCommand("UPDATE Files SET OpenCount = OpenCount + 1 WHERE FullPath = @path");
         cmd.Parameters.AddWithValue("@path", path);
         cmd.ExecuteNonQuery();
+    }
+
+    internal int? TryIncrementOpenCount(string path)
+    {
+        using var cmd = CreateCommand(
+            "UPDATE Files SET OpenCount = OpenCount + 1 WHERE FullPath = @path RETURNING OpenCount");
+        cmd.Parameters.AddWithValue("@path", path);
+        var value = cmd.ExecuteScalar();
+        return value is null or DBNull ? null : Convert.ToInt32(value);
     }
 
     public IEnumerable<IndexedFile> GetAllFiles()

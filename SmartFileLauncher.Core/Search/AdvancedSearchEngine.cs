@@ -10,7 +10,7 @@ namespace SmartFileLauncher.Core.Search;
 
 public class AdvancedSearchEngine
 {
-    private readonly Func<CancellationToken, SearchState> _stateProvider;
+    private readonly Func<CancellationToken, ISearchStateReader> _stateProvider;
     private readonly ITokenizer _tokenizer;
     private readonly IScoringStrategy _scoring;
 
@@ -53,7 +53,7 @@ public class AdvancedSearchEngine
     }
 
     public AdvancedSearchEngine(
-        Func<CancellationToken, SearchState> stateProvider,
+        Func<CancellationToken, ISearchStateReader> stateProvider,
         ITokenizer tokenizer,
         IScoringStrategy scoring)
     {
@@ -69,7 +69,7 @@ public class AdvancedSearchEngine
     {
         ArgumentNullException.ThrowIfNull(query);
         cancellationToken.ThrowIfCancellationRequested();
-        var state = _stateProvider(cancellationToken);
+        var state = _stateProvider(cancellationToken).ForQuery();
         if (state.ItemCount == 0 || maxResults <= 0)
         {
             return Array.Empty<SearchResult>();
@@ -77,6 +77,17 @@ public class AdvancedSearchEngine
 
         List<(SearchItem node, Dictionary<string, double> matches)> candidates;
         var searchTerms = GetSearchTerms(query);
+        if ((query.FilterOnlyMode || searchTerms.Count == 0) &&
+            state is IQueryCatalogSnapshot catalogSnapshot)
+        {
+            return SearchFilterOnly(
+                query,
+                searchTerms,
+                catalogSnapshot,
+                maxResults,
+                cancellationToken);
+        }
+
         if (query.FilterOnlyMode || searchTerms.Count == 0)
         {
             candidates = GetAllFilesForFiltering(query, state, cancellationToken);
@@ -230,6 +241,235 @@ public class AdvancedSearchEngine
         return results;
     }
 
+    private readonly record struct FilterCandidate(SearchItem Item, double Score);
+
+    private sealed class FilterCandidateOrder : IComparer<FilterCandidate>
+    {
+        internal static readonly FilterCandidateOrder BestFirst = new(reverse: false);
+        internal static readonly FilterCandidateOrder WorstFirst = new(reverse: true);
+        private readonly bool _reverse;
+
+        private FilterCandidateOrder(bool reverse) => _reverse = reverse;
+
+        public int Compare(FilterCandidate x, FilterCandidate y) =>
+            _reverse ? CompareCore(y, x) : CompareCore(x, y);
+
+        private static int CompareCore(FilterCandidate x, FilterCandidate y)
+        {
+            var byScore = y.Score.CompareTo(x.Score);
+            if (byScore != 0) return byScore;
+            var byName = string.Compare(x.Item.Name, y.Item.Name, StringComparison.OrdinalIgnoreCase);
+            if (byName != 0) return byName;
+            var byPath = string.Compare(x.Item.FullPath, y.Item.FullPath, StringComparison.OrdinalIgnoreCase);
+            return byPath != 0 ? byPath : string.CompareOrdinal(x.Item.FullPath, y.Item.FullPath);
+        }
+    }
+
+    private IReadOnlyList<SearchResult> SearchFilterOnly(
+        StructuredQuery query,
+        IReadOnlyList<SearchTerm> searchTerms,
+        IQueryCatalogSnapshot state,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        var filter = CreateInitialCatalogFilter(query);
+        var allowedExtensions = CreateFilterOnlyAllowedExtensions(query, cancellationToken);
+        var expandedFolderNames = ExpandFilterFolderNames(query, cancellationToken);
+        var userWantsFolders = query.TargetType?.PrefersFolder == true;
+        var expandsFolders = query.IncludeFolderContents && !userWantsFolders && filter.IncludeDirectories;
+        var seen = expandsFolders ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
+        var winners = new PriorityQueue<FilterCandidate, FilterCandidate>(
+            FilterCandidateOrder.WorstFirst);
+        var scoringContext = CreateScoringContext(query, searchTerms);
+        var noMatches = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var node in state.GetItems(filter, cancellationToken))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (expandedFolderNames != null && !PathHasFolder(node.FullPath, expandedFolderNames))
+            {
+                continue;
+            }
+
+            if (allowedExtensions.Count > 0 && !userWantsFolders &&
+                !(node.IsDirectory && query.IncludeFolderContents) &&
+                !allowedExtensions.Contains(Path.GetExtension(node.Name)))
+            {
+                continue;
+            }
+
+            if (!node.IsDirectory)
+            {
+                Offer(node);
+            }
+            else if (userWantsFolders)
+            {
+                Offer(node);
+            }
+            else if (query.IncludeFolderContents)
+            {
+                foreach (var child in state.GetDescendants(node, cancellationToken))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (allowedExtensions.Count > 0 &&
+                        (child.IsDirectory || !allowedExtensions.Contains(Path.GetExtension(child.Name))))
+                    {
+                        continue;
+                    }
+
+                    Offer(child);
+                }
+            }
+        }
+
+        var ordered = new FilterCandidate[winners.Count];
+        for (var index = 0; index < ordered.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ordered[index] = winners.Dequeue();
+        }
+        Array.Sort(ordered, FilterCandidateOrder.BestFirst);
+
+        return ordered.Select(candidate => new SearchResult
+        {
+            Name = candidate.Item.Name,
+            FullPath = candidate.Item.FullPath,
+            Score = candidate.Score,
+            IsDirectory = candidate.Item.IsDirectory
+        }).ToArray();
+
+        void Offer(SearchItem item)
+        {
+            if ((seen != null && !seen.Add(item.FullPath)) ||
+                !PassesFilterOnlyDate(item, query.DateFilter) ||
+                !PassesFilterOnlySize(item, query.SizeFilter))
+            {
+                return;
+            }
+
+            var candidate = new FilterCandidate(
+                item,
+                CalculateScore(query, item, noMatches, scoringContext, cancellationToken));
+            if (winners.Count < maxResults)
+            {
+                winners.Enqueue(candidate, candidate);
+            }
+            else if (FilterCandidateOrder.BestFirst.Compare(candidate, winners.Peek()) < 0)
+            {
+                winners.Dequeue();
+                winners.Enqueue(candidate, candidate);
+            }
+        }
+    }
+
+    private static QueryCatalogFilter CreateInitialCatalogFilter(StructuredQuery query)
+    {
+        var target = query.TargetType;
+        var strongFolder = target is { HasStrongPreference: true, PrefersFolder: true };
+        var strongFile = target is { HasStrongPreference: true, PrefersFile: true, File: > 0.7 };
+        var userWantsFolders = target?.PrefersFolder == true;
+        var includeDirectories = !strongFile && (userWantsFolders || query.IncludeFolderContents);
+
+        return new QueryCatalogFilter(
+            IncludeFiles: !strongFolder,
+            IncludeDirectories: includeDirectories,
+            FilterDirectoryDates: userWantsFolders,
+            FilterFileSize: query.SizeFilter != null,
+            CreatedAfter: ParseDate(query.DateFilter?.CreatedAfter),
+            CreatedBeforeExclusive: ParseDate(query.DateFilter?.CreatedBeforeExclusive),
+            ModifiedAfter: ParseDate(query.DateFilter?.ModifiedAfter),
+            ModifiedBeforeExclusive: ParseDate(query.DateFilter?.ModifiedBeforeExclusive),
+            MinSizeMb: query.SizeFilter?.MinMb,
+            MaxSizeMb: query.SizeFilter?.MaxMb);
+
+        static DateTime? ParseDate(string? value) =>
+            value != null && DateTime.TryParse(value, out var parsed) ? parsed : null;
+    }
+
+    private static HashSet<string> CreateFilterOnlyAllowedExtensions(
+        StructuredQuery query,
+        CancellationToken cancellationToken)
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        IEnumerable<string> source = query.HardExtensions.Count > 0
+            ? query.HardExtensions
+            : query.PredictedExtensions.Count > 0
+                ? query.PredictedExtensions
+                : FileTypeMapper.GetExtensionsForTypes(query.FileTypes);
+        foreach (var extension in source)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            allowed.Add(extension.StartsWith(".", StringComparison.Ordinal) ? extension : $".{extension}");
+        }
+        return allowed;
+    }
+
+    private static HashSet<string>? ExpandFilterFolderNames(
+        StructuredQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (query.FolderHints.Count == 0) return null;
+        var mappings = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["downloads"] = ["downloads", "indirilenler", "download"],
+            ["indirilenler"] = ["downloads", "indirilenler", "download"],
+            ["desktop"] = ["desktop", "masaüstü", "masa üstü"],
+            ["masaüstü"] = ["desktop", "masaüstü", "masa üstü"],
+            ["documents"] = ["documents", "belgeler", "dökümanlar", "dokümanlar"],
+            ["belgeler"] = ["documents", "belgeler", "dökümanlar", "dokümanlar"],
+            ["pictures"] = ["pictures", "resimler", "fotograflar", "fotoğraflar"],
+            ["resimler"] = ["pictures", "resimler", "fotograflar", "fotoğraflar"],
+            ["music"] = ["music", "müzik", "muzik"],
+            ["müzik"] = ["music", "müzik", "muzik"],
+            ["videos"] = ["videos", "videolar", "video"],
+            ["videolar"] = ["videos", "videolar", "video"]
+        };
+        var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var hint in query.FolderHints)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (hint.Weight <= 0.3) continue;
+            var lowered = hint.Name.ToLowerInvariant();
+            expanded.Add(lowered);
+            if (!mappings.TryGetValue(lowered, out var alternatives)) continue;
+            foreach (var alternative in alternatives)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                expanded.Add(alternative);
+            }
+        }
+        return expanded;
+    }
+
+    private static bool PathHasFolder(string path, HashSet<string> expandedFolderNames) =>
+        path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(expandedFolderNames.Contains);
+
+    private static bool PassesFilterOnlyDate(SearchItem item, DateFilter? filter)
+    {
+        if (filter == null) return true;
+        if (filter.CreatedAfter != null && DateTime.TryParse(filter.CreatedAfter, out var createdAfter) &&
+            (item.CreatedTime == null || item.CreatedTime < createdAfter)) return false;
+        if (filter.CreatedBeforeExclusive != null &&
+            DateTime.TryParse(filter.CreatedBeforeExclusive, out var createdBeforeExclusive) &&
+            (item.CreatedTime == null || item.CreatedTime >= createdBeforeExclusive)) return false;
+        if (filter.ModifiedAfter != null && DateTime.TryParse(filter.ModifiedAfter, out var modifiedAfter) &&
+            (item.LastWriteTime == null || item.LastWriteTime < modifiedAfter)) return false;
+        if (filter.ModifiedBeforeExclusive != null &&
+            DateTime.TryParse(filter.ModifiedBeforeExclusive, out var modifiedBeforeExclusive) &&
+            (item.LastWriteTime == null || item.LastWriteTime >= modifiedBeforeExclusive)) return false;
+        return true;
+    }
+
+    private static bool PassesFilterOnlySize(SearchItem item, SizeFilter? filter)
+    {
+        if (filter == null || item.IsDirectory) return true;
+        if (item.SizeBytes == null) return false;
+        var sizeMb = item.SizeBytes.Value / (1024.0 * 1024.0);
+        return (!filter.MinMb.HasValue || sizeMb >= filter.MinMb.Value) &&
+               (!filter.MaxMb.HasValue || sizeMb <= filter.MaxMb.Value);
+    }
+
     private static IReadOnlyList<SearchTerm> GetSearchTerms(StructuredQuery query)
     {
         if (query.SearchTerms.Count > 0)
@@ -262,7 +502,7 @@ public class AdvancedSearchEngine
 
     private List<(SearchItem node, Dictionary<string, double> matches)> GetCandidateNodes(
         IReadOnlyList<SearchTerm> searchTerms,
-        SearchState state,
+        ISearchStateReader state,
         CancellationToken cancellationToken)
     {
         var anchorGroups = searchTerms
@@ -319,7 +559,7 @@ public class AdvancedSearchEngine
 
     private Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> GetTermMatches(
         SearchTerm searchTerm,
-        SearchState state,
+        ISearchStateReader state,
         CancellationToken cancellationToken)
     {
         var alternativeGroups = _tokenizer.Tokenize(searchTerm.Text)
@@ -387,7 +627,7 @@ public class AdvancedSearchEngine
     private Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> GetTokenMatches(
         string token,
         double weight,
-        SearchState state,
+        ISearchStateReader state,
         CancellationToken cancellationToken)
     {
         var matches = new Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>(
@@ -424,7 +664,7 @@ public class AdvancedSearchEngine
 
     private List<(SearchItem node, Dictionary<string, double> matches)> GetAllFilesForFiltering(
         StructuredQuery query,
-        SearchState state,
+        ISearchStateReader state,
         CancellationToken cancellationToken)
     {
         var allNodes = state.GetAllItems(cancellationToken).ToList();
@@ -632,7 +872,7 @@ public class AdvancedSearchEngine
     {
         cancellationToken.ThrowIfCancellationRequested();
         var score = matches.Values.Sum() * 100;
-        if (node.FullPath.Contains(Path.DirectorySeparatorChar))
+        if (matches.Count > 0 && node.FullPath.Contains(Path.DirectorySeparatorChar))
         {
             var parentFolder = Path.GetFileName(Path.GetDirectoryName(node.FullPath) ?? string.Empty);
             var folderTokens = _tokenizer.Tokenize(parentFolder).ToHashSet();
@@ -679,27 +919,30 @@ public class AdvancedSearchEngine
             }
         }
 
-        var fileName = Path.GetFileNameWithoutExtension(node.Name);
-        var normalizedName = NormalizeForComparison(fileName);
-        foreach (var (normalizedTerm, weight) in context.ExactAndPhraseTerms)
+        if (context.ExactAndPhraseTerms.Count > 0 || context.ContextTokenWeights.Count > 0)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (normalizedName == normalizedTerm)
+            var fileName = Path.GetFileNameWithoutExtension(node.Name);
+            var normalizedName = NormalizeForComparison(fileName);
+            foreach (var (normalizedTerm, weight) in context.ExactAndPhraseTerms)
             {
-                score += 150 * weight;
+                cancellationToken.ThrowIfCancellationRequested();
+                if (normalizedName == normalizedTerm)
+                {
+                    score += 150 * weight;
+                }
+                else if (normalizedTerm.Length > 1 && normalizedName.Contains(normalizedTerm))
+                {
+                    score += 75 * weight;
+                }
             }
-            else if (normalizedTerm.Length > 1 && normalizedName.Contains(normalizedTerm))
-            {
-                score += 75 * weight;
-            }
-        }
 
-        if (context.ContextTokenWeights.Count > 0)
-        {
-            var nameTokens = _tokenizer.Tokenize(fileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            score += context.ContextTokenWeights
-                .Where(item => nameTokens.Contains(item.Key))
-                .Sum(item => item.Value * 30);
+            if (context.ContextTokenWeights.Count > 0)
+            {
+                var nameTokens = _tokenizer.Tokenize(fileName).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                score += context.ContextTokenWeights
+                    .Where(item => nameTokens.Contains(item.Key))
+                    .Sum(item => item.Value * 30);
+            }
         }
 
         return score + node.OpenCount * 2;
