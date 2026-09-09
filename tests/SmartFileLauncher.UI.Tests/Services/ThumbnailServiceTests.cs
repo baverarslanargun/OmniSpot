@@ -232,6 +232,95 @@ public sealed class ThumbnailServiceTests : IDisposable
         Assert.Equal(1, service.GetDiagnostics().Failures);
     }
 
+    [Fact]
+    public async Task IdleKeepsOnlyLoadedPinnedImagesAndDoesNotLoadMoreUntilResume()
+    {
+        var cache = Path.Combine(_root, "cache-idle");
+        Directory.CreateDirectory(Path.Combine(_root, "pinned"));
+        var pinned = SeedDiskCacheEntry(cache, "pinned/one.png", 128, 128);
+        var ordinary = SeedDiskCacheEntry(cache, "ordinary.png", 128, 128);
+        var unloaded = SeedDiskCacheEntry(cache, "pinned/two.png", 128, 128);
+        var service = CreateService(cache);
+        service.Configure(new(true, 10, 10 * 65536, new[] { Path.Combine(_root, "pinned") }));
+        var pinnedImage = await service.GetThumbnailAsync(pinned, 128);
+        var ordinaryImage = await service.GetThumbnailAsync(ordinary, 128);
+        service.EnterIdle();
+        Assert.True(service.IsRetained(pinnedImage!));
+        Assert.False(service.IsRetained(ordinaryImage!));
+        var requests = service.GetDiagnostics().Requests;
+        Assert.Null(await service.GetThumbnailAsync(unloaded, 128));
+        Assert.Equal(requests, service.GetDiagnostics().Requests);
+        Assert.Equal(1, service.GetDiagnostics().MemoryCacheCount);
+        service.Resume();
+        Assert.NotNull(await service.GetThumbnailAsync(ordinary, 128));
+    }
+
+    [Fact]
+    public async Task ShrinkingBudgetEvictsPinnedImagesAndNotifiesWithoutHoldingCacheLock()
+    {
+        var cache = Path.Combine(_root, "cache-shrink");
+        var first = SeedDiskCacheEntry(cache, "one.png", 128, 128);
+        var second = SeedDiskCacheEntry(cache, "two.png", 128, 128);
+        var service = CreateService(cache);
+        service.Configure(new(true, 10, 10 * 65536, new[] { _root }));
+        var image1 = await service.GetThumbnailAsync(first, 128);
+        var image2 = await service.GetThumbnailAsync(second, 128);
+        service.CacheTrimmed += () => Assert.True(Task.Run(() => service.GetDiagnostics()).Wait(TimeSpan.FromSeconds(2)));
+        service.Configure(new(true, 1, 65536, new[] { _root }));
+        Assert.False(service.IsRetained(image1!));
+        Assert.True(service.IsRetained(image2!));
+        service.Configure(new(true, 1, 32768, new[] { _root }));
+        Assert.False(service.IsRetained(image2!));
+        Assert.Null(await service.GetThumbnailAsync(first, 128));
+        Assert.Equal(0, service.GetDiagnostics().DecodedBytes);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task InFlightGenerationCannotRepopulateAfterIdleOrDisable(bool idle)
+    {
+        var cache = Path.Combine(_root, "cache-stale");
+        var source = Path.Combine(_root, "source.png");
+        File.WriteAllBytes(source, CreatePng(128, 128));
+        var image = ThumbnailService.DecodeBounded(CreatePng(128, 128), 128)!;
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var release = new ManualResetEventSlim();
+        var service = new ThumbnailService(_ => { }, cache, (_, _) =>
+        {
+            entered.TrySetResult();
+            if (!release.Wait(TimeSpan.FromSeconds(10))) throw new TimeoutException();
+            return image;
+        });
+        var loading = service.GetThumbnailAsync(source, 128);
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (idle) service.EnterIdle();
+            else service.Configure(new(false, 10, 655360, Array.Empty<string>()));
+        }
+        finally { release.Set(); }
+        Assert.Null(await loading.WaitAsync(TimeSpan.FromSeconds(5)));
+        Assert.Equal(0, service.GetDiagnostics().MemoryCacheCount);
+        Assert.Empty(Directory.EnumerateFiles(cache));
+    }
+
+    [Fact]
+    public async Task DisabledPreviewsBypassMemoryDiskAndShellRequests()
+    {
+        var cache = Path.Combine(_root, "cache-disabled");
+        var source = SeedDiskCacheEntry(cache, "disabled.png", 128, 128);
+        var service = CreateService(cache);
+        var image = await service.GetThumbnailAsync(source, 128);
+        service.Configure(new(false, 10, 655360, new[] { _root }));
+        var requests = service.GetDiagnostics().Requests;
+        Assert.False(service.IsRetained(image!));
+        Assert.Null(await service.GetThumbnailAsync(source, 128));
+        Assert.Equal(requests, service.GetDiagnostics().Requests);
+        service.Configure(new(true, 10, 655360, Array.Empty<string>()));
+        Assert.NotNull(await service.GetThumbnailAsync(source, 128));
+    }
+
     private ThumbnailService CreateService(
         string cachePath,
         int maxMemoryCacheCount = ThumbnailService.DefaultMaxMemoryCacheCount,

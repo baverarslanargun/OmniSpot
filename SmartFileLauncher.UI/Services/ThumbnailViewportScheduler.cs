@@ -9,6 +9,7 @@ internal sealed class ThumbnailViewportScheduler
 {
     private readonly IThumbnailService _thumbnails;
     private readonly Func<DesktopIconViewModel, ImageSource, Task> _applyAsync;
+    private readonly Func<DesktopIconViewModel, ImageSource, CancellationToken, Task>? _applyWithTokenAsync;
     private readonly Func<int, CancellationToken, Task>? _delayAsync;
     private readonly int _thumbnailSize;
     private readonly int _batchSize;
@@ -24,6 +25,20 @@ internal sealed class ThumbnailViewportScheduler
     private Task _currentTask = Task.CompletedTask;
     private long _scheduled;
     private long _released;
+
+    public ThumbnailViewportScheduler(
+        IThumbnailService thumbnails,
+        Func<DesktopIconViewModel, ImageSource, CancellationToken, Task> applyAsync,
+        int thumbnailSize,
+        int batchSize,
+        int prefetchScreens = 1,
+        int batchDelayMilliseconds = 10,
+        Func<int, CancellationToken, Task>? delayAsync = null)
+        : this(thumbnails, (item, image) => Task.CompletedTask, thumbnailSize, batchSize,
+            prefetchScreens, batchDelayMilliseconds, delayAsync)
+    {
+        _applyWithTokenAsync = applyAsync ?? throw new ArgumentNullException(nameof(applyAsync));
+    }
 
     public ThumbnailViewportScheduler(
         IThumbnailService thumbnails,
@@ -155,6 +170,17 @@ internal sealed class ThumbnailViewportScheduler
         }
     }
 
+    public void ReleaseUnretained(Func<ImageSource, bool> isRetained)
+    {
+        foreach (var item in _items)
+        {
+            if (item.Thumbnail == null || isRetained(item.Thumbnail)) continue;
+            item.Thumbnail = null;
+            _requested.Remove(item);
+            Interlocked.Increment(ref _released);
+        }
+    }
+
     internal static (int Start, int End) Window(
         int itemCount,
         ThumbnailViewport viewport,
@@ -181,7 +207,9 @@ internal sealed class ThumbnailViewportScheduler
         {
             var loader = new ThumbnailBatchLoader(
                 _thumbnails,
-                _applyAsync,
+                (item, image) => _applyWithTokenAsync == null
+                    ? _applyAsync(item, image)
+                    : _applyWithTokenAsync(item, image, cancellation.Token),
                 _thumbnailSize,
                 _batchSize,
                 _batchDelayMilliseconds,

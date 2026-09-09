@@ -5,7 +5,7 @@ using Microsoft.WindowsAPICodePack.Shell;
 
 namespace SmartFileLauncher.UI.Services;
 
-public class ThumbnailService : IThumbnailService
+public class ThumbnailService : IThumbnailService, IThumbnailCacheControl
 {
     internal const int DefaultMaxMemoryCacheCount = 1000;
     internal const long DefaultMaxMemoryCacheBytes = 64L * 1024 * 1024;
@@ -16,8 +16,14 @@ public class ThumbnailService : IThumbnailService
     private readonly LinkedList<CacheEntry> _recency = new();
     private readonly object _memoryCacheLock = new();
     private readonly SemaphoreSlim _semaphore = new(4);
-    private readonly int _maxMemoryCacheCount;
-    private readonly long _maxMemoryCacheBytes;
+    private int _maxMemoryCacheCount;
+    private long _maxMemoryCacheBytes;
+    private bool _enabled = true;
+    private bool _idle;
+    private long _epoch;
+    private string[] _pinnedFolders = Array.Empty<string>();
+    private readonly Dictionary<ImageSource, int> _retainedImages = new(ReferenceEqualityComparer.Instance);
+    private readonly Func<string, int, BitmapSource?> _generateThumbnail;
     private readonly string _diskCachePath;
     private readonly Action<string> _log;
 
@@ -37,6 +43,14 @@ public class ThumbnailService : IThumbnailService
 
     private sealed record DiskCacheStats(int FileCount, long Bytes, DateTime MeasuredAt);
 
+    public event Action? CacheTrimmed;
+
+    internal ThumbnailService(Action<string> log, string diskCachePath, Func<string, int, BitmapSource?> generator)
+        : this(log, diskCachePath)
+    {
+        _generateThumbnail = generator;
+    }
+
     public ThumbnailService(
         Action<string> log,
         string? diskCachePath = null,
@@ -44,6 +58,7 @@ public class ThumbnailService : IThumbnailService
         long maxMemoryCacheBytes = DefaultMaxMemoryCacheBytes)
     {
         _log = log;
+        _generateThumbnail = GenerateShellThumbnail;
         if (diskCachePath != null && string.IsNullOrWhiteSpace(diskCachePath))
         {
             throw new ArgumentException(
@@ -86,6 +101,13 @@ public class ThumbnailService : IThumbnailService
         int size,
         CancellationToken token = default)
     {
+        long epoch;
+        lock (_memoryCacheLock)
+        {
+            if (!_enabled || _idle || _maxMemoryCacheCount == 0 || _maxMemoryCacheBytes == 0 || token.IsCancellationRequested)
+                return null;
+            epoch = _epoch;
+        }
         Interlocked.Increment(ref _requests);
         try
         {
@@ -104,7 +126,7 @@ public class ThumbnailService : IThumbnailService
             var fileInfo = new FileInfo(path);
             var key = new ThumbnailKey(path, size, fileInfo.LastWriteTimeUtc.Ticks);
 
-            if (TryGetFromMemoryCache(key, out var cachedImage))
+            if (TryGetFromMemoryCache(key, epoch, token, out var cachedImage))
             {
                 Interlocked.Increment(ref _memoryHits);
                 return cachedImage;
@@ -119,8 +141,7 @@ public class ThumbnailService : IThumbnailService
                     if (diskImage != null)
                     {
                         Interlocked.Increment(ref _diskHits);
-                        AddToMemoryCache(key, diskImage);
-                        return diskImage;
+                        return AddToMemoryCache(key, diskImage, epoch, token) ? diskImage : null;
                     }
                 }
                 catch
@@ -141,7 +162,7 @@ public class ThumbnailService : IThumbnailService
             Interlocked.Increment(ref _activeGenerations);
             try
             {
-                if (TryGetFromMemoryCache(key, out cachedImage))
+                if (TryGetFromMemoryCache(key, epoch, token, out cachedImage))
                 {
                     return cachedImage;
                 }
@@ -150,13 +171,15 @@ public class ThumbnailService : IThumbnailService
                 {
                     try
                     {
-                        var thumbnail = GenerateShellThumbnail(path, size);
+                        if (!IsCurrent(epoch, token)) return null;
+                        var thumbnail = _generateThumbnail(path, size);
                         if (thumbnail == null)
                         {
                             Interlocked.Increment(ref _failures);
                             return null;
                         }
 
+                        if (!IsCurrent(epoch, token)) return null;
                         if (!thumbnail.IsFrozen)
                         {
                             thumbnail.Freeze();
@@ -164,8 +187,7 @@ public class ThumbnailService : IThumbnailService
 
                         var bounded = StoreAndBound(diskCachePath, thumbnail, size);
                         Interlocked.Increment(ref _shellGenerated);
-                        AddToMemoryCache(key, bounded);
-                        return bounded;
+                        return AddToMemoryCache(key, bounded, epoch, token) ? bounded : null;
                     }
                     catch
                     {
@@ -356,11 +378,11 @@ public class ThumbnailService : IThumbnailService
             ? (long)bitmap.PixelWidth * bitmap.PixelHeight * bitmap.Format.BitsPerPixel / 8
             : 0L;
 
-    private bool TryGetFromMemoryCache(ThumbnailKey key, out ImageSource? image)
+    private bool TryGetFromMemoryCache(ThumbnailKey key, long epoch, CancellationToken token, out ImageSource? image)
     {
         lock (_memoryCacheLock)
         {
-            if (_memoryCache.TryGetValue(key, out var node))
+            if (IsCurrent(epoch, token) && _memoryCache.TryGetValue(key, out var node))
             {
                 _recency.Remove(node);
                 _recency.AddFirst(node);
@@ -385,7 +407,7 @@ public class ThumbnailService : IThumbnailService
         }
     }
 
-    private void AddToMemoryCache(ThumbnailKey key, ImageSource image)
+    private bool AddToMemoryCache(ThumbnailKey key, ImageSource image, long epoch, CancellationToken token)
     {
         if (image is BitmapSource bitmap)
         {
@@ -395,29 +417,105 @@ public class ThumbnailService : IThumbnailService
 
         var bytes = GetDecodedByteCount(image);
 
+        var trimmed = false;
         lock (_memoryCacheLock)
         {
+            if (!IsCurrent(epoch, token) || _maxMemoryCacheCount == 0 || bytes > _maxMemoryCacheBytes)
+                return false;
             if (_memoryCache.TryGetValue(key, out var existing))
             {
-                _memoryCacheBytes -= existing.Value.Bytes;
-                _recency.Remove(existing);
+                RemoveEntry(existing);
+                trimmed = true;
             }
 
             var node = _recency.AddFirst(new CacheEntry(key, image, bytes));
             _memoryCache[key] = node;
             _memoryCacheBytes += bytes;
-
-            while (_recency.Count > 1
-                && (_memoryCache.Count > _maxMemoryCacheCount
-                    || _memoryCacheBytes > _maxMemoryCacheBytes))
-            {
-                var evicted = _recency.Last!;
-                _recency.RemoveLast();
-                _memoryCache.Remove(evicted.Value.Key);
-                _memoryCacheBytes -= evicted.Value.Bytes;
-                Interlocked.Increment(ref _evictions);
-            }
+            _retainedImages[image] = _retainedImages.GetValueOrDefault(image) + 1;
+            trimmed |= TrimToBudget();
         }
+        if (trimmed) CacheTrimmed?.Invoke();
+        return true;
+    }
+
+    private bool IsCurrent(long epoch, CancellationToken token)
+    {
+        lock (_memoryCacheLock)
+            return epoch == _epoch && _enabled && !_idle && !token.IsCancellationRequested;
+    }
+
+    public bool IsRetained(ImageSource image)
+    {
+        lock (_memoryCacheLock) return _enabled && _retainedImages.ContainsKey(image);
+    }
+
+    public void Configure(ThumbnailCacheConfiguration configuration)
+    {
+        lock (_memoryCacheLock)
+        {
+            var count = Math.Max(0, configuration.MaxCount);
+            var bytes = Math.Clamp(configuration.MaxBytes, 0, ThumbnailMemoryPolicy.AbsoluteMaxBytes);
+            if (_enabled == configuration.Enabled && _maxMemoryCacheCount == count
+                && _maxMemoryCacheBytes == bytes && _pinnedFolders.SequenceEqual(configuration.PinnedFolders))
+                return;
+            _epoch++;
+            _enabled = configuration.Enabled;
+            _maxMemoryCacheCount = count;
+            _maxMemoryCacheBytes = bytes;
+            _pinnedFolders = configuration.PinnedFolders.ToArray();
+            RemoveUnpinnedEntries(all: !_enabled);
+            TrimToBudget();
+        }
+        CacheTrimmed?.Invoke();
+    }
+
+    public void EnterIdle()
+    {
+        lock (_memoryCacheLock)
+        {
+            _idle = true;
+            _epoch++;
+            RemoveUnpinnedEntries(all: false);
+        }
+        CacheTrimmed?.Invoke();
+    }
+
+    public void Resume()
+    {
+        lock (_memoryCacheLock) _idle = false;
+    }
+
+    private void RemoveUnpinnedEntries(bool all)
+    {
+        for (var node = _recency.Last; node != null;)
+        {
+            var previous = node.Previous;
+            if (all || (_idle && !ThumbnailMemoryPolicy.IsPinned(node.Value.Key.Path, _pinnedFolders)))
+                RemoveEntry(node);
+            node = previous;
+        }
+    }
+
+    private bool TrimToBudget()
+    {
+        var trimmed = false;
+        while (_recency.Last is { } last && (_memoryCache.Count > _maxMemoryCacheCount || _memoryCacheBytes > _maxMemoryCacheBytes))
+        {
+            RemoveEntry(last);
+            trimmed = true;
+        }
+        return trimmed;
+    }
+
+    private void RemoveEntry(LinkedListNode<CacheEntry> node)
+    {
+        _recency.Remove(node);
+        _memoryCache.Remove(node.Value.Key);
+        _memoryCacheBytes -= node.Value.Bytes;
+        var references = _retainedImages[node.Value.Image] - 1;
+        if (references == 0) _retainedImages.Remove(node.Value.Image);
+        else _retainedImages[node.Value.Image] = references;
+        Interlocked.Increment(ref _evictions);
     }
 
     private void SaveToDiskCache(string cachePath, BitmapSource image)
@@ -439,11 +537,14 @@ public class ThumbnailService : IThumbnailService
         lock (_memoryCacheLock)
         {
             var count = _memoryCache.Count;
+            _epoch++;
             _memoryCache.Clear();
             _recency.Clear();
+            _retainedImages.Clear();
             _memoryCacheBytes = 0;
             _log($"🗑️ Memory cache cleared: {count} items");
         }
+        CacheTrimmed?.Invoke();
     }
 
     public void ClearDiskCache()

@@ -153,7 +153,7 @@
         </Style>
         
         <!-- File/Folder Context Menu -->
-        <ContextMenu x:Key="FileContextMenu" Style="{StaticResource ModernContextMenu}">
+        <ContextMenu x:Key="FileContextMenu" Style="{StaticResource ModernContextMenu}" Opened="ThumbnailContextMenu_Opened">
             <MenuItem Header="Aç" Tag="📂" InputGestureText="Enter" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Open"/>
             <MenuItem Header="Birlikte Aç..." Tag="🔗" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenWith"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
@@ -166,6 +166,10 @@
             <Separator Style="{StaticResource MenuSeparator}"/>
             <MenuItem Header="Dosya Konumunu Aç" Tag="📍" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenLocation"/>
             <MenuItem Header="Özellikler" Tag="ℹ️" InputGestureText="Alt+Enter" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Properties"/>
+            <MenuItem Header="Diğer" Tag="ThumbnailOther" Padding="12,8" FontSize="13" Foreground="#334155">
+                <MenuItem Header="Thumbnailleri hızlı yükle" IsCheckable="True" Padding="12,8" FontSize="13"
+                          Click="ContextMenu_PinThumbnails" ToolTip="Bu klasör ve alt klasörlerinde yüklenen küçük resimleri boşta kalınca da RAM'de tut"/>
+            </MenuItem>
         </ContextMenu>
         
         <!-- Empty Area Context Menu (for creating new items) -->

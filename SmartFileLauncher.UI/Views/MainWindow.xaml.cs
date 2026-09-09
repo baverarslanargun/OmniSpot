@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Windows.Threading;
 using System.Linq;
 using System.Windows;
@@ -268,7 +268,8 @@ public partial class MainWindow : Window {
             _appSettings,
             _settingsApplication,
             _indexMaintenance,
-            Log);
+            Log,
+            () => _thumbnailService.GetDiagnostics().DecodedBytes);
         settingsWindow.Owner = this;
         settingsWindow.SettingsChanged += OnSettingsChanged;
         settingsWindow.IndexRebuildRequested += OnIndexRebuildRequested;
@@ -282,6 +283,7 @@ public partial class MainWindow : Window {
     
     private void OnSettingsChanged(object? sender, AppSettings newSettings) {
         _appSettings = newSettings;
+        ApplyThumbnailSettings();
         Log("⚙️ Ayarlar güncellendi");
     }
 
@@ -305,6 +307,7 @@ public partial class MainWindow : Window {
         RecordMeasurementEvent("kapanış başladı");
 
         _lifetimeCancellation.Cancel();
+        ShutdownThumbnailPolicy();
         _viewportDebounce.Stop();
         _thumbnailIdleRelease.Stop();
         _thumbnailViewport?.Cancel();
@@ -789,7 +792,8 @@ public partial class MainWindow : Window {
             {
                 if (!IsCurrentSearch(version)) return;
 
-                _searchResults.Clear();
+                CancelSearchThumbnailRequests();
+        _searchResults.Clear();
                 foreach (var result in results)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -858,27 +862,20 @@ public partial class MainWindow : Window {
     
     private async Task LoadSearchThumbnailAsync(SearchResultViewModel viewModel)
     {
+        if (!_appSettings.ThumbnailPreviewsEnabled || _thumbnailActivity.IsIdle || _isPreparedForShutdown) return;
+        var token = _searchThumbnailCancellation?.Token ?? _lifetimeCancellation.Token;
         try
         {
-            var thumbnail = await _thumbnailService.GetThumbnailAsync(
-                viewModel.FullPath,
-                THUMBNAIL_SIZE,
-                CancellationToken.None
-            );
-            
-            if (thumbnail != null)
+            var thumbnail = await _thumbnailService.GetThumbnailAsync(viewModel.FullPath, THUMBNAIL_SIZE, token);
+            if (thumbnail == null || token.IsCancellationRequested) return;
+            await Dispatcher.InvokeAsync(() =>
             {
-                await Dispatcher.InvokeAsync(() => 
-                {
+                if (!token.IsCancellationRequested && CanApplyThumbnail(thumbnail) && _searchResults.Contains(viewModel))
                     viewModel.Thumbnail = thumbnail;
-                });
-            }
+            });
         }
-        catch
-        {
-        }
+        catch (OperationCanceledException) { }
     }
-    
     private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) {
         if (!_isIndexed) {
             Log("Arama yapılamadı: İndeksleme henüz tamamlanmadı");
@@ -892,7 +889,8 @@ public partial class MainWindow : Window {
             
             DesktopIconsScroll.Visibility = Visibility.Visible;
             ResultsContainer.Visibility = Visibility.Collapsed;
-            _searchResults.Clear();
+            CancelSearchThumbnailRequests();
+        _searchResults.Clear();
         } else {
             BeginSearch(query, debounce: true);
         }
@@ -1243,6 +1241,7 @@ public partial class MainWindow : Window {
         CancellationToken cancellationToken) {
         SearchingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
+        CancelSearchThumbnailRequests();
         _searchResults.Clear();
 
         if (results.Count == 0) {
@@ -1280,30 +1279,8 @@ public partial class MainWindow : Window {
         }
     }
 
-    private async Task LoadSearchResultThumbnailAsync(SearchResultViewModel viewModel)
-    {
-        try
-        {
-            var thumbnail = await _thumbnailService.GetThumbnailAsync(
-                viewModel.FullPath,
-                THUMBNAIL_SIZE,
-                CancellationToken.None
-            );
-            
-            if (thumbnail != null)
-            {
-                await Dispatcher.InvokeAsync(() => 
-                {
-                    viewModel.Thumbnail = thumbnail;
-                });
-            }
-        }
-        catch (Exception ex)
-        {
-            Log($"⚠️ Search result thumbnail error ({viewModel.Name}): {ex.Message}");
-        }
-    }
-    
+    private Task LoadSearchResultThumbnailAsync(SearchResultViewModel viewModel) => LoadSearchThumbnailAsync(viewModel);
+
     private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
         if (e.Key == Key.Enter) {
             OpenSelected();
@@ -1569,7 +1546,6 @@ public partial class MainWindow : Window {
 
     private const int THUMBNAIL_PREFETCH_SCREENS = 1;
 
-    private const int THUMBNAIL_IDLE_RELEASE_SECONDS = 60;
 
     private const int VIEWPORT_DEBOUNCE_MS = 100;
     
@@ -1617,6 +1593,8 @@ public partial class MainWindow : Window {
                 return viewModel;
             }).ToList();
 
+            RetargetThumbnailViewport(items);
+
             if (items.Count == 0) {
                 var folderName = Path.GetFileName(folderPath);
                 if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
@@ -1633,7 +1611,6 @@ public partial class MainWindow : Window {
                 Log($"   📊 {_desktopIcons.Count} öğe yüklendi" +
                     (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
                 RecordFolderMetrics(folderPath, items.Count, page.IsTruncated);
-                RetargetThumbnailViewport(items);
             }
 
             return true;
@@ -1654,9 +1631,12 @@ public partial class MainWindow : Window {
     private void InitializeThumbnailViewport() {
         _thumbnailViewport = new ThumbnailViewportScheduler(
             _thumbnailService,
-            (icon, thumbnail) => Dispatcher.InvokeAsync(
-                () => { icon.Thumbnail = thumbnail; },
-                System.Windows.Threading.DispatcherPriority.Background).Task,
+            (icon, thumbnail, token) => {
+                return Dispatcher.InvokeAsync(() => {
+                    if (!token.IsCancellationRequested && CanApplyThumbnail(thumbnail)
+                        && _desktopIcons.Contains(icon)) icon.Thumbnail = thumbnail;
+                }, System.Windows.Threading.DispatcherPriority.Background).Task;
+            },
             THUMBNAIL_SIZE,
             THUMBNAIL_BATCH_SIZE,
             THUMBNAIL_PREFETCH_SCREENS);
@@ -1672,18 +1652,7 @@ public partial class MainWindow : Window {
         DesktopIconsScroll.SizeChanged += (_, __) => ScheduleViewportUpdate();
         DesktopIconsScroll.IsVisibleChanged += (_, __) => ScheduleViewportUpdate();
 
-        _thumbnailIdleRelease.Interval =
-            TimeSpan.FromSeconds(THUMBNAIL_IDLE_RELEASE_SECONDS);
-        _thumbnailIdleRelease.Tick += (_, __) => {
-            _thumbnailIdleRelease.Stop();
-            _thumbnailViewport?.ReleaseOutsideViewport();
-        };
-        Deactivated += (_, __) => {
-            if (_isPreparedForShutdown) return;
-            _thumbnailIdleRelease.Stop();
-            _thumbnailIdleRelease.Start();
-        };
-        Activated += (_, __) => _thumbnailIdleRelease.Stop();
+        InitializeThumbnailPolicy();
     }
 
     private void RetargetThumbnailViewport(IReadOnlyList<DesktopIconViewModel> items) {
@@ -1699,6 +1668,7 @@ public partial class MainWindow : Window {
 
     private void UpdateThumbnailViewport() {
         if (_isPreparedForShutdown) return;
+        if (!_appSettings.ThumbnailPreviewsEnabled || _thumbnailActivity.IsIdle) return;
         _thumbnailViewport?.Update(ComputeThumbnailViewport());
     }
 
@@ -1738,10 +1708,11 @@ public partial class MainWindow : Window {
     
     private async Task LoadFolderThumbnailAsync(DesktopIconViewModel icon) {
         try {
-            var thumbnail = await _thumbnailService.GetThumbnailAsync(icon.FullPath, THUMBNAIL_SIZE);
+            if (!_appSettings.ThumbnailPreviewsEnabled || _thumbnailActivity.IsIdle) return;
+            var thumbnail = await _thumbnailService.GetThumbnailAsync(icon.FullPath, THUMBNAIL_SIZE, _lifetimeCancellation.Token);
             if (thumbnail != null) {
                 await Dispatcher.InvokeAsync(() => {
-                    icon.Thumbnail = thumbnail;
+                    if (CanApplyThumbnail(thumbnail) && _desktopIcons.Contains(icon)) icon.Thumbnail = thumbnail;
                 });
             }
         } catch { }
