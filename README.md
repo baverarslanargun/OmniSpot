@@ -74,6 +74,32 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj -c Release -o .\
 
 Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 
+### Küçük resim belleği
+
+Ayarlar → **Küçük resimler ve RAM** bölümünden önizlemeleri açıp kapatabilir,
+RAM'de tutulacak görsel adedini veya toplam fiziksel RAM'in yüzdesini seçebilirsiniz.
+Yatay çubuk, seçilen bütçe tamamen dolduğunda oluşabilecek RAM dağılımını yaklaşık
+olarak gösterir; bütçe seçildiği anda belleğe yükleme yapılmaz.
+
+Görünür alan ve çevresindeki mevcut ön yükleme davranışı korunur. Cache dolunca
+en uzun süredir kullanılmayan görseller çıkarılır. Adet sınırının yanında gerçek
+çözülmüş görsel baytları da izlenir. Güvenli üst sınır; toplam RAM'in %2'si,
+kullanılabilir RAM'in %10'u ve 512 MiB değerlerinin en küçüğüdür. Boş RAM azalınca
+etkin sınır düşer. Bu bütçe uygulamanın toplam RAM tüketimi değil, thumbnail
+önbelleğinin görsel verisi içindir.
+
+Varsayılan olarak OmniSpot içinde **60 saniye etkileşim olmadığında** küçük
+resimler RAM'den bırakılır. Süre 5–86.400 saniye arasında ayarlanabilir; başka
+uygulamalardaki hareketler süreyi yenilemez. Disk önbelleği korunur. .NET ve Windows
+belleği farklı zamanlarda geri verebildiği için süreç RAM'inin hemen açılıştaki
+sayısına dönmesi garanti edilmez.
+
+Klasöre sağ tık → **Diğer → Thumbnailleri hızlı yükle**, seçili klasör ve alt
+klasörlerinde gezinirken yüklenen görselleri hareketsizlik temizliğinden muaf tutar.
+Klasör önceden taranmaz; genel bellek sınırı yine geçerlidir. Aynı menüden veya
+ayarlardaki listeden kaldırılabilir. Önizlemeler tamamen kapatılırsa bu istisnalar
+da uygulanmaz. Ayarlar kaydedildiğinde yeniden başlatma gerekmeden devreye girer.
+
 ### Tanılama Penceresi
 
 Arama çubuğunun sağındaki 🐞 düğmesi **ayrı bir tanılama penceresi** açar. Ana

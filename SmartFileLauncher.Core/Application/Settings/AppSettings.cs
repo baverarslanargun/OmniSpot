@@ -16,6 +16,13 @@ public sealed class AppSettings
     public string DiagnosticsLogDirectory { get; set; } = string.Empty;
     public bool RememberDiagnosticsLogDirectory { get; set; } = true;
     public bool CompactSearchStateEnabled { get; set; }
+    public bool ThumbnailPreviewsEnabled { get; set; } = true;
+    public bool ThumbnailCacheUseRamRatio { get; set; }
+    public int ThumbnailCacheMaxCount { get; set; } = 1000;
+    public double ThumbnailCacheRamPercent { get; set; } = 0.1;
+    public int ThumbnailIdleSeconds { get; set; } = 60;
+    public List<string> ThumbnailPinnedFolders { get; set; } = new();
+    public bool HideThumbnailPinWarning { get; set; }
 
     public void ResetToDefaults()
     {
@@ -33,5 +40,12 @@ public sealed class AppSettings
         DiagnosticsLogDirectory = string.Empty;
         RememberDiagnosticsLogDirectory = true;
         CompactSearchStateEnabled = false;
+        ThumbnailPreviewsEnabled = true;
+        ThumbnailCacheUseRamRatio = false;
+        ThumbnailCacheMaxCount = 1000;
+        ThumbnailCacheRamPercent = 0.1;
+        ThumbnailIdleSeconds = 60;
+        ThumbnailPinnedFolders = new();
+        HideThumbnailPinWarning = false;
     }
 }

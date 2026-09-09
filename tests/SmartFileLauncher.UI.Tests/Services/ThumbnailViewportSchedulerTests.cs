@@ -12,6 +12,65 @@ public sealed class ThumbnailViewportSchedulerTests
     private const int ThumbnailSize = 128;
     private const int BatchSize = 10;
 
+    [Fact]
+    public async Task ResetToEmptyDetachesPreviousItems()
+    {
+        var thumbnails = new RecordingThumbnailService();
+        var items = CreateItems(10);
+        var scheduler = CreateScheduler(thumbnails);
+        scheduler.Reset(items);
+        scheduler.Update(new ThumbnailViewport(0, 5));
+        await scheduler.Current;
+        Assert.All(items, item => Assert.NotNull(item.Thumbnail));
+        scheduler.Reset(Array.Empty<DesktopIconViewModel>());
+        scheduler.ReleaseUnretained(_ => false);
+        Assert.All(items, item => Assert.NotNull(item.Thumbnail));
+        var requests = thumbnails.Requests.Count;
+        scheduler.Update(new ThumbnailViewport(0, 5));
+        await scheduler.Current;
+        Assert.Equal(requests, thumbnails.Requests.Count);
+    }
+
+    [Fact]
+    public async Task CancelAfterApplyIsQueuedInvalidatesTheOriginalRequestToken()
+    {
+        var thumbnails = new RecordingThumbnailService();
+        var items = CreateItems(1);
+        var queued = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var dispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var scheduler = new ThumbnailViewportScheduler(thumbnails, async (item, image, token) =>
+        {
+            queued.TrySetResult();
+            await dispatch.Task;
+            if (!token.IsCancellationRequested) item.Thumbnail = image;
+        }, ThumbnailSize, BatchSize, batchDelayMilliseconds: 0);
+        scheduler.Reset(items);
+        scheduler.Update(new ThumbnailViewport(0, 1));
+        var original = scheduler.Current;
+        await queued.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        scheduler.Cancel();
+        dispatch.TrySetResult();
+        await original.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(items[0].Thumbnail);
+    }
+
+    [Fact]
+    public async Task EvictedImagesAreReleasedAndCanBeRequestedOnNextViewportUpdate()
+    {
+        var thumbnails = new RecordingThumbnailService();
+        var items = CreateItems(20);
+        var scheduler = CreateScheduler(thumbnails);
+        scheduler.Reset(items);
+        scheduler.Update(new ThumbnailViewport(0, 10));
+        await scheduler.Current;
+        scheduler.ReleaseUnretained(_ => false);
+        Assert.All(items, item => Assert.Null(item.Thumbnail));
+        var before = thumbnails.Requests.Count;
+        scheduler.Update(new ThumbnailViewport(0, 10));
+        await scheduler.Current;
+        Assert.True(thumbnails.Requests.Count > before);
+    }
+
     [Theory]
     [InlineData(200, 0, 20, 1, 0, 40)]
     [InlineData(200, 100, 20, 1, 80, 140)]

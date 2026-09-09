@@ -26,10 +26,14 @@ public partial class SettingsWindow : Window
         AppSettings settings,
         ISettingsApplicationService settingsApplication,
         IIndexMaintenanceService indexMaintenance,
-        Action<string>? log = null)
+        Action<string>? log = null,
+        Func<long>? thumbnailCacheBytes = null)
     {
         InitializeComponent();
-        _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+        ArgumentNullException.ThrowIfNull(settings);
+        _settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(
+            System.Text.Json.JsonSerializer.Serialize(settings))!;
+        _thumbnailCacheBytes = thumbnailCacheBytes;
         _settingsApplication = settingsApplication
             ?? throw new ArgumentNullException(nameof(settingsApplication));
         _indexMaintenance = indexMaintenance
@@ -37,6 +41,8 @@ public partial class SettingsWindow : Window
         _log = log;
         
         LoadSettingsToUI();
+        StartThumbnailPreview();
+        MaxHeight = SystemParameters.WorkArea.Height;
         
         PreviewKeyDown += SettingsWindow_PreviewKeyDown;
     }
@@ -55,6 +61,7 @@ public partial class SettingsWindow : Window
         GridViewDefaultCheckbox.IsChecked = _settings.GridViewEnabled;
         
         UpdateIndexStatus();
+        InitializeThumbnailSettings();
     }
 
     private void UpdateIndexStatus()
@@ -286,6 +293,7 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!SaveThumbnailSettings()) return;
         _settings.HotkeyModifiers = (uint)_pendingModifiers;
         _settings.HotkeyKey = _pendingKey;
         _settings.StartMinimized = StartMinimizedCheckbox.IsChecked ?? false;
