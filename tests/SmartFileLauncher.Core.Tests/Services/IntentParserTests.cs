@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 using Xunit;
 
@@ -11,7 +12,100 @@ namespace SmartFileLauncher.Core.Tests.Services;
 public sealed class IntentParserTests
 {
     [Fact]
-    public async Task ProductionDefaultsUseOss120BMediumAndQwenKeywords()
+    public async Task RequestEffortIsIsolatedAcrossOverlappingCallsAndDoesNotChangeDefaults()
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var intent = new GatedHttpMessageHandler("""{"mode":"keyword","target":"file","open":false}""", gate.Task);
+        var keyword = new GatedHttpMessageHandler("""{"anchors":[{"primary":"rapor","variants":[],"translations":[]}],"phrases":[],"context":[]}""", gate.Task);
+        var parser = new IntentParser(new HttpClient(intent), new HttpClient(keyword));
+
+        var low = parser.ParseWithGroqEffortAsync("low-query", "low");
+        var high = parser.ParseWithGroqEffortAsync("high-query", "high");
+        gate.SetResult();
+        var results = await Task.WhenAll(low, high, parser.ParseWithGroqAsync("default-query"));
+
+        Assert.All(results, result => Assert.False(result.UsedFallback));
+        foreach (var handler in new[] { intent, keyword })
+        {
+            var efforts = new List<string?>();
+            foreach (var body in handler.RequestBodies)
+            {
+                using var document = JsonDocument.Parse(body);
+                var root = document.RootElement;
+                var content = root.GetProperty("messages")[0].GetProperty("content").GetString()!;
+                var expectedEffort = content.Contains("low-query") ? "low" : content.Contains("high-query") ? "high" : "medium";
+                Assert.Equal(expectedEffort, root.GetProperty("reasoning_effort").GetString());
+                efforts.Add(root.GetProperty("reasoning_effort").GetString());
+                Assert.Equal(0.6, root.GetProperty("temperature").GetDouble());
+                Assert.Equal("json_schema", root.GetProperty("response_format").GetProperty("type").GetString());
+            }
+            Assert.Equal(new[] { "high", "low", "medium" }, efforts.Order());
+        }
+    }
+
+    [Theory]
+    [InlineData("file", "Şevval", true)]
+    [InlineData("file", "sevval", true)]
+    [InlineData("file", "başka", false)]
+    [InlineData("folder", "Şevval", false)]
+    public async Task FolderContextIsSeparatedOnlyForMatchingFileQueryAnchors(string target, string folder, bool separated)
+    {
+        var intent = new QueueHttpMessageHandler(() => Completion(JsonSerializer.Serialize(new
+        {
+            mode = "keyword", target, folders = new[] { folder }, hard_extensions = new[] { "php" }, open = false
+        })));
+        var keyword = new QueueHttpMessageHandler(() => Completion("""
+            {"anchors":[{"primary":"Şevval","variants":["sevval"],"translations":[]},
+            {"primary":"stok","variants":["stoklar"],"translations":["stock","inventory"]}],"phrases":[],"context":[]}
+            """));
+
+        var query = await CreateParser(intent, keyword).ParseWithGroqAsync("Şevval projesindeki stok php dosyası");
+
+        Assert.False(query.UsedFallback);
+        Assert.Null(query.WarningMessage);
+        Assert.Equal(separated ? 2 : 0, query.FolderContextTerms.Count);
+        Assert.Equal(!separated, query.SearchTerms.Any(term => term.Text == "Şevval"));
+        Assert.Contains(query.SearchTerms, term => term.Text == "stock" && term.Role == SearchTermRole.Anchor);
+        Assert.Equal(query.SearchTerms.Select(term => term.Text), query.Keywords);
+        if (separated)
+        {
+            var tokenizer = new BasicTokenizer();
+            var targetFile = new FileSystemNode("stocks.php", @"C:\Workspace\proj_sevval\admin\stocks.php", false);
+            var otherFile = new FileSystemNode("stocks.php", @"C:\Workspace\other\admin\stocks.php", false);
+            FileSystemNode[] files = [targetFile, otherFile];
+            ISearchStateReader[] states = [SearchState.Create(files, tokenizer), CompactSearchState.Create(files, tokenizer)];
+            foreach (var state in states)
+            {
+                var standard = new SearchEngine(_ => state, tokenizer, new BasicScoringStrategy());
+                var before = standard.Search("stocks").Select(result => (result.FullPath, result.Score)).ToArray();
+                var advanced = new AdvancedSearchEngine(_ => state, tokenizer, new BasicScoringStrategy());
+                Assert.Equal(targetFile.FullPath, Assert.Single(advanced.Search(query)).FullPath);
+                Assert.Equal(2, before.Length);
+                Assert.Equal(before, standard.Search("stocks").Select(result => (result.FullPath, result.Score)).ToArray());
+            }
+        }
+    }
+
+    [Fact]
+    public async Task FolderContextDoesNotConsumeTheOnlyAnchorOrRuleBasedFallback()
+    {
+        var intentJson = """{"mode":"keyword","target":"file","folders":["Şevval"],"open":false}""";
+        var keywordJson = """{"anchors":[{"primary":"Şevval","variants":["sevval"],"translations":[]}],"phrases":[],"context":[]}""";
+        var parser = CreateParser(new QueueHttpMessageHandler(() => Completion(intentJson)), new QueueHttpMessageHandler(() => Completion(keywordJson)));
+        var query = await parser.ParseWithGroqAsync("Şevval dosyaları");
+        Assert.Empty(query.FolderContextTerms);
+        Assert.Contains(query.SearchTerms, term => term.Text == "Şevval");
+
+        var failing = CreateParser(new QueueHttpMessageHandler(() => Completion(intentJson)),
+            new QueueHttpMessageHandler(() => new HttpResponseMessage(HttpStatusCode.BadRequest)));
+        var fallback = await failing.ParseWithGroqAsync("Şevval stok php");
+        Assert.NotNull(fallback.WarningMessage);
+        Assert.Empty(fallback.FolderContextTerms);
+        Assert.Empty(parser.ParseIntent("Şevval stok php").FolderContextTerms);
+    }
+
+    [Fact]
+    public async Task ProductionDefaultsUseQwenMediumForBothRequests()
     {
         var intentHandler = new QueueHttpMessageHandler(
             () => Completion("""
@@ -44,7 +138,7 @@ public sealed class IntentParserTests
 
         using var intentDocument = JsonDocument.Parse(Assert.Single(intentHandler.RequestBodies));
         Assert.Equal(
-            "openai/gpt-oss-120b",
+            "qwen/qwen3.8-27b",
             intentDocument.RootElement.GetProperty("model").GetString());
         Assert.Equal(
             "medium",
@@ -52,11 +146,37 @@ public sealed class IntentParserTests
 
         using var keywordDocument = JsonDocument.Parse(Assert.Single(keywordHandler.RequestBodies));
         Assert.Equal(
-            "qwen/qwen3.6-27b",
+            "qwen/qwen3.8-27b",
             keywordDocument.RootElement.GetProperty("model").GetString());
         Assert.Equal(
-            "none",
+            "medium",
             keywordDocument.RootElement.GetProperty("reasoning_effort").GetString());
+        foreach (var root in new[] { intentDocument.RootElement, keywordDocument.RootElement })
+        {
+            Assert.Equal(0.6, root.GetProperty("temperature").GetDouble());
+            Assert.Equal(0.95, root.GetProperty("top_p").GetDouble());
+            Assert.Equal("hidden", root.GetProperty("reasoning_format").GetString());
+            Assert.Equal("json_schema", root.GetProperty("response_format").GetProperty("type").GetString());
+            var format = root.GetProperty("response_format").GetProperty("json_schema");
+            Assert.True(format.GetProperty("strict").GetBoolean());
+            var schema = format.GetProperty("schema");
+            Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+            Assert.Equal(
+                schema.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(),
+                schema.GetProperty("required").EnumerateArray().Select(p => p.GetString()).Order());
+            Assert.Equal(2048, root.GetProperty("max_completion_tokens").GetInt32());
+        }
+        var intentProperties = intentDocument.RootElement.GetProperty("response_format").GetProperty("json_schema").GetProperty("schema").GetProperty("properties");
+        Assert.Equal(12, intentProperties.EnumerateObject().Count());
+        foreach (var field in new[] { "created_from", "created_to_exclusive", "modified_from", "modified_to_exclusive", "min_mb", "max_mb" })
+        {
+            Assert.Contains("null", intentProperties.GetProperty(field).GetProperty("type").EnumerateArray().Select(p => p.GetString()));
+        }
+        Assert.Equal("string", intentProperties.GetProperty("folders").GetProperty("items").GetProperty("type").GetString());
+        var anchorSchema = keywordDocument.RootElement.GetProperty("response_format").GetProperty("json_schema").GetProperty("schema").GetProperty("properties").GetProperty("anchors").GetProperty("items");
+        Assert.False(anchorSchema.GetProperty("additionalProperties").GetBoolean());
+        Assert.Equal(new[] { "primary", "variants", "translations" }, anchorSchema.GetProperty("required").EnumerateArray().Select(p => p.GetString()));
+        Assert.Equal("string", anchorSchema.GetProperty("properties").GetProperty("primary").GetProperty("type").GetString());
     }
 
     [Fact]
@@ -217,7 +337,7 @@ public sealed class IntentParserTests
             reasoningEffort,
             keywordReasoningEffort: "none",
             model: model,
-            keywordModel: "qwen/qwen3.6-27b");
+            keywordModel: "qwen/qwen3.8-27b");
 
         await parser.ParseWithGroqAsync("bu yaza ait biletler");
 
@@ -231,7 +351,7 @@ public sealed class IntentParserTests
 
         using var keywordDocument = JsonDocument.Parse(Assert.Single(keywordHandler.RequestBodies));
         var keywordRoot = keywordDocument.RootElement;
-        Assert.Equal("qwen/qwen3.6-27b", keywordRoot.GetProperty("model").GetString());
+        Assert.Equal("qwen/qwen3.8-27b", keywordRoot.GetProperty("model").GetString());
         Assert.Equal("none", keywordRoot.GetProperty("reasoning_effort").GetString());
     }
 
@@ -263,7 +383,7 @@ public sealed class IntentParserTests
             intentHandler,
             keywordHandler,
             model: "groq/compound",
-            keywordModel: "qwen/qwen3.6-27b");
+            keywordModel: "qwen/qwen3.8-27b");
 
         await parser.ParseWithGroqAsync("bu yaza ait biletler");
 
@@ -319,7 +439,7 @@ public sealed class IntentParserTests
                     }
                     """)),
             model: "llama-3.3-70b-versatile",
-            keywordModel: "qwen/qwen3.6-27b");
+            keywordModel: "qwen/qwen3.8-27b");
 
         await parser.ParseWithGroqAsync("bu yaza ait biletler");
 
@@ -584,7 +704,7 @@ public sealed class IntentParserTests
         QueueHttpMessageHandler keywordHandler,
         string reasoningEffort = "none",
         string? keywordReasoningEffort = null,
-        string model = "qwen/qwen3.6-27b",
+        string model = "qwen/qwen3.8-27b",
         string? keywordModel = null) =>
         new(
             new HttpClient(intentHandler),
@@ -622,6 +742,18 @@ public sealed class IntentParserTests
         };
         response.Headers.RetryAfter = new RetryConditionHeaderValue(TimeSpan.Zero);
         return response;
+    }
+
+    private sealed class GatedHttpMessageHandler(string content, Task gate) : HttpMessageHandler
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> RequestBodies { get; } = new();
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBodies.Enqueue(await request.Content!.ReadAsStringAsync(cancellationToken));
+            await gate.WaitAsync(cancellationToken);
+            return Completion(content);
+        }
     }
 
     private sealed class QueueHttpMessageHandler(

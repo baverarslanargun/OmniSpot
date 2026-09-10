@@ -20,7 +20,8 @@ public partial class SettingsWindow
     {
         _thumbnailUiReady = false;
         ThumbnailEnabled.IsChecked = _settings.ThumbnailPreviewsEnabled;
-        ThumbnailMode.SelectedIndex = _settings.ThumbnailCacheUseRamRatio ? 1 : 0;
+        ThumbnailModeRatio.IsChecked = _settings.ThumbnailCacheUseRamRatio;
+        ThumbnailModeCount.IsChecked = !_settings.ThumbnailCacheUseRamRatio;
         ThumbnailCount.Text = _settings.ThumbnailCacheMaxCount.ToString(CultureInfo.CurrentCulture);
         ThumbnailIdle.Text = ThumbnailMemoryPolicy.IdleSeconds(_settings).ToString(CultureInfo.CurrentCulture);
         _thumbnailMemory = SystemMemoryReader.Read();
@@ -53,7 +54,7 @@ public partial class SettingsWindow
     private AppSettings ThumbnailDraft() => new()
     {
         ThumbnailPreviewsEnabled = ThumbnailEnabled.IsChecked == true,
-        ThumbnailCacheUseRamRatio = ThumbnailMode.SelectedIndex == 1,
+        ThumbnailCacheUseRamRatio = ThumbnailModeRatio.IsChecked == true,
         ThumbnailCacheMaxCount = long.TryParse(ThumbnailCount.Text, out var count)
             ? (int)Math.Clamp(count, 0, int.MaxValue) : int.MaxValue,
         ThumbnailCacheRamPercent = _thumbnailRequestedPercent
@@ -78,7 +79,7 @@ public partial class SettingsWindow
         ThumbnailRatioPanel.Visibility = draft.ThumbnailCacheUseRamRatio ? Visibility.Visible : Visibility.Collapsed;
         ThumbnailControls.IsEnabled = draft.ThumbnailPreviewsEnabled;
         ThumbnailRatioValue.Text = $"İstenen: %{_thumbnailRequestedPercent:N3}";
-        ThumbnailBudget.Text = $"Şu an uygulanacak sınır: {budget.Count:N0} görsel · {FormatThumbnailBytes(budget.Bytes)}";
+        ThumbnailBudget.Text = $"Uygulanacak sınır: {budget.Count:N0} görsel · {FormatThumbnailBytes(budget.Bytes)}";
         ThumbnailSafeLimit.Text = $"Güvenli üst sınır: {budget.SafeMaxCount:N0} görsel / {FormatThumbnailBytes(budget.SafeMaxBytes)} (%{budget.SafeMaxPercent:N3}). Boş RAM azaldığında otomatik düşer.";
         var total = Math.Max(1, _thumbnailMemory.TotalBytes);
         var used = Math.Clamp(total - _thumbnailMemory.AvailableBytes, 0, total);
@@ -130,6 +131,19 @@ public partial class SettingsWindow
         _settings.ThumbnailIdleSeconds = seconds;
         _settings.ThumbnailPinnedFolders = _thumbnailFolders.ToList();
         return true;
+    }
+
+    private void Step_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not System.Windows.Controls.Button { Tag: string tag }) return;
+        var parts = tag.Split(',');
+        if (parts.Length != 2 || !int.TryParse(parts[1], out var delta)) return;
+        if (FindName(parts[0]) is not System.Windows.Controls.TextBox box) return;
+        var current = long.TryParse(box.Text, NumberStyles.Integer, CultureInfo.CurrentCulture, out var value) ? value : 0;
+        var min = ReferenceEquals(box, ThumbnailIdle) ? 5 : 1;
+        box.Text = Math.Max(min, current + delta).ToString(CultureInfo.CurrentCulture);
+        if (ReferenceEquals(box, ThumbnailIdle)) return;
+        UpdateThumbnailPreview();
     }
 
     private void AddThumbnailFolder_Click(object sender, RoutedEventArgs e)

@@ -120,7 +120,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
         _search = new SearchApplicationService(
             standardSearch.Search,
             advancedSearch.Search,
-            intentParser.ParseWithGroqAsync,
+            intentParser.ParseWithGroqEffortAsync,
             intentParser.ParseIntent);
         _searchDiagnostics = new SearchDiagnosticsService(
             tokenizer,

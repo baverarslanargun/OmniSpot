@@ -3,10 +3,11 @@ using System.Text.Json;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Services;
 
-const string qwenModel = "qwen/qwen3.6-27b";
+const string qwenModel = "qwen/qwen3.8-27b";
+const string keywordReasoningEffort = "medium";
 
 var model = qwenModel;
-var reasoningEffort = "none";
+var reasoningEffort = "medium";
 var queryArguments = new List<string>();
 for (var index = 0; index < args.Length; index++)
 {
@@ -43,7 +44,7 @@ if (input.Length == 0)
 var stopwatch = Stopwatch.StartNew();
 var parser = new IntentParser(
     reasoningEffort: reasoningEffort,
-    keywordReasoningEffort: "none",
+    keywordReasoningEffort: keywordReasoningEffort,
     model: model,
     keywordModel: qwenModel);
 var result = await parser.ParseWithGroqAsync(input);
@@ -68,7 +69,7 @@ var output = new
     reasoning_effort = new
     {
         intent = reasoningEffort,
-        keyword = "none"
+        keyword = keywordReasoningEffort
     },
     elapsed_ms = stopwatch.ElapsedMilliseconds,
     used_fallback = result.UsedFallback,
@@ -93,6 +94,7 @@ var output = new
         max_mb = result.SizeFilter?.MaxMb,
         open = result.OpenAction?.ShouldOpen ?? false
     },
+    folder_context = result.FolderContextTerms.Select(term => new { text = term.Text, group = term.AnchorGroup }),
     search_terms = result.SearchTerms.Select(term => new
     {
         text = term.Text,

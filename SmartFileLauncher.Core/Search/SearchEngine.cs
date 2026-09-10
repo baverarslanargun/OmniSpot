@@ -41,6 +41,9 @@ public class SearchEngine
         _scoring = scoring ?? throw new ArgumentNullException(nameof(scoring));
     }
 
+    private const int TrailingPrefixMinimumLength = 2;
+    private const double TrailingPrefixWeight = 0.7;
+
     public IReadOnlyList<SearchResult> Search(
         string query,
         int maxResults = 50,
@@ -126,6 +129,7 @@ public class SearchEngine
     {
         var itemMatches = new Dictionary<string, (SearchItem item, HashSet<string> matchedTokens)>(
             StringComparer.OrdinalIgnoreCase);
+        var prefixOnly = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var token in tokens)
         {
@@ -138,6 +142,27 @@ public class SearchEngine
                     itemMatches[item.FullPath] = (item, new HashSet<string>());
                 }
                 itemMatches[item.FullPath].matchedTokens.Add(token);
+                prefixOnly.Remove(item.FullPath);
+            }
+        }
+
+        var trailing = tokens[^1];
+        if (trailing.Length >= TrailingPrefixMinimumLength)
+        {
+            foreach (var item in state.GetPartial(trailing, cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (itemMatches.TryGetValue(item.FullPath, out var existing))
+                {
+                    if (existing.matchedTokens.Add(trailing) && existing.matchedTokens.Count == 1)
+                    {
+                        prefixOnly.Add(item.FullPath);
+                    }
+                    continue;
+                }
+
+                itemMatches[item.FullPath] = (item, new HashSet<string> { trailing });
+                prefixOnly.Add(item.FullPath);
             }
         }
 
@@ -153,6 +178,11 @@ public class SearchEngine
                 tokens,
                 candidate.matchedTokens,
                 cancellationToken);
+
+            if (prefixOnly.Contains(item.FullPath))
+            {
+                score *= TrailingPrefixWeight;
+            }
 
             var result = new SearchResult
             {

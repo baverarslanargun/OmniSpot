@@ -12,6 +12,9 @@ public class StructuredQuery {
 
     [JsonIgnore]
     public List<SearchTerm> SearchTerms { get; set; } = new();
+
+    [JsonIgnore]
+    public List<SearchTerm> FolderContextTerms { get; set; } = new();
     
     [JsonPropertyName("file_types")]
     public List<string> FileTypes { get; set; } = new();

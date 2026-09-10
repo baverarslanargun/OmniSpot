@@ -105,6 +105,7 @@ public partial class MainWindow : Window {
         set => _viewModel.CutItem = value;
     }
     private const int DEBOUNCE_DELAY_MS = 1200;
+    private const int LIVE_DEBOUNCE_MS = 120;
     private const int THUMBNAIL_SIZE = 128;
     
     private AppSettings _appSettings;
@@ -143,6 +144,11 @@ public partial class MainWindow : Window {
 
         DataContext = _viewModel;
         InitializeComponent();
+        TrackMoreOptionsMenuState();
+        SetLoadingIndeterminate(true);
+        DesktopIcons.ItemsSource = _desktopRows;
+        _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
+        _folderLoadingDelay.Tick += (_, _) => ShowFolderLoadingBarNow();
 
         _indexLifecycle.ProgressChanged += HandleIndexProgress;
         _indexLifecycle.Error += HandleIndexError;
@@ -157,19 +163,14 @@ public partial class MainWindow : Window {
         SourceInitialized += HandleSourceInitialized;
         
         SearchBox.TextChanged += SearchBox_TextChanged;
-        SearchBox.GotFocus += (_, __) => SearchWatermark.Visibility = Visibility.Collapsed;
-        SearchBox.LostFocus += (_, __) => {
-            if (string.IsNullOrWhiteSpace(SearchBox.Text)) 
-                SearchWatermark.Visibility = Visibility.Visible;
-        };
+        SearchBox.TextChanged += (_, __) => SearchWatermark.Visibility =
+            string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
         SearchBox.KeyDown += SearchBox_KeyDown;
         ResultsList.MouseDoubleClick += (_, __) => OpenSelected();
         ConsoleToggleButton.Click += (_, __) => ToggleDiagnosticsWindow();
         InitializeDiagnostics();
         NaturalLanguageToggle.Checked += (_, __) => EnableNaturalLanguageMode();
         NaturalLanguageToggle.Unchecked += (_, __) => DisableNaturalLanguageMode();
-        ViewModeToggle.Checked += (_, __) => EnableGridView();
-        ViewModeToggle.Unchecked += (_, __) => DisableGridView();
         
         Log("=== OmniSpot Başlatıldı ===");
         Log("OmniSpot: Hafif Basit Masaüstü ve Tarayıcı");
@@ -177,6 +178,7 @@ public partial class MainWindow : Window {
         Closing += MainWindow_Closing;
         
         ApplyDefaultSettings();
+        LoadAiEffortSelection();
         
         InitializeThumbnailViewport();
 
@@ -201,7 +203,9 @@ public partial class MainWindow : Window {
             NaturalLanguageToggle.IsChecked = true;
         }
         if (_appSettings.GridViewEnabled) {
-            ViewModeToggle.IsChecked = true;
+            EnableGridView();
+        } else {
+            ApplyDesktopLayout();
         }
         if (_appSettings.StartMinimized) {
             WindowState = WindowState.Minimized;
@@ -213,6 +217,24 @@ public partial class MainWindow : Window {
     
     private void HandleSourceInitialized(object? sender, EventArgs e) {
         _shellService.Initialize(this, _appSettings);
+        ApplyWindowCorners();
+    }
+
+    [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+    private void ApplyWindowCorners() {
+        if (Environment.OSVersion.Version.Build < 22000) return;
+        var hwnd = new System.Windows.Interop.WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero) return;
+        var preference = 2;
+        DwmSetWindowAttribute(hwnd, 33, ref preference, sizeof(int));
+    }
+
+    private void ShowPanel(FrameworkElement panel) {
+        if (panel.Visibility == Visibility.Visible) return;
+        panel.Visibility = Visibility.Visible;
+        AnimatePanel(panel, 0, 6, 0);
     }
 
     private void HandleShellToggleRequested() {
@@ -237,8 +259,13 @@ public partial class MainWindow : Window {
         Dispatcher.Invoke(ForceExit);
     }
     private void ShowAndActivate() {
+        var wasHidden = !IsVisible || WindowState == WindowState.Minimized;
         Show();
         WindowState = WindowState.Normal;
+        if (wasHidden) {
+            Shell.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));
+        }
         Activate();
         SearchBox.Focus();
         SearchBox.SelectAll();
@@ -283,6 +310,7 @@ public partial class MainWindow : Window {
     
     private void OnSettingsChanged(object? sender, AppSettings newSettings) {
         _appSettings = newSettings;
+        LoadAiEffortSelection();
         ApplyThumbnailSettings();
         Log("⚙️ Ayarlar güncellendi");
     }
@@ -389,17 +417,154 @@ public partial class MainWindow : Window {
         if (_isPreparedForShutdown) return;
 
         Dispatcher.BeginInvoke(new Action(() => {
-            LoadingStatus.Text = progress.Status;
-            if (progress.IsIndeterminate) {
-                LoadingProgress.IsIndeterminate = true;
+            if (progress.IsCatalogBuild) {
+                EnterCatalogBuildStage();
                 return;
             }
 
-            LoadingProgress.IsIndeterminate = false;
+            SetLoadingStatus(progress.Status);
+            if (progress.IsIndeterminate) {
+                SetLoadingIndeterminate(true);
+                return;
+            }
+
+            SetLoadingIndeterminate(false);
             if (progress.Percentage >= 0 && progress.Percentage <= 100) {
-                LoadingProgress.Value = progress.Percentage;
+                SetLoadingPercentage(progress.Percentage);
             }
         }));
+    }
+
+    private const double LoadingTrackWidth = 240;
+    private const int SkeletonCardCount = 8;
+    private bool _loadingIndeterminate;
+    private bool _catalogBuildStageShown;
+    private string? _loadingStatusText;
+
+    private static bool Animate => SystemParameters.ClientAreaAnimation;
+
+    private static System.Windows.Media.Animation.DoubleAnimation Loop(double from, double to, TimeSpan duration, System.Windows.Media.Animation.IEasingFunction? ease = null) =>
+        new(from, to, duration) { RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever, EasingFunction = ease };
+
+    private static void StartPulse(System.Windows.Media.TranslateTransform shift, double pulseWidth, double trackWidth) {
+        if (!Animate) {
+            shift.X = trackWidth / 2 - pulseWidth / 2;
+            return;
+        }
+        shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, Loop(-pulseWidth, trackWidth, TimeSpan.FromSeconds(1.2),
+            new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }));
+    }
+
+    private static void StopPulse(System.Windows.Media.TranslateTransform shift) {
+        shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+    }
+
+    private void SetLoadingStatus(string status) {
+        if (string.Equals(_loadingStatusText, status, StringComparison.Ordinal)) return;
+        _loadingStatusText = status;
+        LoadingStatus.Text = status;
+    }
+
+    private void SetLoadingPercentage(int percentage) {
+        var width = LoadingTrackWidth * percentage / 100.0;
+        if (!Animate) {
+            LoadingProgressFill.Width = width;
+            return;
+        }
+        LoadingProgressFill.BeginAnimation(WidthProperty, new System.Windows.Media.Animation.DoubleAnimation(width, TimeSpan.FromMilliseconds(220)) {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+        });
+    }
+
+    private void SetLoadingIndeterminate(bool indeterminate) {
+        if (_loadingIndeterminate == indeterminate) return;
+        _loadingIndeterminate = indeterminate;
+        if (indeterminate) {
+            LoadingProgressFill.BeginAnimation(WidthProperty, null);
+            LoadingProgressFill.Width = 0;
+            LoadingProgressPulse.Visibility = Visibility.Visible;
+            StartPulse(LoadingProgressPulseShift, 96, LoadingTrackWidth);
+            return;
+        }
+        StopPulse(LoadingProgressPulseShift);
+        LoadingProgressPulse.Visibility = Visibility.Collapsed;
+    }
+
+    private void EnterCatalogBuildStage() {
+        if (_catalogBuildStageShown || _isPreparedForShutdown) return;
+        _catalogBuildStageShown = true;
+        SkeletonCards.ItemsSource ??= Enumerable.Range(0, SkeletonCardCount).ToList();
+        StartShimmer();
+        SkeletonPanel.Opacity = 1;
+        SkeletonPanel.Visibility = Visibility.Visible;
+        HideLoadingOverlay();
+        CatalogBuildPanel.Visibility = Visibility.Visible;
+        StartPulse(CatalogBuildPulseShift, 140, CatalogBuildPanel.ActualWidth > 0 ? CatalogBuildPanel.ActualWidth : 600);
+    }
+
+    private System.Windows.Media.TranslateTransform? _shimmerShift;
+
+    private void StartShimmer() {
+        if (!Animate || _shimmerShift != null) return;
+        var shift = new System.Windows.Media.TranslateTransform(-1, 0);
+        var brush = new System.Windows.Media.LinearGradientBrush {
+            StartPoint = new System.Windows.Point(0, 0),
+            EndPoint = new System.Windows.Point(1, 0),
+            MappingMode = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox,
+            RelativeTransform = shift
+        };
+        brush.GradientStops.Add(new System.Windows.Media.GradientStop((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E6EBF3"), 0));
+        brush.GradientStops.Add(new System.Windows.Media.GradientStop((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F9FBFE"), 0.5));
+        brush.GradientStops.Add(new System.Windows.Media.GradientStop((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E6EBF3"), 1));
+        Resources["ShimmerBrush"] = brush;
+        _shimmerShift = shift;
+        shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, Loop(-1, 1, TimeSpan.FromSeconds(1.4),
+            new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }));
+    }
+
+    private void StopShimmer() {
+        _shimmerShift?.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+        _shimmerShift = null;
+    }
+
+    private void LeaveCatalogBuildStage() {
+        StopPulse(CatalogBuildPulseShift);
+        CatalogBuildPanel.Visibility = Visibility.Collapsed;
+        if (SkeletonPanel.Visibility != Visibility.Visible) return;
+        if (!Animate) {
+            StopShimmer();
+            SkeletonPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(320)) {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+        };
+        fade.Completed += (_, _) => {
+            StopShimmer();
+            SkeletonPanel.Visibility = Visibility.Collapsed;
+            SkeletonPanel.BeginAnimation(OpacityProperty, null);
+            SkeletonPanel.Opacity = 1;
+        };
+        SkeletonPanel.BeginAnimation(OpacityProperty, fade);
+    }
+
+    private void HideLoadingOverlay() {
+        if (LoadingOverlay.Visibility != Visibility.Visible) return;
+        StopPulse(LoadingProgressPulseShift);
+        if (!Animate) {
+            LoadingOverlay.Visibility = Visibility.Collapsed;
+            return;
+        }
+        LoadingOverlay.IsHitTestVisible = false;
+        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(220)) {
+            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseIn }
+        };
+        fade.Completed += (_, _) => {
+            LoadingOverlay.Visibility = Visibility.Collapsed;
+            LoadingOverlay.BeginAnimation(OpacityProperty, null);
+            LoadingOverlay.Opacity = 1;
+        };
+        LoadingOverlay.BeginAnimation(OpacityProperty, fade);
     }
 
     private void HandleIndexError(string error) {
@@ -431,6 +596,35 @@ public partial class MainWindow : Window {
         SearchWatermark.Text = "🤖 OmniSpot AI - Doğal dil ile ara";
         Log("🤖 Doğal dil modu aktif");
     }
+
+    private void LoadAiEffortSelection() {
+        _appSettings.AiReasoningEffort = _appSettings.AiReasoningEffort is "low" or "medium" or "high"
+            ? _appSettings.AiReasoningEffort : "medium";
+        var effort = _appSettings.AiReasoningEffort;
+        var label = effort switch { "low" => "Low", "high" => "High", _ => "Medium" };
+        AiEffortLabel.Text = label;
+        AiEffortButton.ToolTip = $"AI eforu: {label}\nTıkla: Low → Medium → High\nYüksek efor daha uzun sürebilir.";
+        System.Windows.Automation.AutomationProperties.SetName(AiEffortButton, $"AI eforu: {label}. Sonraki seviyeye geç");
+        var angle = effort switch { "low" => -55d, "high" => 55d, _ => 0d };
+        AiEffortNeedle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(angle, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));
+    }
+
+    private void AiEffortButton_Click(object sender, RoutedEventArgs e) {
+        var effort = _appSettings.AiReasoningEffort switch { "low" => "medium", "medium" => "high", _ => "low" };
+        _appSettings.AiReasoningEffort = effort;
+        LoadAiEffortSelection();
+        try {
+            _settingsApplication.Save(_appSettings);
+        } catch (Exception ex) {
+            Log($"⚠️ AI efor tercihi kaydedilemedi: {ex.Message}");
+        }
+        Log($"🤖 AI eforu: {effort}");
+        SearchBox.Focus();
+        if (_isNaturalLanguageMode && _isIndexed && !string.IsNullOrWhiteSpace(SearchBox.Text)) {
+            BeginSearch(SearchBox.Text.Trim(), debounce: true);
+        }
+    }
     
     private void DisableNaturalLanguageMode() {
         _isNaturalLanguageMode = false;
@@ -440,16 +634,112 @@ public partial class MainWindow : Window {
     
     private void EnableGridView() {
         _isGridViewMode = true;
-        ResultsList.Visibility = Visibility.Collapsed;
-        ResultsGridScroll.Visibility = Visibility.Visible;
+        ApplyViewMode(ResultsList, ResultsGridScroll);
         Log("⊞ Grid görünümü aktif");
     }
-    
+
     private void DisableGridView() {
         _isGridViewMode = false;
-        ResultsList.Visibility = Visibility.Visible;
-        ResultsGridScroll.Visibility = Visibility.Collapsed;
+        ApplyViewMode(ResultsGridScroll, ResultsList);
         Log("☰ Liste görünümü aktif");
+    }
+
+    private void ApplyViewMode(UIElement hide, UIElement show) {
+        var duration = TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 160 : 0);
+        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+
+        hide.Visibility = Visibility.Collapsed;
+        show.Visibility = Visibility.Visible;
+        if (show is FrameworkElement shown) AnimatePanel(shown, 0, 0, 0.35);
+
+        var thumbShift = new System.Windows.Media.Animation.DoubleAnimation(_isGridViewMode ? 28 : 0, duration) { EasingFunction = ease };
+        ViewModeThumbShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, thumbShift);
+        var active = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0x7A, 0xFF));
+        var idle = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x94, 0xA3, 0xB8));
+        ViewModeListIcon.Stroke = _isGridViewMode ? idle : active;
+        ViewModeGridIcon.Stroke = _isGridViewMode ? active : idle;
+        ApplyDesktopLayout();
+        if (DesktopIconsScroll.Visibility == Visibility.Visible) AnimatePanel(DesktopIconsScroll, 0, 0, 0.35);
+        var current = _isGridViewMode ? "Grid" : "Liste";
+        var next = _isGridViewMode ? "Liste" : "Grid";
+        ViewModeMenuItem.ToolTip = $"Görünüm: {current}. Tıkla: {next} görünümüne geç";
+        System.Windows.Automation.AutomationProperties.SetName(ViewModeMenuItem, $"Görünüm: {current}. {next} görünümüne geç");
+    }
+
+    private DateTime _moreOptionsMenuClosedAt = DateTime.MinValue;
+
+    private void TrackMoreOptionsMenuState() {
+        var menu = MoreOptionsButton.ContextMenu;
+        System.ComponentModel.DependencyPropertyDescriptor
+            .FromProperty(ContextMenu.IsOpenProperty, typeof(ContextMenu))
+            .AddValueChanged(menu, (_, _) => {
+                if (menu.IsOpen) return;
+                _moreOptionsMenuClosedAt = DateTime.UtcNow;
+                if (!_isPreparedForShutdown) SearchBox.Focus();
+            });
+    }
+
+    private const int DesktopGridColumns = 4;
+    private readonly ObservableCollection<DesktopRowViewModel> _desktopRows = new();
+    private bool _desktopRowsRebuildQueued;
+    private ScrollViewer? _desktopScroll;
+
+    private int DesktopColumns => _isGridViewMode ? DesktopGridColumns : 1;
+
+    private ScrollViewer? DesktopScroll => _desktopScroll ??= FindDescendant<ScrollViewer>(DesktopIcons);
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject {
+        var count = System.Windows.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++) {
+            var child = System.Windows.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is T match) return match;
+            var nested = FindDescendant<T>(child);
+            if (nested != null) return nested;
+        }
+        return null;
+    }
+
+    private void QueueDesktopRowsRebuild() {
+        if (_desktopRowsRebuildQueued || _isPreparedForShutdown) return;
+        _desktopRowsRebuildQueued = true;
+        Dispatcher.BeginInvoke(new Action(RebuildDesktopRows), System.Windows.Threading.DispatcherPriority.Loaded);
+    }
+
+    private void RebuildDesktopRows() {
+        _desktopRowsRebuildQueued = false;
+        if (_isPreparedForShutdown) return;
+        var columns = DesktopColumns;
+        var source = _desktopIcons;
+        var rows = new List<DesktopRowViewModel>((source.Count + columns - 1) / columns);
+        for (var i = 0; i < source.Count; i += columns) {
+            var take = Math.Min(columns, source.Count - i);
+            var slice = new DesktopIconViewModel[take];
+            for (var j = 0; j < take; j++) slice[j] = source[i + j];
+            rows.Add(new DesktopRowViewModel(slice));
+        }
+        _desktopRows.Clear();
+        foreach (var row in rows) _desktopRows.Add(row);
+        ScheduleViewportUpdate();
+    }
+
+    private void ApplyDesktopLayout() {
+        DesktopIcons.ItemTemplate = (DataTemplate)FindResource(_isGridViewMode ? "DesktopGridRowTemplate" : "DesktopListRowTemplate");
+        RebuildDesktopRows();
+    }
+
+    private void MoreOptionsButton_Click(object sender, RoutedEventArgs e) {
+        var menu = MoreOptionsButton.ContextMenu;
+        if (menu.IsOpen || (DateTime.UtcNow - _moreOptionsMenuClosedAt) < TimeSpan.FromMilliseconds(250)) {
+            menu.IsOpen = false;
+            SearchBox.Focus();
+            return;
+        }
+        menu.PlacementTarget = MoreOptionsButton;
+        menu.IsOpen = true;
+    }
+
+    private void ViewModeMenuItem_Click(object sender, RoutedEventArgs e) {
+        if (_isGridViewMode) DisableGridView(); else EnableGridView();
     }
     
     private async Task InitializeAsync() {
@@ -487,13 +777,10 @@ public partial class MainWindow : Window {
             Log($"❌ HATA: {ex.Message}");
             Log($"Stack trace: {ex.StackTrace}");
             await Dispatcher.InvokeAsync(() => {
-                LoadingStatus.Text = $"Hata: {ex.Message}";
-                LoadingProgress.IsIndeterminate = false;
-                System.Windows.MessageBox.Show(
-                    $"İndeksleme başarısız: {ex.Message}{Environment.NewLine}{Environment.NewLine}Detaylar için konsolu kontrol edin.",
-                    "Hata",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Error);
+                SetLoadingStatus($"Hata: {ex.Message}");
+                SetLoadingIndeterminate(false);
+                ModernDialog.Show(this, "İndeksleme başarısız",
+                    $"{ex.Message}{Environment.NewLine}{Environment.NewLine}Ayrıntılar için konsolu kontrol edin.", DialogKind.Danger);
             });
         }
     }
@@ -502,7 +789,9 @@ public partial class MainWindow : Window {
         IndexStartupResult startup,
         long elapsedMilliseconds) {
         var stats = startup.Stats;
-        LoadingStatus.Text = $"{stats.FileCount} dosya, {stats.DirectoryCount} klasör indekslendi";
+        SetLoadingIndeterminate(false);
+        SetLoadingPercentage(100);
+        SetLoadingStatus($"{stats.FileCount} dosya, {stats.DirectoryCount} klasör indekslendi");
         Log($"✅ İndeksleme tamamlandı ({elapsedMilliseconds}ms)");
         Log($"   📄 Dosya sayısı: {stats.FileCount}");
         Log($"   📁 Klasör sayısı: {stats.DirectoryCount}");
@@ -523,8 +812,17 @@ public partial class MainWindow : Window {
             Log("FileSystemWatcher aktif - değişiklikler otomatik izleniyor");
         }
 
-        LoadingOverlay.Visibility = Visibility.Collapsed;
-        DesktopIconsScroll.Visibility = Visibility.Visible;
+        var fromSkeleton = SkeletonPanel.Visibility == Visibility.Visible;
+        LeaveCatalogBuildStage();
+        HideLoadingOverlay();
+        if (fromSkeleton && Animate) {
+            DesktopIconsScroll.Visibility = Visibility.Visible;
+            DesktopIconsScroll.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320)) {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+            });
+        } else {
+            ShowPanel(DesktopIconsScroll);
+        }
         SearchBox.Focus();
     }
 
@@ -661,7 +959,7 @@ public partial class MainWindow : Window {
                 viewModel.Name = entry.Name;
                 viewModel.FullPath = entry.FullPath;
                 viewModel.Icon = entry.IsDirectory
-                    ? "📁"
+                    ? "folder"
                     : GetFileIcon(entry.Name);
                 viewModel.IsDirectory = entry.IsDirectory;
                 if (entry.IsDirectory)
@@ -740,7 +1038,7 @@ public partial class MainWindow : Window {
                 {
                     Name = child.Name,
                     FullPath = child.FullPath,
-                    Icon = child.IsDirectory ? "📁" : GetFileIcon(child.Name),
+                    Icon = child.IsDirectory ? "folder" : GetFileIcon(child.Name),
                     IsDirectory = child.IsDirectory
                 };
                 
@@ -804,7 +1102,7 @@ public partial class MainWindow : Window {
                         Name = result.Name,
                         FullPath = result.FullPath,
                         Score = result.Score,
-                        Icon = isDirectory ? "📁" : GetFileIcon(result.Name),
+                        Icon = isDirectory ? "folder" : GetFileIcon(result.Name),
                         IsDirectory = isDirectory
                     };
                     
@@ -843,7 +1141,7 @@ public partial class MainWindow : Window {
             var viewModel = new DesktopIconViewModel {
                 Name = child.Name,
                 FullPath = child.FullPath,
-                Icon = child.IsDirectory ? "📁" : GetFileIcon(child.Name),
+                Icon = child.IsDirectory ? "folder" : GetFileIcon(child.Name),
                 IsDirectory = child.IsDirectory
             };
 
@@ -856,12 +1154,15 @@ public partial class MainWindow : Window {
         }
 
         RetargetThumbnailViewport(items);
+        RebuildDesktopRows();
+        AnimateFolderSwap(items.Count);
 
         Log($"✅ Desktop ikonları yüklendi, küçük resimler görünür alana göre yüklenecek...");
     }
     
     private async Task LoadSearchThumbnailAsync(SearchResultViewModel viewModel)
     {
+        if (viewModel.IsDirectory || !ThumbnailKinds.HasPreview(viewModel.Icon)) return;
         if (!_appSettings.ThumbnailPreviewsEnabled || _thumbnailActivity.IsIdle || _isPreparedForShutdown) return;
         var token = _searchThumbnailCancellation?.Token ?? _lifetimeCancellation.Token;
         try
@@ -887,8 +1188,8 @@ public partial class MainWindow : Window {
         if (string.IsNullOrWhiteSpace(query)) {
             CancelCurrentSearch();
             
-            DesktopIconsScroll.Visibility = Visibility.Visible;
             ResultsContainer.Visibility = Visibility.Collapsed;
+            ShowPanel(DesktopIconsScroll);
             CancelSearchThumbnailRequests();
         _searchResults.Clear();
         } else {
@@ -920,19 +1221,20 @@ public partial class MainWindow : Window {
         bool debounce) {
         try {
             if (debounce) {
-                await Task.Delay(DEBOUNCE_DELAY_MS, cancellation.Token);
+                await Task.Delay(_isNaturalLanguageMode ? DEBOUNCE_DELAY_MS : LIVE_DEBOUNCE_MS, cancellation.Token);
             }
 
             cancellation.Token.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(version)) return;
 
             DesktopIconsScroll.Visibility = Visibility.Collapsed;
-            ResultsContainer.Visibility = Visibility.Visible;
+            ShowPanel(ResultsContainer);
 
-            Log($"🔍 Arama sorgusu: '{query}'");
-            var tokens = _searchDiagnostics.Tokenize(query);
-            Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
-            ShowSearchingIndicator(query);
+            if (_isNaturalLanguageMode) LogSearchQuery(query);
+            if (_isNaturalLanguageMode ||
+                (_searchResults.Count == 0 && NoResultsPanel.Visibility != Visibility.Visible)) {
+                ShowSearchingIndicator(query);
+            }
 
             await RunSearchAsync(query, version, cancellation.Token);
         } catch (OperationCanceledException) {
@@ -970,9 +1272,9 @@ public partial class MainWindow : Window {
         FallbackWarningBanner.Visibility = Visibility.Collapsed;
         
         if (_isNaturalLanguageMode) {
-            SearchingText.Text = "🤖 AI ile aranıyor...";
+            SearchingText.Text = "AI ile aranıyor…";
         } else {
-            SearchingText.Text = "🔍 Aranıyor...";
+            SearchingText.Text = "Aranıyor…";
         }
     }
     
@@ -1052,16 +1354,74 @@ public partial class MainWindow : Window {
         DeltaSyncMinimized.Visibility = Visibility.Collapsed;
     }
     
+    private readonly DispatcherTimer _folderLoadingDelay = new() { Interval = TimeSpan.FromMilliseconds(120) };
+    private int _navigationDirection;
+
+    private long _loadingBarShownAt;
+    private int _loadingBarHideToken;
+
     private void ShowFolderLoadingIndicator(string folderPath) {
-        var folderName = Path.GetFileName(folderPath);
-        if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
-        
-        FolderLoadingTitle.Text = $"📂 {folderName}";
-        FolderLoadingPanel.Visibility = Visibility.Visible;
+        _folderLoadingDelay.Stop();
+        _folderLoadingDelay.Start();
+        if (DesktopIconsScroll.Visibility == Visibility.Visible && _desktopIcons.Count > 0) {
+            DesktopIconsScroll.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.55,
+                TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));
+        }
     }
-    
-    private void HideFolderLoadingIndicator() {
-        FolderLoadingPanel.Visibility = Visibility.Collapsed;
+
+    private void ShowFolderLoadingBarNow() {
+        _folderLoadingDelay.Stop();
+        Interlocked.Increment(ref _loadingBarHideToken);
+        if (FolderLoadingBar.Visibility == Visibility.Visible) return;
+        _loadingBarShownAt = Environment.TickCount64;
+        FolderLoadingBar.IsIndeterminate = true;
+        FolderLoadingBar.Visibility = Visibility.Visible;
+    }
+
+    private async void HideFolderLoadingIndicator() {
+        _folderLoadingDelay.Stop();
+        if (FolderLoadingBar.Visibility != Visibility.Visible) return;
+        var token = Interlocked.Increment(ref _loadingBarHideToken);
+        var shownFor = Environment.TickCount64 - _loadingBarShownAt;
+        if (shownFor < 450) {
+            try { await Task.Delay((int)(450 - shownFor)); } catch { return; }
+            if (token != _loadingBarHideToken || _isPreparedForShutdown) return;
+        }
+        FolderLoadingBar.IsIndeterminate = false;
+        FolderLoadingBar.Visibility = Visibility.Collapsed;
+    }
+
+    private void AnimatePanel(FrameworkElement panel, double fromX, double fromY, double fromOpacity) {
+        if (!SystemParameters.ClientAreaAnimation) return;
+        if (panel.RenderTransform is not System.Windows.Media.TranslateTransform shift) {
+            shift = new System.Windows.Media.TranslateTransform();
+            panel.RenderTransform = shift;
+        }
+        panel.CacheMode ??= new System.Windows.Media.BitmapCache();
+        var duration = TimeSpan.FromMilliseconds(180);
+        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+        var fade = new System.Windows.Media.Animation.DoubleAnimation(fromOpacity, 1, duration) { EasingFunction = ease };
+        fade.Completed += (_, _) => panel.CacheMode = null;
+        panel.BeginAnimation(OpacityProperty, fade);
+        shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(fromX, 0, duration) { EasingFunction = ease });
+        shift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(fromY, 0, duration) { EasingFunction = ease });
+    }
+
+    private void AnimateFolderSwap(int incomingCount) {
+        DesktopScroll?.ScrollToTop();
+        var direction = _navigationDirection;
+        _navigationDirection = 0;
+        if (direction == 0 || incomingCount > 400 || incomingCount == 0) {
+            DesktopIconsScroll.BeginAnimation(OpacityProperty, null);
+            DesktopIconsScroll.Opacity = 1;
+            if (direction != 0 && incomingCount == 0 && EmptyFolderPanel.Visibility == Visibility.Visible) {
+                AnimatePanel(EmptyFolderPanel, direction * 12, 0, 0);
+            }
+            return;
+        }
+        AnimatePanel(DesktopIconsScroll, direction * 12, 0, 0.2);
     }
     
     private async void RetryButton_Click(object sender, RoutedEventArgs e) {
@@ -1098,11 +1458,14 @@ public partial class MainWindow : Window {
 
         try {
             var searchTimestamp = Stopwatch.GetTimestamp();
+            var reasoningEffort = _appSettings.AiReasoningEffort;
+            if (_isNaturalLanguageMode) Log($"🤖 Arama eforu: {reasoningEffort}");
             var outcome = await _searchService.SearchAsync(
                 new SearchRequest(
                     query,
                     _isNaturalLanguageMode,
-                    _connectivityMonitor.IsConnected),
+                    _connectivityMonitor.IsConnected,
+                    ReasoningEffort: reasoningEffort),
                 cancellationToken);
             var searchElapsed = Stopwatch.GetElapsedTime(searchTimestamp);
 
@@ -1110,7 +1473,11 @@ public partial class MainWindow : Window {
             if (!IsCurrentSearch(searchVersion)) return;
 
             RecordSearchMetrics(query.Length, searchElapsed, outcome.Results.Count);
-            LogSearchOutcome(outcome);
+            if (_isNaturalLanguageMode) {
+                LogSearchOutcome(outcome);
+            } else {
+                _ = LogSettledSearchAsync(query, searchVersion, outcome, cancellationToken);
+            }
 
             if (!string.IsNullOrEmpty(outcome.AutoOpenPath)) {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -1131,7 +1498,10 @@ public partial class MainWindow : Window {
                 FallbackWarningBanner.Visibility = Visibility.Collapsed;
             }
 
-            RenderSearchResults(outcome.Results, cancellationToken);
+            await Dispatcher.InvokeAsync(() => {
+                if (cancellationToken.IsCancellationRequested || !IsCurrentSearch(searchVersion)) return;
+                RenderSearchResults(outcome.Results, cancellationToken);
+            }, System.Windows.Threading.DispatcherPriority.Background);
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
@@ -1141,6 +1511,23 @@ public partial class MainWindow : Window {
             Log($"Stack: {ex.StackTrace}");
             ShowError("Arama sırasında bir hata oluştu", ex.Message);
         }
+    }
+
+    private void LogSearchQuery(string query) {
+        Log($"🔍 Arama sorgusu: '{query}'");
+        var tokens = _searchDiagnostics.Tokenize(query);
+        Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
+    }
+
+    private async Task LogSettledSearchAsync(string query, long version, SearchOutcome outcome, CancellationToken cancellationToken) {
+        try {
+            await Task.Delay(DEBOUNCE_DELAY_MS, cancellationToken);
+        } catch (OperationCanceledException) {
+            return;
+        }
+        if (!IsCurrentSearch(version) || _isPreparedForShutdown) return;
+        LogSearchQuery(query);
+        LogSearchOutcome(outcome);
     }
 
     private void LogSearchOutcome(SearchOutcome outcome) {
@@ -1179,6 +1566,9 @@ public partial class MainWindow : Window {
                     .Where(term => term.Role == SearchTermRole.Context)
                     .Select(term => term.Text);
                 Log($"   Ana hedefler: [{string.Join(", ", primaryTerms)}]");
+                if (structuredQuery.FolderContextTerms.Count > 0) {
+                    Log($"   Klasör bağlamı: [{string.Join(", ", structuredQuery.FolderContextTerms.Select(term => term.Text))}]");
+                }
                 Log($"   Alternatifler: [{string.Join(", ", alternativeTerms)}]");
                 Log($"   İfadeler: [{string.Join(", ", phraseTerms)}]");
                 Log($"   Yardımcı bağlam: [{string.Join(", ", contextTerms)}]");
@@ -1241,10 +1631,11 @@ public partial class MainWindow : Window {
         CancellationToken cancellationToken) {
         SearchingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
-        CancelSearchThumbnailRequests();
-        _searchResults.Clear();
 
         if (results.Count == 0) {
+            CancelSearchThumbnailRequests();
+            foreach (var current in _searchResults) current.IsRemoving = false;
+            _searchResults.Clear();
             NoResultsPanel.Visibility = Visibility.Visible;
             ResultsList.Visibility = Visibility.Collapsed;
             ResultsGridScroll.Visibility = Visibility.Collapsed;
@@ -1259,27 +1650,160 @@ public partial class MainWindow : Window {
             ? Visibility.Visible
             : Visibility.Collapsed;
 
+        var existing = new Dictionary<string, SearchResultViewModel>(StringComparer.OrdinalIgnoreCase);
+        foreach (var current in _searchResults) existing[current.FullPath] = current;
+
+        var desired = new List<SearchResultViewModel>(results.Count);
+        var added = new List<SearchResultViewModel>();
         foreach (var result in results) {
             cancellationToken.ThrowIfCancellationRequested();
+            if (existing.TryGetValue(result.FullPath, out var kept)) {
+                kept.Score = result.Score;
+                desired.Add(kept);
+                continue;
+            }
+
             var isDirectory = result.IsDirectory;
             var viewModel = new SearchResultViewModel {
                 Name = result.Name,
                 FullPath = result.FullPath,
                 Score = result.Score,
-                Icon = isDirectory ? "📁" : GetFileIcon(result.Name),
-                IsDirectory = isDirectory
+                Icon = isDirectory ? "folder" : GetFileIcon(result.Name),
+                IsDirectory = isDirectory,
+                IsNew = _searchResults.Count > 0 && SystemParameters.ClientAreaAnimation
             };
 
             if (isDirectory) {
                 viewModel.SetFolderColors(result.Name);
             }
 
-            _searchResults.Add(viewModel);
+            desired.Add(viewModel);
+            added.Add(viewModel);
+        }
+
+        var wanted = new HashSet<SearchResultViewModel>(desired);
+        var animateRemoval = SystemParameters.ClientAreaAnimation;
+        var leaving = new List<SearchResultViewModel>();
+        for (var i = _searchResults.Count - 1; i >= 0; i--) {
+            var current = _searchResults[i];
+            if (wanted.Contains(current)) {
+                current.IsRemoving = false;
+                continue;
+            }
+            if (animateRemoval && !current.IsRemoving) {
+                current.IsRemoving = true;
+                leaving.Add(current);
+            } else if (!animateRemoval) {
+                _searchResults.RemoveAt(i);
+            }
+        }
+
+        var host = ActiveResultsHost;
+        var before = CaptureResultPositions(host, desired);
+
+        var slot = 0;
+        foreach (var item in desired) {
+            while (slot < _searchResults.Count && _searchResults[slot].IsRemoving) slot++;
+            var currentIndex = _searchResults.IndexOf(item);
+            if (currentIndex < 0) {
+                _searchResults.Insert(slot, item);
+            } else if (currentIndex != slot) {
+                _searchResults.Move(currentIndex, slot);
+            }
+            slot++;
+        }
+
+        AnimateResultTransitions(host, before, added);
+
+        if (leaving.Count > 0) {
+            var sweep = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
+            sweep.Tick += (_, _) => {
+                sweep.Stop();
+                foreach (var gone in leaving) {
+                    if (gone.IsRemoving) _searchResults.Remove(gone);
+                }
+            };
+            sweep.Start();
+        }
+
+        foreach (var viewModel in added) {
             _ = LoadSearchResultThumbnailAsync(viewModel);
+        }
+
+        if (added.Count > 0 && added[0].IsNew) {
+            var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+            settle.Tick += (_, _) => {
+                settle.Stop();
+                foreach (var viewModel in added) viewModel.IsNew = false;
+            };
+            settle.Start();
         }
     }
 
     private Task LoadSearchResultThumbnailAsync(SearchResultViewModel viewModel) => LoadSearchThumbnailAsync(viewModel);
+
+    private System.Windows.Controls.ItemsControl ActiveResultsHost => _isGridViewMode ? ResultsGrid : ResultsList;
+
+    private static Dictionary<SearchResultViewModel, System.Windows.Point> CaptureResultPositions(
+        System.Windows.Controls.ItemsControl host,
+        IEnumerable<SearchResultViewModel> items) {
+        var positions = new Dictionary<SearchResultViewModel, System.Windows.Point>();
+        if (!SystemParameters.ClientAreaAnimation || !host.IsVisible) return positions;
+        foreach (var item in items) {
+            if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container || !container.IsVisible) continue;
+            try {
+                positions[item] = container.TransformToAncestor(host).Transform(new System.Windows.Point(0, 0));
+            } catch (InvalidOperationException) {
+            }
+        }
+        return positions;
+    }
+
+    private void AnimateResultTransitions(
+        System.Windows.Controls.ItemsControl host,
+        Dictionary<SearchResultViewModel, System.Windows.Point> before,
+        List<SearchResultViewModel> added) {
+        if (!SystemParameters.ClientAreaAnimation || !host.IsVisible) return;
+        host.UpdateLayout();
+        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+
+        foreach (var (item, oldPosition) in before) {
+            if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container || !container.IsVisible) continue;
+            System.Windows.Point newPosition;
+            try {
+                newPosition = container.TransformToAncestor(host).Transform(new System.Windows.Point(0, 0));
+            } catch (InvalidOperationException) {
+                continue;
+            }
+            var dx = oldPosition.X - newPosition.X;
+            var dy = oldPosition.Y - newPosition.Y;
+            if (Math.Abs(dx) < 0.5 && Math.Abs(dy) < 0.5) continue;
+
+            var shift = new System.Windows.Media.TranslateTransform(dx, dy);
+            container.RenderTransform = shift;
+            var duration = TimeSpan.FromMilliseconds(240);
+            var toZeroX = new System.Windows.Media.Animation.DoubleAnimation(0, duration) { EasingFunction = ease };
+            toZeroX.Completed += (_, _) => {
+                if (ReferenceEquals(container.RenderTransform, shift)) container.RenderTransform = null;
+            };
+            shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, toZeroX);
+            shift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(0, duration) { EasingFunction = ease });
+        }
+
+        var order = 0;
+        foreach (var item in added) {
+            if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container) continue;
+            var fade = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(260)) {
+                BeginTime = TimeSpan.FromMilliseconds(Math.Min(order, 12) * 22),
+                EasingFunction = ease
+            };
+            container.Opacity = 0;
+            fade.Completed += (_, _) => { container.BeginAnimation(OpacityProperty, null); container.Opacity = 1; };
+            container.BeginAnimation(OpacityProperty, fade);
+            order++;
+        }
+    }
 
     private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
         if (e.Key == Key.Enter) {
@@ -1296,6 +1820,12 @@ public partial class MainWindow : Window {
     }
     
     private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
+        if (UiPreviewEnabled && e.Key == Key.F9) {
+            CycleUiPreview();
+            e.Handled = true;
+            return;
+        }
+
         if (e.Key == Key.Escape) {
             SafeClose();
             return;
@@ -1451,13 +1981,10 @@ public partial class MainWindow : Window {
     
     private void DeleteItem(string path) {
         var name = Path.GetFileName(path);
-        var result = System.Windows.MessageBox.Show(
-            $"'{name}' öğesini silmek istediğinize emin misiniz?\n\nBu öğe Geri Dönüşüm Kutusu'na taşınacak.",
-            "Silme Onayı",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
+        var confirmed = ModernDialog.Confirm(this, $"'{name}' silinsin mi?",
+            "Öğe Geri Dönüşüm Kutusu'na taşınacak, oradan geri alabilirsiniz.", "Sil", DialogKind.Danger);
         
-        if (result == MessageBoxResult.Yes) {
+        if (confirmed) {
             try {
                 var itemKind = _fileOperations.DeleteToRecycleBin(path);
                 if (itemKind != FileItemKind.Missing) {
@@ -1502,12 +2029,13 @@ public partial class MainWindow : Window {
                 _fileOperations.OpenFile(path);
             }
         } catch (Exception ex) {
-            System.Windows.MessageBox.Show($"Açılamadı: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ModernDialog.Show(this, "Açılamadı", ex.Message, DialogKind.Warning);
         }
     }
     
     private async Task OpenFolderInApp(string folderPath) {
         try {
+            if (_navigationDirection == 0) _navigationDirection = 1;
             Log($"📂 Klasör açılıyor: {folderPath}");
             
             ShowFolderLoadingIndicator(folderPath);
@@ -1523,7 +2051,7 @@ public partial class MainWindow : Window {
                 
                 SearchBox.Clear();
                 ResultsContainer.Visibility = Visibility.Collapsed;
-                DesktopIconsScroll.Visibility = Visibility.Visible;
+                ShowPanel(DesktopIconsScroll);
                 
                 BackButton.Visibility = Visibility.Visible;
                 
@@ -1536,11 +2064,73 @@ public partial class MainWindow : Window {
             
         } catch (Exception ex) {
             Log($"❌ Klasör açılamadı: {ex.Message}");
-            System.Windows.MessageBox.Show($"Klasör açılamadı: {ex.Message}", "Hata", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ModernDialog.Show(this, "Klasör açılamadı", ex.Message, DialogKind.Warning);
         }
     }
     
     private const int MAX_FOLDER_ITEMS = 1000;
+
+    private static readonly bool UiPreviewEnabled =
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OMNISPOT_UI_ONIZLEME"));
+    private int _uiPreviewScene;
+
+    private void CycleUiPreview() {
+        _uiPreviewScene = (_uiPreviewScene + 1) % 6;
+        CancelCurrentSearch();
+        HideAllPanels();
+        DeltaSyncWarningBanner.Visibility = Visibility.Collapsed;
+        DeltaSyncPanel.Visibility = Visibility.Collapsed;
+        DeltaSyncMinimized.Visibility = Visibility.Collapsed;
+        ResultsList.Visibility = Visibility.Collapsed;
+        ResultsGridScroll.Visibility = Visibility.Collapsed;
+        EmptyFolderPanel.Visibility = Visibility.Collapsed;
+
+        switch (_uiPreviewScene) {
+            case 1:
+                DesktopIconsScroll.Visibility = Visibility.Collapsed;
+                ShowPanel(ResultsContainer);
+                ShowSearchingIndicator("önizleme");
+                ShowFallbackWarning("Örnek: AI hizmetine ulaşılamadı, zaman aşımı (8 sn)");
+                break;
+            case 2:
+                DesktopIconsScroll.Visibility = Visibility.Collapsed;
+                ShowPanel(ResultsContainer);
+                NoResultsPanel.Visibility = Visibility.Visible;
+                NoResultsHint.Text = "Farklı anahtar kelimeler deneyin";
+                ShowDeltaSyncWarning("Daha iyi sonuçlar için birkaç saniye bekleyin");
+                break;
+            case 3:
+                DesktopIconsScroll.Visibility = Visibility.Collapsed;
+                ShowPanel(ResultsContainer);
+                ShowError("Bağlantı hatası", "Örnek: AI hizmetine bağlanılamadı. İnternet bağlantınızı kontrol edip tekrar deneyin.");
+                UpdateDeltaSyncState(true);
+                UpdateDeltaSyncProgress(420, 1000, 42);
+                break;
+            case 4:
+                ResultsContainer.Visibility = Visibility.Collapsed;
+                ShowPanel(DesktopIconsScroll);
+                EmptyFolderTitle.Text = "'Önizleme' klasörü boş";
+                EmptyFolderPanel.Visibility = Visibility.Visible;
+                UpdateDeltaSyncState(true);
+                MinimizeDeltaSync_Click(this, new RoutedEventArgs());
+                DeltaSyncMinimizedText.Text = "%42";
+                break;
+            case 5:
+                ResultsContainer.Visibility = Visibility.Collapsed;
+                ShowPanel(DesktopIconsScroll);
+                UpdateDeltaSyncState(true);
+                break;
+            default:
+                ResultsContainer.Visibility = Visibility.Collapsed;
+                ShowPanel(DesktopIconsScroll);
+                break;
+        }
+
+        Log($"🎨 UI önizleme sahnesi {_uiPreviewScene}/5");
+    }
+
+    private static readonly int FolderOpenDebugDelayMs =
+        int.TryParse(Environment.GetEnvironmentVariable("OMNISPOT_KLASOR_GECIKME_MS"), out var ms) && ms > 0 ? ms : 0;
     
     private const int THUMBNAIL_BATCH_SIZE = 20;
 
@@ -1569,6 +2159,9 @@ public partial class MainWindow : Window {
                 MAX_FOLDER_ITEMS,
                 ensureSynchronized,
                 cancellation.Token);
+            if (FolderOpenDebugDelayMs > 0) {
+                await Task.Delay(FolderOpenDebugDelayMs, cancellation.Token);
+            }
             cancellation.Token.ThrowIfCancellationRequested();
             if (!ReferenceEquals(_folderLoadCancellation, cancellation)) {
                 return false;
@@ -1582,7 +2175,7 @@ public partial class MainWindow : Window {
                 var viewModel = new DesktopIconViewModel {
                     Name = entry.Name,
                     FullPath = entry.FullPath,
-                    Icon = entry.IsDirectory ? "📁" : GetFileIcon(entry.Name),
+                    Icon = entry.IsDirectory ? "folder" : GetFileIcon(entry.Name),
                     IsDirectory = entry.IsDirectory
                 };
 
@@ -1612,6 +2205,9 @@ public partial class MainWindow : Window {
                     (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
                 RecordFolderMetrics(folderPath, items.Count, page.IsTruncated);
             }
+
+            RebuildDesktopRows();
+            AnimateFolderSwap(items.Count);
 
             return true;
         } catch (OperationCanceledException) {
@@ -1648,7 +2244,7 @@ public partial class MainWindow : Window {
             UpdateThumbnailViewport();
         };
 
-        DesktopIconsScroll.ScrollChanged += (_, __) => ScheduleViewportUpdate();
+        DesktopIcons.AddHandler(ScrollViewer.ScrollChangedEvent, new ScrollChangedEventHandler((_, __) => ScheduleViewportUpdate()));
         DesktopIconsScroll.SizeChanged += (_, __) => ScheduleViewportUpdate();
         DesktopIconsScroll.IsVisibleChanged += (_, __) => ScheduleViewportUpdate();
 
@@ -1676,26 +2272,22 @@ public partial class MainWindow : Window {
         if (DesktopIconsScroll.Visibility != Visibility.Visible) return default;
 
         var count = _desktopIcons.Count;
-        if (count == 0) return default;
+        if (count == 0 || _desktopRows.Count == 0) return default;
 
-        if (DesktopIcons.ItemContainerGenerator.ContainerFromIndex(0)
-            is not FrameworkElement container) {
-            return default;
+        FrameworkElement? container = null;
+        for (var i = 0; i < _desktopRows.Count && container == null; i++) {
+            container = DesktopIcons.ItemContainerGenerator.ContainerFromIndex(i) as FrameworkElement;
         }
+        var scroll = DesktopScroll;
+        if (container == null || scroll == null) return default;
 
-        var itemWidth = container.ActualWidth
-            + container.Margin.Left + container.Margin.Right;
-        var itemHeight = container.ActualHeight
-            + container.Margin.Top + container.Margin.Bottom;
-        var panelWidth = DesktopIcons.ActualWidth;
-        var viewportHeight = DesktopIconsScroll.ViewportHeight;
-        if (itemWidth <= 0 || itemHeight <= 0 || panelWidth <= 0 || viewportHeight <= 0) {
-            return default;
-        }
+        var rowHeight = container.ActualHeight + container.Margin.Top + container.Margin.Bottom;
+        var viewportHeight = scroll.ViewportHeight;
+        if (rowHeight <= 0 || viewportHeight <= 0) return default;
 
-        var columns = Math.Max(1, (int)(panelWidth / itemWidth));
-        var firstRow = Math.Max(0, (int)(DesktopIconsScroll.VerticalOffset / itemHeight));
-        var rows = (int)Math.Ceiling(viewportHeight / itemHeight) + 1;
+        var columns = DesktopColumns;
+        var firstRow = Math.Max(0, (int)(scroll.VerticalOffset / rowHeight));
+        var rows = (int)Math.Ceiling(viewportHeight / rowHeight) + 1;
 
         var first = Math.Min(count, firstRow * columns);
         var visible = Math.Min(count - first, rows * columns);
@@ -1724,20 +2316,20 @@ public partial class MainWindow : Window {
             : System.IO.Path.GetExtension(filenameOrExtension).ToLowerInvariant();
             
         return ext switch {
-            ".pdf" => "📕",
-            ".doc" or ".docx" => "📘",
-            ".xls" or ".xlsx" => "📗",
-            ".ppt" or ".pptx" => "📙",
-            ".txt" or ".md" => "📄",
-            ".jpg" or ".jpeg" or ".png" or ".gif" or ".bmp" or ".webp" => "🖼️",
-            ".mp3" or ".wav" or ".flac" or ".m4a" or ".aac" => "🎵",
-            ".mp4" or ".avi" or ".mkv" or ".mov" or ".wmv" => "🎬",
-            ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => "📦",
-            ".exe" or ".msi" => "⚙️",
-            ".lnk" => "🔗",
-            ".html" or ".htm" => "🌐",
-            ".cs" or ".js" or ".py" or ".java" or ".cpp" => "💻",
-            _ => "📄"
+            ".pdf" => "pdf",
+            ".doc" or ".docx" or ".odt" or ".rtf" => "doc",
+            ".xls" or ".xlsx" or ".csv" or ".ods" => "sheet",
+            ".ppt" or ".pptx" or ".odp" => "slides",
+            ".txt" or ".md" or ".log" or ".json" or ".xml" => "text",
+            ".jpg" or ".jpeg" or ".png" or ".gif" or ".bmp" or ".webp" or ".svg" or ".heic" => "image",
+            ".mp3" or ".wav" or ".flac" or ".m4a" or ".aac" or ".ogg" => "audio",
+            ".mp4" or ".avi" or ".mkv" or ".mov" or ".wmv" or ".webm" => "video",
+            ".zip" or ".rar" or ".7z" or ".tar" or ".gz" => "archive",
+            ".exe" or ".msi" or ".bat" or ".cmd" => "app",
+            ".lnk" or ".url" => "link",
+            ".html" or ".htm" => "web",
+            ".cs" or ".js" or ".ts" or ".py" or ".java" or ".cpp" or ".c" or ".h" or ".php" or ".xaml" or ".ps1" => "code",
+            _ => "file"
         };
     }
     
@@ -1756,11 +2348,13 @@ public partial class MainWindow : Window {
             return;
         }
 
+        _navigationDirection = -1;
         _ = OpenFolderInApp(parent);
     }
     private void GoToHome() {
         _currentFolderPath = null;
         BackButton.Visibility = Visibility.Collapsed;
+        _navigationDirection = -1;
         LoadDesktopIcons();
         SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
     }
@@ -1839,11 +2433,7 @@ public partial class MainWindow : Window {
             Log($"🔗 Birlikte aç: {path}");
         } catch (Exception ex) {
             Log($"❌ Birlikte aç hatası: {ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"Birlikte aç hatası: {ex.Message}",
-                "Hata",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            ModernDialog.Show(this, "Birlikte aç başarısız", ex.Message, DialogKind.Danger);
         }
     }
 
@@ -1954,11 +2544,7 @@ public partial class MainWindow : Window {
             RefreshCurrentFolder();
         } catch (Exception ex) {
             Log($"❌ Klasör oluşturma hatası: {ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"Klasör oluşturma hatası: {ex.Message}",
-                "Hata",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            ModernDialog.Show(this, "Klasör oluşturulamadı", ex.Message, DialogKind.Danger);
         }
     }
 
@@ -1977,11 +2563,7 @@ public partial class MainWindow : Window {
             RefreshCurrentFolder();
         } catch (Exception ex) {
             Log($"❌ Dosya oluşturma hatası: {ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"Dosya oluşturma hatası: {ex.Message}",
-                "Hata",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            ModernDialog.Show(this, "Dosya oluşturulamadı", ex.Message, DialogKind.Danger);
         }
     }
 

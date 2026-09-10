@@ -4,4 +4,5 @@ public sealed record SearchRequest(
     string Query,
     bool NaturalLanguageMode,
     bool HasInternetConnection,
-    int MaxResults = 100);
+    int MaxResults = 100,
+    string? ReasoningEffort = null);

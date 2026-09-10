@@ -124,6 +124,7 @@ public partial class IndexManager
                     }
                 }
 
+                ReportProgress("Arama kataloğu hazırlanıyor...", 100, loadedFiles, 0, isIndeterminate: true, isCatalogBuild: true);
                 var candidate = CompactSearchState.Create(items.Values, _tokenizer);
                 _pathToNode.Clear();
                 _rootNode = null;

@@ -72,13 +72,13 @@ public sealed class ThumbnailSettingsWindowTests
         try
         {
             ((TextBox)window.FindName("ThumbnailCount")).Text = "invalid";
-            ((ComboBox)window.FindName("ThumbnailMode")).SelectedIndex = 1;
+            ((RadioButton)window.FindName("ThumbnailModeRatio")).IsChecked = true;
             var slider = (Slider)window.FindName("ThumbnailRatio");
             slider.Value = Math.Min(0.02, slider.Maximum);
             var before = ((TextBlock)window.FindName("ThumbnailBudget")).Text;
             slider.Value = Math.Min(0.2, slider.Maximum);
             Assert.NotEqual(before, ((TextBlock)window.FindName("ThumbnailBudget")).Text);
-            Assert.Equal(Visibility.Visible, ((StackPanel)window.FindName("ThumbnailRatioPanel")).Visibility);
+            Assert.Equal(Visibility.Visible, ((FrameworkElement)window.FindName("ThumbnailRatioPanel")).Visibility);
             Assert.True(SaveDraft(window));
             var draft = (AppSettings)typeof(SettingsWindow).GetField("_settings", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
             Assert.Equal(300, draft.ThumbnailCacheMaxCount);
@@ -109,7 +109,7 @@ public sealed class ThumbnailSettingsWindowTests
         {
             var card = (FrameworkElement)window.FindName("ThumbnailSettingsCard");
             Render(card, 540, "settings-manual");
-            ((ComboBox)window.FindName("ThumbnailMode")).SelectedIndex = 1;
+            ((RadioButton)window.FindName("ThumbnailModeRatio")).IsChecked = true;
             Render(card, 540, "settings-ratio");
             Render(card, 425, "settings-ratio-narrow");
             Render((FrameworkElement)warning.Content, 420, "pin-warning");
