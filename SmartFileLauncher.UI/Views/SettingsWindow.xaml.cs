@@ -45,6 +45,7 @@ public partial class SettingsWindow : Window
         MaxHeight = SystemParameters.WorkArea.Height;
         
         PreviewKeyDown += SettingsWindow_PreviewKeyDown;
+        SourceInitialized += (_, _) => ModernDialog.ApplyRoundedCorners(this);
     }
 
     private void LoadSettingsToUI()
@@ -69,7 +70,7 @@ public partial class SettingsWindow : Window
         var status = _indexMaintenance.GetStatus();
         if (status.Exists)
         {
-            IndexStatusText.Text = "✅ İndeks mevcut";
+            IndexStatusText.Text = "İndeks mevcut";
             IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1F));
             IndexSizeText.Text = $"Boyut: {status.SizeKilobytes:N0} KB";
@@ -77,7 +78,7 @@ public partial class SettingsWindow : Window
         }
         else
         {
-            IndexStatusText.Text = "⏳ İndeks henüz oluşturulmadı";
+            IndexStatusText.Text = "İndeks henüz oluşturulmadı";
             IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x86, 0x86, 0x8B));
             IndexSizeText.Text = "Boyut: -";
@@ -89,13 +90,9 @@ public partial class SettingsWindow : Window
 
     private void RebuildIndex_Click(object sender, RoutedEventArgs e)
     {
-        var result = System.Windows.MessageBox.Show(
-            "Mevcut arama indeksi silinecek. OmniSpot yeniden başlatılacak ve standart klasörler tekrar taranacak.\n\nDevam etmek istiyor musunuz?",
-            "İndeksi Yeniden Oluştur",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Warning);
-
-        if (result != MessageBoxResult.Yes)
+        if (!ModernDialog.Confirm(this, "İndeks yeniden oluşturulsun mu?",
+                "Mevcut arama indeksi silinecek. OmniSpot yeniden başlatılacak ve standart klasörler tekrar taranacak.",
+                "Yeniden oluştur", DialogKind.Warning))
         {
             return;
         }
@@ -109,24 +106,18 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(
-                $"İndeks yeniden oluşturulamadı: {ex.Message}\n\nLütfen uygulamayı manuel olarak yeniden başlatın.",
-                "Hata",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            ModernDialog.Show(this, "İndeks yeniden oluşturulamadı",
+                $"{ex.Message}\n\nLütfen uygulamayı elle yeniden başlatın.", DialogKind.Danger);
         }
     }
 
     private void RestartApplication_Click(object sender, RoutedEventArgs e)
     {
-        var result = System.Windows.MessageBox.Show(
-            "OmniSpot kapanıp yeniden açılacak. İndeks silinmez.\n\n" +
-            "Kaydedilmemiş ayar değişiklikleri uygulanmaz. Devam etmek istiyor musunuz?",
-            "Yeniden Başlat",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
+        var result = ModernDialog.Confirm(this, "OmniSpot yeniden başlatılsın mı?",
+            "Uygulama kapanıp yeniden açılacak. İndeks silinmez, kaydedilmemiş ayar değişiklikleri uygulanmaz.",
+            "Yeniden başlat", DialogKind.Question);
 
-        if (result != MessageBoxResult.Yes)
+        if (!result)
         {
             return;
         }
@@ -140,11 +131,8 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(
-                $"Yeniden başlatılamadı: {ex.Message}\n\nLütfen uygulamayı manuel olarak kapatıp açın.",
-                "Hata",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            ModernDialog.Show(this, "Yeniden başlatılamadı",
+                $"{ex.Message}\n\nLütfen uygulamayı elle kapatıp açın.", DialogKind.Danger);
         }
     }
 
@@ -154,8 +142,7 @@ public partial class SettingsWindow : Window
         {
             if (!_indexMaintenance.OpenIndexFolder())
             {
-                System.Windows.MessageBox.Show("İndeks klasörü bulunamadı.", "Uyarı",
-                    MessageBoxButton.OK, MessageBoxImage.Warning);
+                ModernDialog.Show(this, "İndeks klasörü bulunamadı", "Klasör henüz oluşturulmamış veya taşınmış olabilir.", DialogKind.Warning);
             }
         }
         catch (Exception ex)
@@ -181,9 +168,28 @@ public partial class SettingsWindow : Window
         _log?.Invoke("🎹 Kısayol kayıt modu aktif");
     }
 
+    private void Header_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is System.Windows.Controls.Primitives.ButtonBase) return;
+        try { DragMove(); } catch (InvalidOperationException) { }
+    }
+
+    private void CloseWindow_Click(object sender, RoutedEventArgs e)
+    {
+        Close();
+    }
+
     private void SettingsWindow_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
-        if (!_isRecordingHotkey) return;
+        if (!_isRecordingHotkey)
+        {
+            if (e.Key == Key.Escape && Keyboard.FocusedElement is not System.Windows.Controls.TextBox)
+            {
+                Close();
+                e.Handled = true;
+            }
+            return;
+        }
         
         if (e.Key == Key.LeftCtrl || e.Key == Key.RightCtrl ||
             e.Key == Key.LeftAlt || e.Key == Key.RightAlt ||
@@ -207,7 +213,7 @@ public partial class SettingsWindow : Window
         
         if (_pendingModifiers == GlobalHotkeyService.ModifierKeys.None)
         {
-            RecordingHotkeyText.Text = "⚠️ En az bir modifier tuşu gerekli (Ctrl, Alt, Shift veya Win)";
+            RecordingHotkeyText.Text = "En az bir değiştirici tuş gerekli (Ctrl, Alt, Shift veya Win)";
             e.Handled = true;
             return;
         }
@@ -245,8 +251,7 @@ public partial class SettingsWindow : Window
     {
         if (_pendingModifiers == GlobalHotkeyService.ModifierKeys.None)
         {
-            System.Windows.MessageBox.Show("Lütfen geçerli bir kısayol kombinasyonu girin.", "Uyarı", 
-                MessageBoxButton.OK, MessageBoxImage.Warning);
+            ModernDialog.Show(this, "Geçersiz kısayol", "En az bir değiştirici tuşla (Ctrl, Alt, Shift, Win) birlikte bir tuş seçin.", DialogKind.Warning);
             return;
         }
         
@@ -277,13 +282,11 @@ public partial class SettingsWindow : Window
 
     private void ResetDefaults_Click(object sender, RoutedEventArgs e)
     {
-        var result = System.Windows.MessageBox.Show(
-            "Tüm ayarlar varsayılan değerlere sıfırlanacak. Devam etmek istiyor musunuz?",
-            "Varsayılanlara Sıfırla",
-            MessageBoxButton.YesNo,
-            MessageBoxImage.Question);
+        var result = ModernDialog.Confirm(this, "Ayarlar sıfırlansın mı?",
+            "Tüm ayarlar varsayılan değerlere dönecek. Kaydet'e basana kadar kalıcı olmaz.",
+            "Sıfırla", DialogKind.Question);
         
-        if (result == MessageBoxResult.Yes)
+        if (result)
         {
             _settings.ResetToDefaults();
             LoadSettingsToUI();
@@ -313,11 +316,7 @@ public partial class SettingsWindow : Window
         catch (Exception ex)
         {
             _log?.Invoke($"⚠️ Ayarlar kaydedilemedi: {ex.Message}");
-            System.Windows.MessageBox.Show(
-                $"Ayarlar kaydedilemedi: {ex.Message}",
-                "Hata",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            ModernDialog.Show(this, "Ayarlar kaydedilemedi", ex.Message, DialogKind.Danger);
         }
     }
 

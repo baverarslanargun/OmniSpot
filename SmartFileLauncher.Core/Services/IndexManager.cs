@@ -2397,7 +2397,8 @@ public partial class IndexManager : IDisposable
         int percentage,
         int itemCount,
         long elapsedMs,
-        bool isIndeterminate = false)
+        bool isIndeterminate = false,
+        bool isCatalogBuild = false)
     {
         var progress = new IndexProgress
         {
@@ -2405,7 +2406,8 @@ public partial class IndexManager : IDisposable
             Percentage = percentage,
             ItemCount = itemCount,
             ElapsedMs = elapsedMs,
-            IsIndeterminate = isIndeterminate
+            IsIndeterminate = isIndeterminate,
+            IsCatalogBuild = isCatalogBuild
         };
         QueueNotification(() => OnProgress?.Invoke(progress));
     }
@@ -2605,6 +2607,7 @@ public class IndexProgress
     public int ItemCount { get; set; }
     public long ElapsedMs { get; set; }
     public bool IsIndeterminate { get; set; }
+    public bool IsCatalogBuild { get; set; }
 }
 
 public class IndexStats

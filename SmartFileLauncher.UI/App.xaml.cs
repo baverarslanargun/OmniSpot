@@ -80,12 +80,11 @@ public partial class App : System.Windows.Application
 
 		if (indexRebuildFailed)
 		{
-			System.Windows.MessageBox.Show(
+			Views.ModernDialog.Show(
 				_mainWindow,
+				"İndeks yeniden oluşturulamadı",
 				"İndeks dosyaları silinemedi. OmniSpot mevcut indeksle açıldı. Dosyaların başka bir süreç tarafından kullanılmadığını kontrol edip yeniden deneyin.",
-				"İndeks Yeniden Oluşturulamadı",
-				MessageBoxButton.OK,
-				MessageBoxImage.Warning);
+				Views.DialogKind.Warning);
 		}
 	}
 

@@ -9,8 +9,7 @@
         WindowStyle="None" 
         ResizeMode="NoResize" 
         Topmost="False"
-        AllowsTransparency="True" 
-        Background="Transparent" 
+        Background="#F8FAFF"
         ShowInTaskbar="True" 
         Focusable="True"
         WindowState="Normal" 
@@ -23,8 +22,98 @@
         xmlns:converters="clr-namespace:SmartFileLauncher.UI.Converters">
     
     <Window.Resources>
+        <Style x:Key="ToolbarButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="#F1F5F9"/>
+            <Setter Property="BorderBrush" Value="#E2E8F0"/>
+            <Setter Property="Foreground" Value="#64748B"/>
+            <Setter Property="Opacity" Value="0.5"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" CornerRadius="12" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Surface" Property="Background" Value="#E2E8F0"/></Trigger>
+                            <Trigger Property="IsPressed" Value="True"><Setter TargetName="Surface" Property="Background" Value="#CBD5E1"/></Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="Surface" Property="BorderBrush" Value="#007AFF"/></Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True"><Setter Property="Opacity" Value="1"/></Trigger>
+                <Trigger Property="IsKeyboardFocused" Value="True"><Setter Property="Opacity" Value="1"/></Trigger>
+            </Style.Triggers>
+        </Style>
         <!-- Converters -->
         <converters:NullToVisibilityConverter x:Key="NullToVisibilityConverter"/>
+        <converters:BoolToVisibilityConverter x:Key="BoolToVisibility"/>
+        <converters:BoolToVisibilityConverter x:Key="InverseBoolToVisibility" Invert="True"/>
+        <converters:IconKindConverter x:Key="IconGlyph" Part="Glyph"/>
+        <converters:IconKindConverter x:Key="IconLabel" Part="Label"/>
+        <converters:IconKindConverter x:Key="IconColor" Part="Color"/>
+        <converters:IconKindConverter x:Key="IconTint" Part="Tint"/>
+
+        <Geometry x:Key="FolderBackGeometry">M3 7 a2 2 0 0 1 2 -2 h4.3 a2 2 0 0 1 1.4 0.6 l1.5 1.4 H19 a2 2 0 0 1 2 2 v9 a2 2 0 0 1 -2 2 H5 a2 2 0 0 1 -2 -2 z</Geometry>
+        <Geometry x:Key="FolderFrontGeometry">M3 10.5 h18 v7.5 a2 2 0 0 1 -2 2 H5 a2 2 0 0 1 -2 -2 z</Geometry>
+        <Geometry x:Key="FolderEdgeGeometry">M3 10.5 h18 v1.4 H3 z</Geometry>
+        <Geometry x:Key="PageGeometry">M6 2 h8 l5 5 v13 a2 2 0 0 1 -2 2 H6 a2 2 0 0 1 -2 -2 V4 a2 2 0 0 1 2 -2 z</Geometry>
+        <Geometry x:Key="PageFoldGeometry">M14 2 v4 a1 1 0 0 0 1 1 h4 z</Geometry>
+
+        <DataTemplate x:Key="FolderIconTemplate">
+            <Viewbox Stretch="Uniform" Margin="2">
+                <Canvas Width="24" Height="24" RenderTransformOrigin="0.5,0.5">
+                    <Canvas.RenderTransform><ScaleTransform ScaleX="1.2" ScaleY="1.2"/></Canvas.RenderTransform>
+                    <Path Fill="{Binding FolderColor}" Data="{StaticResource FolderBackGeometry}"/>
+                    <Path Fill="{Binding FolderColorLight}" Data="{StaticResource FolderFrontGeometry}"/>
+                    <Path Fill="#FFFFFF" Opacity="0.35" Data="{StaticResource FolderEdgeGeometry}"/>
+                </Canvas>
+            </Viewbox>
+        </DataTemplate>
+        <DataTemplate x:Key="FileIconTemplate">
+            <Grid>
+                <Viewbox x:Name="Vector" Stretch="Uniform" Margin="2" Visibility="Collapsed">
+                    <Grid Width="24" Height="24">
+                        <Path Fill="{Binding Icon, Converter={StaticResource IconTint}}" Data="{StaticResource PageGeometry}"/>
+                        <Path Fill="{Binding Icon, Converter={StaticResource IconColor}}" Opacity="0.55" Data="{StaticResource PageFoldGeometry}"/>
+                        <Path Fill="{Binding Icon, Converter={StaticResource IconColor}}" Data="{Binding Icon, Converter={StaticResource IconGlyph}}"/>
+                        <TextBlock Text="{Binding Icon, Converter={StaticResource IconLabel}}" Foreground="{Binding Icon, Converter={StaticResource IconColor}}"
+                                   FontFamily="Segoe UI" FontSize="5.6" FontWeight="Bold" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,3.2"/>
+                    </Grid>
+                </Viewbox>
+                <Border x:Name="Img" HorizontalAlignment="Center" VerticalAlignment="Center" CornerRadius="3">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding ThumbnailHasFrame}" Value="True">
+                                    <Setter Property="BorderBrush" Value="#D5DCE6"/>
+                                    <Setter Property="BorderThickness" Value="1"/>
+                                    <Setter Property="Background" Value="White"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <Image Source="{Binding Thumbnail}" Stretch="Uniform" RenderOptions.BitmapScalingMode="Linear"/>
+                </Border>
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
+                    <Setter TargetName="Img" Property="Visibility" Value="Collapsed"/>
+                    <Setter TargetName="Vector" Property="Visibility" Value="Visible"/>
+                    <DataTrigger.ExitActions>
+                        <BeginStoryboard>
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="Img" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.18"/>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.ExitActions>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <converters:ItemIconTemplateSelector x:Key="ItemIconSelector" Folder="{StaticResource FolderIconTemplate}" File="{StaticResource FileIconTemplate}"/>
         
         <!-- Modern shadow effect -->
         <DropShadowEffect x:Key="ModernShadow" 
@@ -76,6 +165,334 @@
         </LinearGradientBrush>
         
         <!-- Context Menu Style -->
+        <Style x:Key="BannerTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#111827"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        </Style>
+        <Style x:Key="BannerDetail" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11.5"/>
+            <Setter Property="Foreground" Value="#5B6472"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="Margin" Value="0,1,0,0"/>
+        </Style>
+        <Style x:Key="BannerIconPill" TargetType="Border">
+            <Setter Property="Width" Value="28"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="0,0,10,0"/>
+        </Style>
+        <Style x:Key="BannerCloseButton" TargetType="Button">
+            <Setter Property="Width" Value="26"/>
+            <Setter Property="Height" Value="26"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="10,0,0,0"/>
+            <Setter Property="Foreground" Value="#5B6472"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="8" Background="Transparent">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#14000000"/>
+                                <Setter Property="Foreground" Value="#111827"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#22000000"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Geometry x:Key="CloseGlyphGeometry">M0 0 L8 8 M8 0 L0 8</Geometry>
+        <Geometry x:Key="MinusGlyphGeometry">M0 4 L8 4</Geometry>
+        <Geometry x:Key="SyncGeometry">M4 12 A8 8 0 0 1 18 6.7 M20 12 A8 8 0 0 1 6 17.3 M18 3 V7 H14 M6 21 V17 H10</Geometry>
+        <Geometry x:Key="InfoGeometry">M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 11 V16 M12 8 V8.1</Geometry>
+        <Geometry x:Key="WarningTriangleGeometry">M12 2.5 L22.5 20.5 H1.5 Z</Geometry>
+        <Geometry x:Key="WarningMarkGeometry">M12 9 V14.2 M12 17.2 V17.3</Geometry>
+        <DrawingImage x:Key="OmniSpotLogo">
+            <DrawingImage.Drawing>
+                <DrawingGroup>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Geometry><RectangleGeometry Rect="20,20,216,216" RadiusX="48" RadiusY="48"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Brush>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                <GradientStop Color="#101633" Offset="0"/>
+                                <GradientStop Color="#050812" Offset="1"/>
+                            </LinearGradientBrush>
+                        </GeometryDrawing.Brush>
+                    </GeometryDrawing>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="128,124" RadiusX="78" RadiusY="78"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Brush>
+                            <RadialGradientBrush Center="0.5,0.35" GradientOrigin="0.5,0.35" RadiusX="0.6" RadiusY="0.6">
+                                <GradientStop Color="#37F3FF" Offset="0"/>
+                                <GradientStop Color="#00C4FF" Offset="0.45"/>
+                                <GradientStop Color="#0050B8" Offset="1"/>
+                            </RadialGradientBrush>
+                        </GeometryDrawing.Brush>
+                    </GeometryDrawing>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="128,124" RadiusX="58" RadiusY="58"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Pen><Pen Brush="#5962E5FF" Thickness="3"/></GeometryDrawing.Pen>
+                    </GeometryDrawing>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="128,124" RadiusX="42" RadiusY="42"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Pen><Pen Brush="#4062E5FF" Thickness="3"/></GeometryDrawing.Pen>
+                    </GeometryDrawing>
+                    <GeometryDrawing Geometry="M96 76 H148 L176 104 V168 C176 178 168 186 158 186 H96 C86 186 78 178 78 168 V94 C78 84 86 76 96 76 Z">
+                        <GeometryDrawing.Brush>
+                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                <GradientStop Color="#F8FBFF" Offset="0"/>
+                                <GradientStop Color="#D9E4FF" Offset="1"/>
+                            </LinearGradientBrush>
+                        </GeometryDrawing.Brush>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="#C5D5FF" Geometry="M148 76 L176 104 H152 C150 104 148 102 148 100 Z"/>
+                    <GeometryDrawing Geometry="M94 112 H160">
+                        <GeometryDrawing.Pen><Pen Brush="#D9A0B6FF" Thickness="4" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
+                    </GeometryDrawing>
+                    <GeometryDrawing Geometry="M94 128 H152">
+                        <GeometryDrawing.Pen><Pen Brush="#BFA0B6FF" Thickness="4" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
+                    </GeometryDrawing>
+                    <GeometryDrawing Geometry="M94 144 H144">
+                        <GeometryDrawing.Pen><Pen Brush="#A6A0B6FF" Thickness="4" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="#CCC8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="72,150" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
+                    <GeometryDrawing Brush="#E6C8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="190,108" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
+                    <GeometryDrawing Brush="#B3C8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="176,162" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
+                    <GeometryDrawing Brush="#99C8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="80,102" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
+                    <GeometryDrawing>
+                        <GeometryDrawing.Geometry><EllipseGeometry Center="184,152" RadiusX="22" RadiusY="22"/></GeometryDrawing.Geometry>
+                        <GeometryDrawing.Brush>
+                            <RadialGradientBrush>
+                                <GradientStop Color="#FF7CFFD8" Offset="0"/>
+                                <GradientStop Color="#D93DFFCC" Offset="0.4"/>
+                                <GradientStop Color="#0000FFCC" Offset="1"/>
+                            </RadialGradientBrush>
+                        </GeometryDrawing.Brush>
+                    </GeometryDrawing>
+                    <GeometryDrawing Brush="#E8FFF9"><GeometryDrawing.Geometry><EllipseGeometry Center="184,152" RadiusX="6" RadiusY="6"/></GeometryDrawing.Geometry></GeometryDrawing>
+                    <GeometryDrawing Brush="#12FFFFFF"><GeometryDrawing.Geometry><EllipseGeometry Center="128,70" RadiusX="80" RadiusY="26"/></GeometryDrawing.Geometry></GeometryDrawing>
+                </DrawingGroup>
+            </DrawingImage.Drawing>
+        </DrawingImage>
+        <SolidColorBrush x:Key="ShimmerBrush" Color="#E6EBF3"/>
+        <DataTemplate x:Key="SkeletonCardTemplate">
+            <Border Width="132" Height="150" Margin="10,10" Background="White" CornerRadius="16" BorderBrush="#E2E8F0" BorderThickness="1" Padding="16,20,16,16">
+                <StackPanel HorizontalAlignment="Center">
+                    <Border Background="{DynamicResource ShimmerBrush}" Width="72" Height="72" CornerRadius="18" Margin="0,0,0,12"/>
+                    <Border Background="{DynamicResource ShimmerBrush}" Width="84" Height="10" CornerRadius="5" Margin="0,0,0,7"/>
+                    <Border Background="{DynamicResource ShimmerBrush}" Width="56" Height="10" CornerRadius="5"/>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
+        <Style x:Key="StateTile" TargetType="Border">
+            <Setter Property="Width" Value="104"/>
+            <Setter Property="Height" Value="104"/>
+            <Setter Property="CornerRadius" Value="30"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="#D6E2F6"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#F3F7FE" Offset="0"/>
+                        <GradientStop Color="#E3ECFB" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="6" Opacity="0.10" Color="#2B5CB8"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="StateTileWarm" TargetType="Border" BasedOn="{StaticResource StateTile}">
+            <Setter Property="BorderBrush" Value="#F5D9D5"/>
+            <Setter Property="Background">
+                <Setter.Value>
+                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                        <GradientStop Color="#FFF6F4" Offset="0"/>
+                        <GradientStop Color="#FBE7E4" Offset="1"/>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Effect">
+                <Setter.Value>
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="6" Opacity="0.10" Color="#B8412B"/>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="StateBadge" TargetType="Border">
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Height" Value="30"/>
+            <Setter Property="CornerRadius" Value="15"/>
+            <Setter Property="Background" Value="#FFFFFF"/>
+            <Setter Property="BorderBrush" Value="#D6E2F6"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="HorizontalAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Bottom"/>
+            <Setter Property="Margin" Value="0,0,10,10"/>
+        </Style>
+        <Style x:Key="StateTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="#111827"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="MaxWidth" Value="380"/>
+            <Setter Property="Margin" Value="0,0,0,6"/>
+        </Style>
+        <Style x:Key="StateHint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13.5"/>
+            <Setter Property="Foreground" Value="#5B6472"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="MaxWidth" Value="380"/>
+        </Style>
+        <Style x:Key="StateGhostButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="Padding" Value="16,8"/>
+            <Setter Property="Foreground" Value="#2F4A73"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="10" Background="#FFFFFF" BorderBrush="#D6DEEA" BorderThickness="1" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F3F7FE"/>
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#B9CCEC"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#E3ECFB"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="StatePrimaryButton" TargetType="Button" BasedOn="{StaticResource StateGhostButton}">
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" CornerRadius="10" Background="#3F7EE8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#3470D6"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#2B62BE"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Geometry x:Key="MagnifierGeometry">M10 4 A6 6 0 1 0 10 16 A6 6 0 1 0 10 4 M14.5 14.5 L20 20</Geometry>
+        <Style x:Key="ModernScrollThumb" TargetType="Thumb">
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="ThumbSurface" Background="#B9C2CF" CornerRadius="3" Margin="2" Opacity="0.75"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Background" Value="#8E99A8"/>
+                                <Setter TargetName="ThumbSurface" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Background" Value="#6B7684"/>
+                                <Setter TargetName="ThumbSurface" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ModernScrollPage" TargetType="RepeatButton">
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent" Margin="0,4,0,4">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ModernScrollPage}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ModernScrollPage}"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ModernScrollThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0"/>
+                </Trigger>
+                <Trigger Property="Orientation" Value="Horizontal">
+                    <Setter Property="Width" Value="Auto"/>
+                    <Setter Property="MinWidth" Value="0"/>
+                    <Setter Property="Height" Value="10"/>
+                    <Setter Property="MinHeight" Value="10"/>
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ScrollBar">
+                                <Grid Background="Transparent" Margin="4,0,4,0">
+                                    <Track x:Name="PART_Track">
+                                        <Track.DecreaseRepeatButton>
+                                            <RepeatButton Command="ScrollBar.PageLeftCommand" Style="{StaticResource ModernScrollPage}"/>
+                                        </Track.DecreaseRepeatButton>
+                                        <Track.IncreaseRepeatButton>
+                                            <RepeatButton Command="ScrollBar.PageRightCommand" Style="{StaticResource ModernScrollPage}"/>
+                                        </Track.IncreaseRepeatButton>
+                                        <Track.Thumb>
+                                            <Thumb Style="{StaticResource ModernScrollThumb}"/>
+                                        </Track.Thumb>
+                                    </Track>
+                                </Grid>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="ModernContextMenu" TargetType="ContextMenu">
             <Setter Property="Background" Value="White"/>
             <Setter Property="BorderBrush" Value="#E2E8F0"/>
@@ -145,6 +562,90 @@
             </Setter>
         </Style>
         
+        <Style x:Key="ModernSubmenuHeader" TargetType="MenuItem">
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid>
+                            <Border x:Name="Border" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="24"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Path Grid.Column="0" Data="M 3,7 H 11 M 3,3.5 H 11 M 3,10.5 H 11" Stroke="#94A3B8" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Width="14" Height="14" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center" Margin="8,0,16,0"/>
+                                    <Path Grid.Column="2" Data="M 1,1 L 5,5 L 1,9" Stroke="#94A3B8" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          Width="6" Height="10" Stretch="None" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="Fade">
+                                <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="8">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
+                                    </Border.Effect>
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsSubmenuOpen" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#CBD5E1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ModernCheckMenuItem" TargetType="MenuItem">
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Border x:Name="Border" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}" MinWidth="200">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="24"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+                                <Border x:Name="CheckBox" Width="16" Height="16" CornerRadius="4" BorderBrush="#CBD5E1" BorderThickness="1" Background="White" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Path x:Name="Check" Data="M 3,7 L 5.6,9.6 L 11,4.2" Stroke="White" StrokeThickness="1.7" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          Width="14" Height="14" Stretch="None" Visibility="Collapsed"/>
+                                </Border>
+                                <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center" Margin="8,0,16,0"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="CheckBox" Property="Background" Value="#007AFF"/>
+                                <Setter TargetName="CheckBox" Property="BorderBrush" Value="#007AFF"/>
+                                <Setter TargetName="Check" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#CBD5E1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <!-- Separator Style -->
         <Style x:Key="MenuSeparator" TargetType="Separator">
             <Setter Property="Height" Value="1"/>
@@ -166,8 +667,8 @@
             <Separator Style="{StaticResource MenuSeparator}"/>
             <MenuItem Header="Dosya Konumunu Aç" Tag="📍" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenLocation"/>
             <MenuItem Header="Özellikler" Tag="ℹ️" InputGestureText="Alt+Enter" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Properties"/>
-            <MenuItem Header="Diğer" Tag="ThumbnailOther" Padding="12,8" FontSize="13" Foreground="#334155">
-                <MenuItem Header="Thumbnailleri hızlı yükle" IsCheckable="True" Padding="12,8" FontSize="13"
+            <MenuItem Header="Diğer" Tag="ThumbnailOther" Style="{StaticResource ModernSubmenuHeader}">
+                <MenuItem Header="Küçük resimleri hızlı yükle" IsCheckable="True" Style="{StaticResource ModernCheckMenuItem}"
                           Click="ContextMenu_PinThumbnails" ToolTip="Bu klasör ve alt klasörlerinde yüklenen küçük resimleri boşta kalınca da RAM'de tut"/>
             </MenuItem>
         </ContextMenu>
@@ -181,11 +682,118 @@
             <Separator Style="{StaticResource MenuSeparator}"/>
             <MenuItem Header="Yenile" Tag="🔄" InputGestureText="F5" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Refresh"/>
         </ContextMenu>
+
+
+        <DataTemplate x:Key="DesktopCardTemplate">
+                                <Button Background="Transparent"
+                                        BorderThickness="0"
+                                        Cursor="Hand"
+                                        Margin="10,10"
+                                        Padding="0"
+                                        Opacity="{Binding Opacity}"
+                                        ToolTip="{Binding FullPath}"
+                                        Tag="{Binding FullPath}"
+                                        Click="DesktopIcon_Click"
+                                        ContextMenu="{StaticResource FileContextMenu}"
+                                        MouseRightButtonDown="FileItem_RightClick"
+                                        MouseEnter="FileItem_MouseEnter"
+                                        MouseLeave="FileItem_MouseLeave">
+                                    <Button.Style>
+                                        <Style TargetType="Button">
+                                            <Setter Property="Template">
+                                                <Setter.Value>
+                                                    <ControlTemplate TargetType="Button">
+                                                        <Border x:Name="CardBorder"
+                                                                Background="White"
+                                                                CornerRadius="16"
+                                                                Padding="16,20,16,16"
+                                                                BorderBrush="#E2E8F0"
+                                                                BorderThickness="1">
+                                                            <ContentPresenter/>
+                                                        </Border>
+                                                        <ControlTemplate.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
+                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
+                                                            </Trigger>
+                                                        </ControlTemplate.Triggers>
+                                                    </ControlTemplate>
+                                                </Setter.Value>
+                                            </Setter>
+                                        </Style>
+                                    </Button.Style>
+                                    <StackPanel HorizontalAlignment="Center" Width="100">
+                                        <!-- Modern Icon Container with colored background -->
+                                        <Border Width="72" Height="72"
+                                                Margin="0,0,0,12"
+                                                CornerRadius="16"
+                                                HorizontalAlignment="Center">
+                                            <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="56" Height="56"/>
+                                        </Border>
+
+                                        <TextBlock Text="{Binding Name}"
+                                                   FontSize="12"
+                                                   FontWeight="Medium"
+                                                   Foreground="#334155"
+                                                   TextAlignment="Center"
+                                                   TextWrapping="Wrap"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   MaxHeight="36"
+                                                   LineHeight="16"/>
+                                    </StackPanel>
+                                </Button>
+                            </DataTemplate>
+
+        <DataTemplate x:Key="DesktopRowTemplate">
+            <Button Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="4,2" Padding="0"
+                    HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
+                    Opacity="{Binding Opacity}" ToolTip="{Binding FullPath}" Tag="{Binding FullPath}"
+                    Click="DesktopIcon_Click" ContextMenu="{StaticResource FileContextMenu}"
+                    MouseRightButtonDown="FileItem_RightClick" MouseEnter="FileItem_MouseEnter" MouseLeave="FileItem_MouseLeave">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Row" Background="White" CornerRadius="12" Padding="12,10" BorderBrush="#E2E8F0" BorderThickness="1">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="#F8FAFC"/>
+                                <Setter TargetName="Row" Property="BorderBrush" Value="#CBD5E1"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Row" Property="BorderBrush" Value="#007AFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="30" Height="30" Margin="0,0,14,0" VerticalAlignment="Center"/>
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" Foreground="#1E293B" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock Text="{Binding FullPath}" FontSize="11" Foreground="#64748B" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </Button>
+        </DataTemplate>
+
+        <DataTemplate x:Key="DesktopGridRowTemplate">
+            <ItemsControl ItemsSource="{Binding Items}" ItemTemplate="{StaticResource DesktopCardTemplate}" HorizontalAlignment="Center" Focusable="False">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><StackPanel Orientation="Horizontal"/></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+        </DataTemplate>
+        <DataTemplate x:Key="DesktopListRowTemplate">
+            <ContentPresenter Content="{Binding Items[0]}" ContentTemplate="{StaticResource DesktopRowTemplate}"/>
+        </DataTemplate>
     </Window.Resources>
     
-    <Border Background="{StaticResource MainBackgroundGradient}" 
-            CornerRadius="16" 
-            Effect="{StaticResource ModernShadow}"
+    <Border x:Name="Shell" Background="{StaticResource MainBackgroundGradient}"
+            CornerRadius="8"
             Padding="0"
             MouseLeftButtonDown="Border_MouseLeftButtonDown">
         
@@ -198,7 +806,7 @@
             
             <!-- Search Box Area -->
             <Border Grid.Row="0" 
-                    CornerRadius="16,16,0,0"
+                    CornerRadius="8,8,0,0"
                     Padding="20,16,20,16">
                 <Border.Background>
                     <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
@@ -266,8 +874,8 @@
                     <!-- Modern Search Container -->
                     <Border Grid.Column="1" 
                             Background="#F1F5F9"
-                            CornerRadius="14"
-                            Padding="16,12"
+                            CornerRadius="12"
+                            Padding="16,8"
                             BorderBrush="#E2E8F0"
                             BorderThickness="1">
                         <Border.Effect>
@@ -315,11 +923,13 @@
                     <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0">
                     
                     <!-- Natural Language Toggle -->
+                    <StackPanel x:Name="AiControls" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
                     <ToggleButton x:Name="NaturalLanguageToggle"
                                   FontSize="11" 
                                   FontWeight="SemiBold"
-                                  Padding="12,8"
-                                  Margin="0,0,8,0"
+                                  Padding="12,0"
+                                  Height="40"
+                                  Margin="0"
                                   Background="#F1F5F9"
                                   Foreground="#64748B"
                                   BorderThickness="0"
@@ -382,13 +992,61 @@
                             </Style>
                         </ToggleButton.Style>
                     </ToggleButton>
+                    <Button x:Name="AiEffortButton" Width="44" Height="40" Margin="4,0,0,0"
+                            Click="AiEffortButton_Click" AutomationProperties.Name="AI eforu: Medium">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+                                <Setter Property="Opacity" Value="1"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsChecked, ElementName=NaturalLanguageToggle}" Value="False">
+                                        <Setter Property="IsHitTestVisible" Value="False"/>
+                                        <Setter Property="Focusable" Value="False"/>
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.14"/>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Width" To="0" Duration="0:0:0.18">
+                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <ThicknessAnimation Storyboard.TargetProperty="Margin" To="0" Duration="0:0:0.18"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                        <DataTrigger.ExitActions>
+                                            <BeginStoryboard>
+                                                <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Width" To="44" Duration="0:0:0.18">
+                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <ThicknessAnimation Storyboard.TargetProperty="Margin" To="4,0,0,0" Duration="0:0:0.18"/>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" BeginTime="0:0:0.06" Duration="0:0:0.14"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </DataTrigger.ExitActions>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,1,0,0">
+                            <Canvas Width="24" Height="15">
+                                <Path Data="M 3,14 A 9,9 0 1 1 21,14" Stroke="#94A3B8" StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Path Data="M 4.5,6.5 L 6.3,7.6 M 12,2.6 L 12,4.6 M 19.5,6.5 L 17.7,7.6" Stroke="#CBD5E1" StrokeThickness="1.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <Line X1="12" Y1="13" X2="12" Y2="5.5" Stroke="#007AFF" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                                    <Line.RenderTransform><RotateTransform x:Name="AiEffortNeedle" CenterX="12" CenterY="13"/></Line.RenderTransform>
+                                </Line>
+                                <Ellipse Canvas.Left="10" Canvas.Top="11" Width="4" Height="4" Fill="#007AFF"/>
+                            </Canvas>
+                            <TextBlock x:Name="AiEffortLabel" Text="Medium" FontSize="8" FontWeight="SemiBold" Foreground="#64748B" HorizontalAlignment="Center" Margin="0,1,0,0"/>
+                        </StackPanel>
+                    </Button>
+                    </StackPanel>
                     
                     <!-- Debug Console Toggle -->
                     <Button x:Name="ConsoleToggleButton"
-                            Content="🐞" 
+                            Content="🐞"
                             FontSize="14" 
-                            Width="36" 
-                            Height="36"
+                            Width="40"
+                            Height="40"
                             Margin="0,0,4,0"
                             Background="Transparent"
                             BorderThickness="0"
@@ -403,7 +1061,7 @@
                                         <ControlTemplate TargetType="Button">
                                             <Border x:Name="border"
                                                     Background="#F1F5F9"
-                                                    CornerRadius="10"
+                                                    CornerRadius="12"
                                                     BorderBrush="#E2E8F0"
                                                     BorderThickness="1">
                                                 <ContentPresenter HorizontalAlignment="Center" 
@@ -428,123 +1086,98 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    
-                    <!-- Grid/List View Toggle -->
-                    <ToggleButton x:Name="ViewModeToggle"
-                                  Content="⊞" 
-                                  FontSize="16" 
-                                  Width="36" 
-                                  Height="36"
-                                  Margin="0,0,4,0"
-                                  Background="#F1F5F9"
-                                  BorderThickness="0"
-                                  Cursor="Hand"
-                                  VerticalAlignment="Center"
-                                  ToolTip="Grid/Liste görünümü">
-                        <ToggleButton.Style>
-                            <Style TargetType="ToggleButton">
-                                <Setter Property="Opacity" Value="0.5"/>
-                                <Setter Property="Foreground" Value="#64748B"/>
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="border"
-                                                    Background="{TemplateBinding Background}"
-                                                    CornerRadius="10"
-                                                    BorderBrush="#E2E8F0"
-                                                    BorderThickness="1">
-                                                <ContentPresenter HorizontalAlignment="Center" 
-                                                                  VerticalAlignment="Center"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsChecked" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#6366F1"/>
-                                                    <Setter TargetName="border" Property="BorderBrush" Value="#6366F1"/>
-                                                    <Setter Property="Foreground" Value="White"/>
-                                                </Trigger>
-                                                <MultiTrigger>
-                                                    <MultiTrigger.Conditions>
-                                                        <Condition Property="IsMouseOver" Value="True"/>
-                                                        <Condition Property="IsChecked" Value="False"/>
-                                                    </MultiTrigger.Conditions>
-                                                    <Setter TargetName="border" Property="Background" Value="#E2E8F0"/>
-                                                </MultiTrigger>
-                                                <MultiTrigger>
-                                                    <MultiTrigger.Conditions>
-                                                        <Condition Property="IsMouseOver" Value="True"/>
-                                                        <Condition Property="IsChecked" Value="True"/>
-                                                    </MultiTrigger.Conditions>
-                                                    <Setter TargetName="border" Property="Background" Value="#4F46E5"/>
-                                                </MultiTrigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                                <Style.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Opacity" Value="1"/>
-                                    </Trigger>
-                                    <Trigger Property="IsChecked" Value="True">
-                                        <Setter Property="Opacity" Value="1"/>
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ToggleButton.Style>
-                    </ToggleButton>
-                    
-                    <!-- Settings Button -->
-                    <Button x:Name="SettingsButton"
-                            Content="⚙️" 
-                            FontSize="14" 
-                            Width="36" 
-                            Height="36"
-                            Margin="0,0,4,0"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Cursor="Hand"
-                            VerticalAlignment="Center"
-                            ToolTip="Ayarlar"
-                            Click="SettingsButton_Click">
+
+                    <!-- More Options (view switch + settings) -->
+                    <Button x:Name="MoreOptionsButton" Width="40" Height="40" Margin="0,0,4,0"
+                            ToolTip="Görünüm ve ayarlar"
+                            AutomationProperties.Name="Diğer seçenekler" Click="MoreOptionsButton_Click">
                         <Button.Style>
-                            <Style TargetType="Button">
-                                <Setter Property="Opacity" Value="0.5"/>
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border" 
-                                                    Background="#F1F5F9"
-                                                    CornerRadius="10"
-                                                    BorderBrush="#E2E8F0"
-                                                    BorderThickness="1">
-                                                <ContentPresenter HorizontalAlignment="Center" 
-                                                                  VerticalAlignment="Center"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#E2E8F0"/>
-                                                </Trigger>
-                                                <Trigger Property="IsPressed" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#CBD5E1"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
+                            <Style TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
                                 <Style.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
+                                    <DataTrigger Binding="{Binding ContextMenu.IsOpen, RelativeSource={RelativeSource Self}}" Value="True">
                                         <Setter Property="Opacity" Value="1"/>
-                                    </Trigger>
+                                        <Setter Property="Background" Value="#E2E8F0"/>
+                                        <Setter Property="BorderBrush" Value="#CBD5E1"/>
+                                    </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <Ellipse Width="3.5" Height="3.5" Fill="#64748B" Margin="1.5,0"/>
+                            <Ellipse Width="3.5" Height="3.5" Fill="#64748B" Margin="1.5,0"/>
+                            <Ellipse Width="3.5" Height="3.5" Fill="#64748B" Margin="1.5,0"/>
+                        </StackPanel>
+                        <Button.ContextMenu>
+                            <ContextMenu Placement="Bottom" HorizontalOffset="-160" VerticalOffset="6" MinWidth="196"
+                                         Background="White" Foreground="#334155" FontSize="12" BorderBrush="#E2E8F0" BorderThickness="1">
+                                <ContextMenu.Template>
+                                    <ControlTemplate TargetType="ContextMenu">
+                                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="12" Padding="5">
+                                            <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                        </Border>
+                                    </ControlTemplate>
+                                </ContextMenu.Template>
+                                <ContextMenu.Resources>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Padding" Value="9,7"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="MenuItem">
+                                                    <Border x:Name="Row" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                                                        <ContentPresenter ContentSource="Header" RecognizesAccessKey="True" VerticalAlignment="Center"/>
+                                                    </Border>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsHighlighted" Value="True"><Setter TargetName="Row" Property="Background" Value="#F1F5F9"/></Trigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ContextMenu.Resources>
+                                <MenuItem x:Name="ViewModeMenuItem" StaysOpenOnClick="True" Click="ViewModeMenuItem_Click"
+                                          AutomationProperties.Name="Görünüm: Liste. Grid görünümüne geç">
+                                    <MenuItem.Header>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <AccessText Text="_Görünüm" VerticalAlignment="Center"/>
+                                            <Border Grid.Column="1" Width="60" Height="26" CornerRadius="13" Background="#E2E8F0" Margin="16,0,0,0">
+                                                <Grid>
+                                                    <Border x:Name="ViewModeThumb" Width="28" Height="22" CornerRadius="11" Background="White"
+                                                            HorizontalAlignment="Left" Margin="2,0,0,0">
+                                                        <Border.Effect><DropShadowEffect BlurRadius="4" ShadowDepth="0.5" Opacity="0.18" Color="#0F172A"/></Border.Effect>
+                                                        <Border.RenderTransform><TranslateTransform x:Name="ViewModeThumbShift"/></Border.RenderTransform>
+                                                    </Border>
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="*"/>
+                                                        </Grid.ColumnDefinitions>
+                                                        <Path x:Name="ViewModeListIcon" Data="M 1,1.5 H 13 M 1,6 H 13 M 1,10.5 H 13" Stroke="#007AFF" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                                              HorizontalAlignment="Center" VerticalAlignment="Center" Width="14" Height="12" Stretch="None"/>
+                                                        <Path x:Name="ViewModeGridIcon" Grid.Column="1" Data="M 1,1 H 5.5 V 5.5 H 1 Z M 8.5,1 H 13 V 5.5 H 8.5 Z M 1,8.5 H 5.5 V 13 H 1 Z M 8.5,8.5 H 13 V 13 H 8.5 Z"
+                                                              Stroke="#94A3B8" StrokeThickness="1.5" StrokeLineJoin="Round"
+                                                              HorizontalAlignment="Center" VerticalAlignment="Center" Width="14" Height="14" Stretch="None"/>
+                                                    </Grid>
+                                                </Grid>
+                                            </Border>
+                                        </Grid>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                                <Separator Margin="6,3"/>
+                                <MenuItem Header="_Ayarlar" Click="SettingsButton_Click"/>
+                            </ContextMenu>
+                        </Button.ContextMenu>
                     </Button>
                     
                     <!-- Close Button -->
                     <Button x:Name="CloseButton"
                             Content="✕" 
                             FontSize="14" 
-                            Width="36" 
-                            Height="36"
+                            Width="40"
+                            Height="40"
                             Margin="0"
                             Background="Transparent"
                             BorderThickness="0"
@@ -561,7 +1194,7 @@
                                         <ControlTemplate TargetType="Button">
                                             <Border x:Name="border" 
                                                     Background="#F1F5F9"
-                                                    CornerRadius="10"
+                                                    CornerRadius="12"
                                                     BorderBrush="#E2E8F0"
                                                     BorderThickness="1">
                                                 <ContentPresenter HorizontalAlignment="Center" 
@@ -596,264 +1229,107 @@
             <!-- Results Area -->
             <Grid Grid.Row="1" Margin="0">
                 <!-- Loading Overlay -->
-                <Border x:Name="LoadingOverlay" 
-                        Background="White" 
-                        CornerRadius="0,0,16,16"
-                        Visibility="Visible" 
-                        Padding="40,30">
+                <Border x:Name="LoadingOverlay"
+                        Background="#F8FAFF"
+                        CornerRadius="0,0,8,8"
+                        Visibility="Visible"
+                        Panel.ZIndex="10"
+                        Padding="40,36">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="⏳" 
-                                   FontSize="36" 
-                                   HorizontalAlignment="Center" 
-                                   Margin="0,0,0,12"
-                                   Opacity="0.7"/>
-                        <TextBlock Text="Dosyalar hazırlanıyor..." 
-                                   FontSize="15" 
-                                   Foreground="#666666" 
-                                   HorizontalAlignment="Center"
-                                   FontWeight="Normal"/>
-                        <ProgressBar x:Name="LoadingProgress" 
-                                     Height="3" 
-                                     Width="200"
-                                     IsIndeterminate="True" 
-                                     Foreground="#007AFF" 
-                                     Background="#E5E5E7" 
-                                     Margin="0,16,0,0"
-                                     BorderThickness="0"/>
-                        <TextBlock x:Name="LoadingStatus" 
-                                   Text="Starting..." 
-                                   FontSize="12" 
-                                   Foreground="#999999" 
-                                   HorizontalAlignment="Center" 
-                                   Margin="0,12,0,0"/>
+                        <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,20">
+                            <Image Source="{StaticResource OmniSpotLogo}" Width="88" Height="88" RenderOptions.BitmapScalingMode="HighQuality">
+                                <Image.Effect>
+                                    <DropShadowEffect BlurRadius="16" ShadowDepth="5" Opacity="0.18" Color="#0A1A4A"/>
+                                </Image.Effect>
+                            </Image>
+                        </Grid>
+                        <TextBlock Text="OmniSpot hazırlanıyor" Style="{StaticResource StateTitle}"/>
+                        <TextBlock x:Name="LoadingStatus" Text="Başlatılıyor..." FontSize="13.5" FontWeight="Normal" Foreground="#4A5462"
+                                   HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="380" Margin="0,0,0,18"/>
+                        <Grid x:Name="LoadingProgress" Width="240" Height="4" HorizontalAlignment="Center" ClipToBounds="True">
+                            <Border Background="#E3ECFB" CornerRadius="2"/>
+                            <Border x:Name="LoadingProgressFill" Background="#3F7EE8" CornerRadius="2" HorizontalAlignment="Left" Width="0"/>
+                            <Border x:Name="LoadingProgressPulse" Width="96" CornerRadius="2" HorizontalAlignment="Left" Visibility="Collapsed">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                        <GradientStop Color="#003F7EE8" Offset="0"/>
+                                        <GradientStop Color="#3F7EE8" Offset="0.5"/>
+                                        <GradientStop Color="#003F7EE8" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.RenderTransform>
+                                    <TranslateTransform x:Name="LoadingProgressPulseShift" X="-96"/>
+                                </Border.RenderTransform>
+                            </Border>
+                        </Grid>
                     </StackPanel>
                 </Border>
-                
-                <!-- Desktop Icons (Hidden by default in Spotlight style) -->
-                <ScrollViewer x:Name="DesktopIconsScroll" 
-                              VerticalScrollBarVisibility="Auto" 
-                              HorizontalScrollBarVisibility="Disabled" 
-                              Visibility="Collapsed"
-                              Background="Transparent"
-                              MaxHeight="500"
-                              ContextMenu="{StaticResource EmptyAreaContextMenu}"
-                              MouseRightButtonDown="EmptyArea_RightClick">
-                    <ItemsControl x:Name="DesktopIcons"
-                                  ItemsSource="{Binding DesktopIcons}"
-                                  Margin="20,12,20,20"
-                                  HorizontalAlignment="Center">
+
+                <!-- Skeleton placeholder while the search catalog is being built -->
+                <Border x:Name="SkeletonPanel" Visibility="Collapsed" Background="Transparent" Padding="20,12,20,20" IsHitTestVisible="False">
+                    <ItemsControl x:Name="SkeletonCards" ItemTemplate="{StaticResource SkeletonCardTemplate}" HorizontalAlignment="Center" Focusable="False">
                         <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"/>
-                            </ItemsPanelTemplate>
+                            <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" MaxWidth="608" HorizontalAlignment="Center"/></ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Button Background="Transparent" 
-                                        BorderThickness="0" 
-                                        Cursor="Hand" 
-                                        Margin="10,10"
-                                        Padding="0"
-                                        Opacity="{Binding Opacity}"
-                                        ToolTip="{Binding FullPath}" 
-                                        Tag="{Binding FullPath}" 
-                                        Click="DesktopIcon_Click"
-                                        ContextMenu="{StaticResource FileContextMenu}"
-                                        MouseRightButtonDown="FileItem_RightClick"
-                                        MouseEnter="FileItem_MouseEnter"
-                                        MouseLeave="FileItem_MouseLeave">
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Setter Property="RenderTransformOrigin" Value="0.5,0.5"/>
-                                            <Setter Property="RenderTransform">
-                                                <Setter.Value>
-                                                    <ScaleTransform ScaleX="1" ScaleY="1"/>
-                                                </Setter.Value>
-                                            </Setter>
-                                            <Setter Property="Template">
-                                                <Setter.Value>
-                                                    <ControlTemplate TargetType="Button">
-                                                        <Border x:Name="CardBorder" 
-                                                                Background="White"
-                                                                CornerRadius="16"
-                                                                Padding="16,20,16,16"
-                                                                BorderBrush="#E2E8F0"
-                                                                BorderThickness="1"
-                                                                RenderTransformOrigin="0.5,0.5">
-                                                            <Border.RenderTransform>
-                                                                <ScaleTransform x:Name="CardScale" ScaleX="1" ScaleY="1"/>
-                                                            </Border.RenderTransform>
-                                                            <Border.Effect>
-                                                                <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.08" Color="#000000"/>
-                                                            </Border.Effect>
-                                                            <ContentPresenter/>
-                                                        </Border>
-                                                        <ControlTemplate.Triggers>
-                                                            <Trigger Property="IsMouseOver" Value="True">
-                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
-                                                                <Setter TargetName="CardBorder" Property="Effect">
-                                                                    <Setter.Value>
-                                                                        <DropShadowEffect BlurRadius="20" ShadowDepth="6" Opacity="0.15" Color="#6366F1"/>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                            </Trigger>
-                                                            <EventTrigger RoutedEvent="MouseEnter">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard>
-                                                                        <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                         Storyboard.TargetProperty="ScaleX" 
-                                                                                         To="1.05" Duration="0:0:0.15">
-                                                                            <DoubleAnimation.EasingFunction>
-                                                                                <CubicEase EasingMode="EaseOut"/>
-                                                                            </DoubleAnimation.EasingFunction>
-                                                                        </DoubleAnimation>
-                                                                        <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                         Storyboard.TargetProperty="ScaleY" 
-                                                                                         To="1.05" Duration="0:0:0.15">
-                                                                            <DoubleAnimation.EasingFunction>
-                                                                                <CubicEase EasingMode="EaseOut"/>
-                                                                            </DoubleAnimation.EasingFunction>
-                                                                        </DoubleAnimation>
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </EventTrigger>
-                                                            <EventTrigger RoutedEvent="MouseLeave">
-                                                                <BeginStoryboard>
-                                                                    <Storyboard>
-                                                                        <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                         Storyboard.TargetProperty="ScaleX" 
-                                                                                         To="1" Duration="0:0:0.15">
-                                                                            <DoubleAnimation.EasingFunction>
-                                                                                <CubicEase EasingMode="EaseOut"/>
-                                                                            </DoubleAnimation.EasingFunction>
-                                                                        </DoubleAnimation>
-                                                                        <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                         Storyboard.TargetProperty="ScaleY" 
-                                                                                         To="1" Duration="0:0:0.15">
-                                                                            <DoubleAnimation.EasingFunction>
-                                                                                <CubicEase EasingMode="EaseOut"/>
-                                                                            </DoubleAnimation.EasingFunction>
-                                                                        </DoubleAnimation>
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </EventTrigger>
-                                                        </ControlTemplate.Triggers>
-                                                    </ControlTemplate>
-                                                </Setter.Value>
-                                            </Setter>
-                                        </Style>
-                                    </Button.Style>
-                                    <StackPanel HorizontalAlignment="Center" Width="100">
-                                        <!-- Modern Icon Container with colored background -->
-                                        <Border Width="72" Height="72" 
-                                                Margin="0,0,0,12"
-                                                CornerRadius="16"
-                                                HorizontalAlignment="Center">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background" Value="#F1F5F9"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                            <Setter Property="Background">
-                                                                <Setter.Value>
-                                                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                                        <GradientStop Color="#EEF2FF" Offset="0"/>
-                                                                        <GradientStop Color="#E0E7FF" Offset="1"/>
-                                                                    </LinearGradientBrush>
-                                                                </Setter.Value>
-                                                            </Setter>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Border.Style>
-                                            <Grid>
-                                                <!-- Folder Icon for directories -->
-                                                <Viewbox Width="40" Height="40" 
-                                                         Visibility="{Binding Thumbnail, Converter={StaticResource NullToVisibilityConverter}}">
-                                                    <Canvas Width="24" Height="24">
-                                                        <Canvas.Style>
-                                                            <Style TargetType="Canvas">
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="False">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Canvas.Style>
-                                                        <!-- Folder back -->
-                                                        <Path Fill="{Binding FolderColor}" 
-                                                              Data="M2 6C2 4.89543 2.89543 4 4 4H9L11 6H20C21.1046 6 22 6.89543 22 8V18C22 19.1046 21.1046 20 20 20H4C2.89543 20 2 19.1046 2 18V6Z"/>
-                                                        <!-- Folder front -->
-                                                        <Path Fill="{Binding FolderColorLight}" 
-                                                              Data="M2 9H22V18C22 19.1046 21.1046 20 20 20H4C2.89543 20 2 19.1046 2 18V9Z"/>
-                                                    </Canvas>
-                                                </Viewbox>
-                                                
-                                                <!-- File Icon Emoji for files without thumbnail -->
-                                                <TextBlock Text="{Binding Icon}" 
-                                                           FontSize="36" 
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center"
-                                                           Visibility="{Binding Thumbnail, Converter={StaticResource NullToVisibilityConverter}}">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                                
-                                                <!-- Thumbnail image -->
-                                                <Image Source="{Binding Thumbnail}"
-                                                       Stretch="Uniform"
-                                                       Margin="8"
-                                                       HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center"
-                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                                            </Grid>
-                                        </Border>
-                                        
-                                        <TextBlock Text="{Binding Name}" 
-                                                   FontSize="12" 
-                                                   FontWeight="Medium"
-                                                   Foreground="#334155" 
-                                                   TextAlignment="Center" 
-                                                   TextWrapping="Wrap"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   MaxHeight="36"
-                                                   LineHeight="16"/>
-                                    </StackPanel>
-                                </Button>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
                     </ItemsControl>
-                </ScrollViewer>
-                
+                </Border>
+
+                <!-- Desktop Icons (Hidden by default in Spotlight style) -->
+                <Border x:Name="DesktopIconsScroll"
+                        Visibility="Collapsed"
+                        Background="Transparent"
+                        MaxHeight="500"
+                        ContextMenu="{StaticResource EmptyAreaContextMenu}"
+                        MouseRightButtonDown="EmptyArea_RightClick">
+                    <ListBox x:Name="DesktopIcons"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Padding="20,12,20,20"
+                             Focusable="False"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Visible"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling"
+                             VirtualizingPanel.ScrollUnit="Pixel"
+                             ItemTemplate="{StaticResource DesktopGridRowTemplate}">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Focusable" Value="False"/>
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <ContentPresenter/>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                    </ListBox>
+                </Border>
+
                 <!-- Search Results List -->
                 <Border x:Name="ResultsContainer" 
-                        Background="White" 
-                        CornerRadius="0,0,16,16"
+                        Background="Transparent"
+                        CornerRadius="0,0,8,8"
                         Visibility="Collapsed">
                     
                     <Grid>
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
+                            <RowDefinition Height="*" MinHeight="356"/>
                         </Grid.RowDefinitions>
                         
                         <!-- AI Fallback Warning Banner - En üstte, her zaman görünür -->
                         <Border x:Name="FallbackWarningBanner"
                                 Grid.Row="0"
-                                Background="#FFF3CD"
-                                BorderBrush="#FFECB5"
+                                Background="#FFF7E8"
+                                BorderBrush="#F3E2BF"
                                 BorderThickness="0,0,0,1"
-                                Padding="12,8"
+                                Padding="14,9"
                                 Visibility="Collapsed">
                             <Grid>
                                 <Grid.ColumnDefinitions>
@@ -861,210 +1337,108 @@
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                
-                                <TextBlock Grid.Column="0" 
-                                           Text="⚠️" 
-                                           FontSize="14" 
-                                           VerticalAlignment="Center"
-                                           Margin="0,0,8,0"/>
-                                
+                                <Border Grid.Column="0" Style="{StaticResource BannerIconPill}" Background="#FBE9C3">
+                                    <Grid Width="16" Height="15">
+                                        <Path Data="{StaticResource WarningTriangleGeometry}" Fill="#D98A0C" Stroke="#D98A0C" StrokeThickness="2" StrokeLineJoin="Round" Stretch="Uniform"/>
+                                        <Path Data="{StaticResource WarningMarkGeometry}" Stroke="#FFFFFF" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Width="2.2" Height="6.4" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                                    </Grid>
+                                </Border>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock Text="AI kullanılamadı, standart arama kullanıldı"
-                                               FontSize="12"
-                                               FontWeight="SemiBold"
-                                               Foreground="#856404"/>
-                                    <TextBlock x:Name="FallbackReasonText"
-                                               Text=""
-                                               FontSize="11"
-                                               Foreground="#856404"
-                                               Opacity="0.8"
-                                               TextTrimming="CharacterEllipsis"/>
+                                    <TextBlock Text="AI kullanılamadı, standart arama kullanıldı" Style="{StaticResource BannerTitle}"/>
+                                    <TextBlock x:Name="FallbackReasonText" Text="" Style="{StaticResource BannerDetail}"/>
                                 </StackPanel>
-                                
-                                <Button Grid.Column="2"
-                                        Content="✕"
-                                        FontSize="12"
-                                        Background="Transparent"
-                                        BorderThickness="0"
-                                        Foreground="#856404"
-                                        Cursor="Hand"
-                                        VerticalAlignment="Center"
-                                        Click="CloseFallbackBanner_Click"
-                                        Opacity="0.6">
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Style.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter Property="Opacity" Value="1"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
+                                <Button Grid.Column="2" Style="{StaticResource BannerCloseButton}" Click="CloseFallbackBanner_Click" ToolTip="Kapat">
+                                    <Path Data="{StaticResource CloseGlyphGeometry}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                          StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="8" Height="8" Stretch="None"/>
                                 </Button>
                             </Grid>
                         </Border>
-                        
+
                         <!-- Delta Sync Warning Banner (during search) -->
                         <Border x:Name="DeltaSyncWarningBanner"
                                 Grid.Row="0"
-                                Background="#D1ECF1"
-                                BorderBrush="#BEE5EB"
+                                Background="#EEF4FF"
+                                BorderBrush="#D6E2F6"
                                 BorderThickness="0,0,0,1"
-                                Padding="12,8"
-                                Visibility="Collapsed"
-                                Margin="0,0,0,0">
+                                Padding="14,9"
+                                Visibility="Collapsed">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="Auto"/>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
-                                
-                                <TextBlock Grid.Column="0" 
-                                           Text="ℹ️" 
-                                           FontSize="14" 
-                                           VerticalAlignment="Center"
-                                           Margin="0,0,8,0"/>
-                                
+                                <Border Grid.Column="0" Style="{StaticResource BannerIconPill}" Background="#DCE7FB">
+                                    <Path Data="{StaticResource InfoGeometry}" Stroke="#3F7EE8" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Width="16" Height="16" Stretch="Uniform"/>
+                                </Border>
                                 <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                    <TextBlock Text="Değişiklikler hala taranıyor"
-                                               FontSize="12"
-                                               FontWeight="SemiBold"
-                                               Foreground="#0C5460"/>
-                                    <TextBlock x:Name="DeltaSyncWarningText"
-                                               Text="Daha iyi sonuçlar için birkaç saniye bekleyin"
-                                               FontSize="11"
-                                               Foreground="#0C5460"
-                                               Opacity="0.8"/>
+                                    <TextBlock Text="Değişiklikler hâlâ taranıyor" Style="{StaticResource BannerTitle}"/>
+                                    <TextBlock x:Name="DeltaSyncWarningText" Text="Daha iyi sonuçlar için birkaç saniye bekleyin" Style="{StaticResource BannerDetail}"/>
                                 </StackPanel>
-                                
-                                <Button Grid.Column="2"
-                                        Content="✕"
-                                        FontSize="12"
-                                        Background="Transparent"
-                                        BorderThickness="0"
-                                        Foreground="#0C5460"
-                                        Cursor="Hand"
-                                        VerticalAlignment="Center"
-                                        Click="CloseDeltaSyncBanner_Click"
-                                        Opacity="0.6">
-                                    <Button.Style>
-                                        <Style TargetType="Button">
-                                            <Style.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter Property="Opacity" Value="1"/>
-                                                </Trigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </Button.Style>
+                                <Button Grid.Column="2" Style="{StaticResource BannerCloseButton}" Click="CloseDeltaSyncBanner_Click" ToolTip="Kapat">
+                                    <Path Data="{StaticResource CloseGlyphGeometry}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                          StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="8" Height="8" Stretch="None"/>
                                 </Button>
                             </Grid>
                         </Border>
-                        
+
                         <!-- Content Area (Row 1) -->
                         <Grid Grid.Row="1">
                             <!-- Searching Indicator -->
                             <StackPanel x:Name="SearchingPanel"
-                                       Visibility="Collapsed"
-                                       HorizontalAlignment="Center"
-                                       VerticalAlignment="Center"
-                                       Margin="40">
-                                <ProgressBar IsIndeterminate="True" 
-                                            Height="3" 
-                                            Width="200"
-                                            Foreground="#007AFF" 
-                                            Background="#E5E5E7" 
-                                            BorderThickness="0"/>
-                                <TextBlock x:Name="SearchingText"
-                                           Text="🔍 Aranıyor..." 
-                                           FontSize="15" 
-                                           Foreground="#666666"
-                                           HorizontalAlignment="Center"
-                                           Margin="0,16,0,0"/>
+                                        Visibility="Collapsed"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Margin="40,32">
+                                <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,22">
+                                    <Border Style="{StaticResource StateTile}"/>
+                                    <Path Data="{StaticResource MagnifierGeometry}" Stroke="#3F7EE8" StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Width="46" Height="46" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Grid>
+                                <TextBlock x:Name="SearchingText" Text="Aranıyor…" Style="{StaticResource StateTitle}"/>
+                                <ProgressBar IsIndeterminate="True" Height="3" Width="160" Margin="0,10,0,0"
+                                             Foreground="#3F7EE8" Background="#E3ECFB" BorderThickness="0"/>
                             </StackPanel>
-                            
+
                             <!-- Error Panel -->
                             <StackPanel x:Name="ErrorPanel"
-                                       Visibility="Collapsed"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Margin="40">
-                            <TextBlock Text="⚠️" 
-                                       FontSize="48" 
-                                       HorizontalAlignment="Center"
-                                       Margin="0,0,0,16"/>
-                            <TextBlock x:Name="ErrorTitle"
-                                       Text="Bir hata oluştu" 
-                                       FontSize="18" 
-                                       FontWeight="SemiBold"
-                                       Foreground="#FF3B30"
-                                       HorizontalAlignment="Center"/>
-                            <TextBlock x:Name="ErrorMessage"
-                                       Text=""
-                                       FontSize="13"
-                                       Foreground="#86868B"
-                                       HorizontalAlignment="Center"
-                                       TextWrapping="Wrap"
-                                       MaxWidth="400"
-                                       TextAlignment="Center"
-                                       Margin="0,8,0,0"/>
-                            <Button x:Name="RetryButton"
-                                    Content="Tekrar Dene"
-                                    FontSize="13"
-                                    Padding="16,8"
-                                    Margin="0,16,0,0"
-                                    Background="#007AFF"
-                                    Foreground="White"
-                                    BorderThickness="0"
-                                    Cursor="Hand"
-                                    Click="RetryButton_Click">
-                                <Button.Style>
-                                    <Style TargetType="Button">
-                                        <Setter Property="Template">
-                                            <Setter.Value>
-                                                <ControlTemplate TargetType="Button">
-                                                    <Border x:Name="border"
-                                                            Background="{TemplateBinding Background}"
-                                                            CornerRadius="8"
-                                                            Padding="{TemplateBinding Padding}">
-                                                        <ContentPresenter HorizontalAlignment="Center" 
-                                                                          VerticalAlignment="Center"/>
-                                                    </Border>
-                                                    <ControlTemplate.Triggers>
-                                                        <Trigger Property="IsMouseOver" Value="True">
-                                                            <Setter TargetName="border" Property="Opacity" Value="0.8"/>
-                                                        </Trigger>
-                                                    </ControlTemplate.Triggers>
-                                                </ControlTemplate>
-                                            </Setter.Value>
-                                        </Setter>
-                                    </Style>
-                                </Button.Style>
-                            </Button>
-                        </StackPanel>
-                        
-                        <!-- No Results Message -->
-                        <StackPanel x:Name="NoResultsPanel"
-                                   Visibility="Collapsed"
-                                   HorizontalAlignment="Center"
-                                   VerticalAlignment="Center"
-                                   Margin="40">
-                            <TextBlock Text="🔍" 
-                                       FontSize="48" 
-                                       HorizontalAlignment="Center"
-                                       Margin="0,0,0,16"/>
-                            <TextBlock Text="Sonuç bulunamadı" 
-                                       FontSize="18" 
-                                       FontWeight="SemiBold"
-                                       Foreground="#1D1D1F"
-                                       HorizontalAlignment="Center"/>
-                            <TextBlock x:Name="NoResultsHint"
-                                       Text="Farklı anahtar kelimeler deneyin"
-                                       FontSize="13"
-                                       Foreground="#86868B"
-                                       HorizontalAlignment="Center"
-                                       Margin="0,8,0,0"/>
-                        </StackPanel>
+                                        Visibility="Collapsed"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Margin="40,32">
+                                <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,22">
+                                    <Border Style="{StaticResource StateTileWarm}"/>
+                                    <Grid Width="50" Height="46" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                        <Path Data="M12 2.5 L22.5 20.5 H1.5 Z" Fill="#EF6A55" Stretch="Uniform" StrokeLineJoin="Round" Stroke="#EF6A55" StrokeThickness="2"/>
+                                        <Path Data="M12 9 V14.2 M12 17.2 V17.3" Stroke="#FFFFFF" StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Width="6" Height="18" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,8,0,0"/>
+                                    </Grid>
+                                </Grid>
+                                <TextBlock x:Name="ErrorTitle" Text="Bir hata oluştu" Style="{StaticResource StateTitle}"/>
+                                <TextBlock x:Name="ErrorMessage" Text="" Style="{StaticResource StateHint}" Margin="0,0,0,18"/>
+                                <Button x:Name="RetryButton" Content="Tekrar dene" Style="{StaticResource StatePrimaryButton}" Click="RetryButton_Click"/>
+                            </StackPanel>
+
+                            <!-- No Results Message -->
+                            <StackPanel x:Name="NoResultsPanel"
+                                        Visibility="Collapsed"
+                                        HorizontalAlignment="Center"
+                                        VerticalAlignment="Center"
+                                        Margin="40,32">
+                                <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,22">
+                                    <Border Style="{StaticResource StateTile}"/>
+                                    <Path Data="{StaticResource MagnifierGeometry}" Stroke="#3F7EE8" StrokeThickness="2.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Width="46" Height="46" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <Border Style="{StaticResource StateBadge}">
+                                        <Path Data="M0 0 L8 8 M8 0 L0 8" Stroke="#3F7EE8" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                              Width="8" Height="8" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    </Border>
+                                </Grid>
+                                <TextBlock Text="Sonuç bulunamadı" Style="{StaticResource StateTitle}"/>
+                                <TextBlock x:Name="NoResultsHint" Text="Farklı anahtar kelimeler deneyin" Style="{StaticResource StateHint}"/>
+                            </StackPanel>
                         </Grid>
                         
                         <!-- List View - Modern Design -->
@@ -1076,9 +1450,10 @@
                                   SelectionMode="Single"
                                   Padding="12,4,12,12"
                                   MaxHeight="500"
-                                  ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                  ScrollViewer.VerticalScrollBarVisibility="Visible"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                                  ScrollViewer.CanContentScroll="False">
+                                  VirtualizingPanel.ScrollUnit="Pixel"
+                                  VirtualizingPanel.VirtualizationMode="Recycling">
                             <ListView.ItemContainerStyle>
                                 <Style TargetType="ListViewItem">
                                     <Setter Property="Background" Value="Transparent"/>
@@ -1096,25 +1471,46 @@
                                                         Padding="12,10"
                                                         BorderBrush="#E2E8F0"
                                                         BorderThickness="1">
-                                                    <Border.Effect>
-                                                        <DropShadowEffect BlurRadius="4" ShadowDepth="1" Opacity="0.05" Color="#000000"/>
-                                                    </Border.Effect>
+                                                    <Border.LayoutTransform>
+                                                        <ScaleTransform x:Name="borderScale"/>
+                                                    </Border.LayoutTransform>
                                                     <ContentPresenter/>
                                                 </Border>
                                                 <ControlTemplate.Triggers>
                                                     <Trigger Property="IsMouseOver" Value="True">
                                                         <Setter TargetName="border" Property="Background" Value="#F8FAFC"/>
                                                         <Setter TargetName="border" Property="BorderBrush" Value="#CBD5E1"/>
-                                                        <Setter TargetName="border" Property="Effect">
-                                                            <Setter.Value>
-                                                                <DropShadowEffect BlurRadius="12" ShadowDepth="3" Opacity="0.1" Color="#6366F1"/>
-                                                            </Setter.Value>
-                                                        </Setter>
                                                     </Trigger>
                                                     <Trigger Property="IsSelected" Value="True">
                                                         <Setter TargetName="border" Property="Background" Value="#6366F1"/>
                                                         <Setter TargetName="border" Property="BorderBrush" Value="#6366F1"/>
                                                     </Trigger>
+                                                    <DataTrigger Binding="{Binding IsNew}" Value="True">
+                                                    <DataTrigger.EnterActions>
+                                                    <BeginStoryboard>
+                                                    <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="borderScale" Storyboard.TargetProperty="ScaleY" From="0" To="1" Duration="0:0:0.30">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    </Storyboard>
+                                                    </BeginStoryboard>
+                                                    </DataTrigger.EnterActions>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsRemoving}" Value="True">
+                                                    <Setter TargetName="border" Property="IsHitTestVisible" Value="False"/>
+                                                    <DataTrigger.EnterActions>
+                                                    <BeginStoryboard>
+                                                    <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="border" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.22">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <DoubleAnimation Storyboard.TargetName="borderScale" Storyboard.TargetProperty="ScaleY" To="0" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    </Storyboard>
+                                                    </BeginStoryboard>
+                                                    </DataTrigger.EnterActions>
+                                                    </DataTrigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Setter.Value>
@@ -1141,69 +1537,7 @@
                                                 CornerRadius="10"
                                                 Margin="0,0,14,0"
                                                 VerticalAlignment="Center">
-                                            <Border.Style>
-                                                <Style TargetType="Border">
-                                                    <Setter Property="Background">
-                                                        <Setter.Value>
-                                                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                                <GradientStop Color="#EEF2FF" Offset="0"/>
-                                                                <GradientStop Color="#E0E7FF" Offset="1"/>
-                                                            </LinearGradientBrush>
-                                                        </Setter.Value>
-                                                    </Setter>
-                                                </Style>
-                                            </Border.Style>
-                                            <Grid>
-                                                <!-- Folder SVG Icon for directories -->
-                                                <Viewbox Width="26" Height="26" 
-                                                         Visibility="{Binding Thumbnail, Converter={StaticResource NullToVisibilityConverter}}">
-                                                    <Canvas Width="24" Height="24">
-                                                        <Canvas.Style>
-                                                            <Style TargetType="Canvas">
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                        <Setter Property="Visibility" Value="Visible"/>
-                                                                    </DataTrigger>
-                                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="False">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </Canvas.Style>
-                                                        <!-- Folder back -->
-                                                        <Path Fill="{Binding FolderColor}" 
-                                                              Data="M2 6C2 4.89543 2.89543 4 4 4H9L11 6H20C21.1046 6 22 6.89543 22 8V18C22 19.1046 21.1046 20 20 20H4C2.89543 20 2 19.1046 2 18V6Z"/>
-                                                        <!-- Folder front -->
-                                                        <Path Fill="{Binding FolderColorLight}" 
-                                                              Data="M2 9H22V18C22 19.1046 21.1046 20 20 20H4C2.89543 20 2 19.1046 2 18V9Z"/>
-                                                    </Canvas>
-                                                </Viewbox>
-                                                
-                                                <!-- File Icon Emoji for files without thumbnail -->
-                                                <TextBlock Text="{Binding Icon}" 
-                                                           FontSize="22" 
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center"
-                                                           Visibility="{Binding Thumbnail, Converter={StaticResource NullToVisibilityConverter}}">
-                                                    <TextBlock.Style>
-                                                        <Style TargetType="TextBlock">
-                                                            <Style.Triggers>
-                                                                <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                                                </DataTrigger>
-                                                            </Style.Triggers>
-                                                        </Style>
-                                                    </TextBlock.Style>
-                                                </TextBlock>
-                                                
-                                                <!-- Thumbnail image -->
-                                                <Image Source="{Binding Thumbnail}"
-                                                       Stretch="Uniform"
-                                                       Margin="4"
-                                                       HorizontalAlignment="Center"
-                                                       VerticalAlignment="Center"
-                                                       RenderOptions.BitmapScalingMode="HighQuality"/>
-                                            </Grid>
+                                            <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="30" Height="30"/>
                                         </Border>
                                         
                                         <!-- File Info -->
@@ -1279,7 +1613,7 @@
                     <!-- Grid View - Modern Design -->
                     <ScrollViewer x:Name="ResultsGridScroll"
                                  Grid.Row="1"
-                                 VerticalScrollBarVisibility="Auto"
+                                 VerticalScrollBarVisibility="Visible"
                                  MaxHeight="500"
                                  Visibility="Collapsed"
                                  Background="Transparent">
@@ -1289,7 +1623,7 @@
                                      HorizontalAlignment="Center">
                             <ItemsControl.ItemsPanel>
                                 <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center"/>
+                                    <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" Width="616"/>
                                 </ItemsPanelTemplate>
                             </ItemsControl.ItemsPanel>
                             <ItemsControl.ItemTemplate>
@@ -1314,63 +1648,48 @@
                                                                     BorderBrush="#E2E8F0"
                                                                     BorderThickness="1"
                                                                     RenderTransformOrigin="0.5,0.5">
-                                                                <Border.RenderTransform>
-                                                                    <ScaleTransform x:Name="CardScale" ScaleX="1" ScaleY="1"/>
-                                                                </Border.RenderTransform>
-                                                                <Border.Effect>
-                                                                    <DropShadowEffect BlurRadius="8" ShadowDepth="2" Opacity="0.08" Color="#000000"/>
-                                                                </Border.Effect>
+                                                                <Border.LayoutTransform>
+                                                                    <ScaleTransform x:Name="CardScale"/>
+                                                                </Border.LayoutTransform>
                                                                 <ContentPresenter/>
                                                             </Border>
                                                             <ControlTemplate.Triggers>
                                                                 <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
-                                                                    <Setter TargetName="CardBorder" Property="Effect">
-                                                                        <Setter.Value>
-                                                                            <DropShadowEffect BlurRadius="20" ShadowDepth="6" Opacity="0.15" Color="#6366F1"/>
-                                                                        </Setter.Value>
-                                                                    </Setter>
+                                                                    <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
+                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
                                                                 </Trigger>
-                                                                <EventTrigger RoutedEvent="MouseEnter">
-                                                                    <BeginStoryboard>
-                                                                        <Storyboard>
-                                                                            <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                             Storyboard.TargetProperty="ScaleX" 
-                                                                                             To="1.05" Duration="0:0:0.15">
-                                                                                <DoubleAnimation.EasingFunction>
-                                                                                    <CubicEase EasingMode="EaseOut"/>
-                                                                                </DoubleAnimation.EasingFunction>
-                                                                            </DoubleAnimation>
-                                                                            <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                             Storyboard.TargetProperty="ScaleY" 
-                                                                                             To="1.05" Duration="0:0:0.15">
-                                                                                <DoubleAnimation.EasingFunction>
-                                                                                    <CubicEase EasingMode="EaseOut"/>
-                                                                                </DoubleAnimation.EasingFunction>
-                                                                            </DoubleAnimation>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </EventTrigger>
-                                                                <EventTrigger RoutedEvent="MouseLeave">
-                                                                    <BeginStoryboard>
-                                                                        <Storyboard>
-                                                                            <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                             Storyboard.TargetProperty="ScaleX" 
-                                                                                             To="1" Duration="0:0:0.15">
-                                                                                <DoubleAnimation.EasingFunction>
-                                                                                    <CubicEase EasingMode="EaseOut"/>
-                                                                                </DoubleAnimation.EasingFunction>
-                                                                            </DoubleAnimation>
-                                                                            <DoubleAnimation Storyboard.TargetName="CardScale" 
-                                                                                             Storyboard.TargetProperty="ScaleY" 
-                                                                                             To="1" Duration="0:0:0.15">
-                                                                                <DoubleAnimation.EasingFunction>
-                                                                                    <CubicEase EasingMode="EaseOut"/>
-                                                                                </DoubleAnimation.EasingFunction>
-                                                                            </DoubleAnimation>
-                                                                        </Storyboard>
-                                                                    </BeginStoryboard>
-                                                                </EventTrigger>
+                                                    <DataTrigger Binding="{Binding IsNew}" Value="True">
+                                                    <DataTrigger.EnterActions>
+                                                    <BeginStoryboard>
+                                                    <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" From="0" To="1" Duration="0:0:0.30">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" From="0" To="1" Duration="0:0:0.30">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    </Storyboard>
+                                                    </BeginStoryboard>
+                                                    </DataTrigger.EnterActions>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding IsRemoving}" Value="True">
+                                                    <Setter TargetName="CardBorder" Property="IsHitTestVisible" Value="False"/>
+                                                    <DataTrigger.EnterActions>
+                                                    <BeginStoryboard>
+                                                    <Storyboard>
+                                                    <DoubleAnimation Storyboard.TargetName="CardBorder" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.22">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="0" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="0" Duration="0:0:0.26">
+                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    </Storyboard>
+                                                    </BeginStoryboard>
+                                                    </DataTrigger.EnterActions>
+                                                    </DataTrigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
                                                     </Setter.Value>
@@ -1383,81 +1702,7 @@
                                                     Margin="0,0,0,12"
                                                     CornerRadius="16"
                                                     HorizontalAlignment="Center">
-                                                <Border.Style>
-                                                    <Style TargetType="Border">
-                                                        <Setter Property="Background">
-                                                            <Setter.Value>
-                                                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                                    <GradientStop Color="#F1F5F9" Offset="0"/>
-                                                                    <GradientStop Color="#E2E8F0" Offset="1"/>
-                                                                </LinearGradientBrush>
-                                                            </Setter.Value>
-                                                        </Setter>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                <Setter Property="Background">
-                                                                    <Setter.Value>
-                                                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                                                            <GradientStop Color="#EEF2FF" Offset="0"/>
-                                                                            <GradientStop Color="#E0E7FF" Offset="1"/>
-                                                                        </LinearGradientBrush>
-                                                                    </Setter.Value>
-                                                                </Setter>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </Border.Style>
-                                                <Grid>
-                                                    <!-- Folder SVG Icon for directories -->
-                                                    <Viewbox Width="40" Height="40" 
-                                                             Visibility="{Binding Thumbnail, Converter={StaticResource NullToVisibilityConverter}}">
-                                                        <Canvas Width="24" Height="24">
-                                                            <Canvas.Style>
-                                                                <Style TargetType="Canvas">
-                                                                    <Style.Triggers>
-                                                                        <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                            <Setter Property="Visibility" Value="Visible"/>
-                                                                        </DataTrigger>
-                                                                        <DataTrigger Binding="{Binding IsDirectory}" Value="False">
-                                                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                                                        </DataTrigger>
-                                                                    </Style.Triggers>
-                                                                </Style>
-                                                            </Canvas.Style>
-                                                            <!-- Folder back -->
-                                                            <Path Fill="{Binding FolderColor}" 
-                                                                  Data="M2 6C2 4.89543 2.89543 4 4 4H9L11 6H20C21.1046 6 22 6.89543 22 8V18C22 19.1046 21.1046 20 20 20H4C2.89543 20 2 19.1046 2 18V6Z"/>
-                                                            <!-- Folder front -->
-                                                            <Path Fill="{Binding FolderColorLight}" 
-                                                                  Data="M2 9H22V18C22 19.1046 21.1046 20 20 20H4C2.89543 20 2 19.1046 2 18V9Z"/>
-                                                        </Canvas>
-                                                    </Viewbox>
-                                                    
-                                                    <!-- File Icon Emoji for files without thumbnail -->
-                                                    <TextBlock Text="{Binding Icon}" 
-                                                               FontSize="36" 
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center"
-                                                               Visibility="{Binding Thumbnail, Converter={StaticResource NullToVisibilityConverter}}">
-                                                        <TextBlock.Style>
-                                                            <Style TargetType="TextBlock">
-                                                                <Style.Triggers>
-                                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="True">
-                                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                                    </DataTrigger>
-                                                                </Style.Triggers>
-                                                            </Style>
-                                                        </TextBlock.Style>
-                                                    </TextBlock>
-                                                    
-                                                    <!-- Thumbnail image -->
-                                                    <Image Source="{Binding Thumbnail}"
-                                                           Stretch="Uniform"
-                                                           Margin="8"
-                                                           HorizontalAlignment="Center"
-                                                           VerticalAlignment="Center"
-                                                           RenderOptions.BitmapScalingMode="HighQuality"/>
-                                                </Grid>
+                                                <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="56" Height="56"/>
                                             </Border>
                                             
                                             <!-- File Name -->
@@ -1480,80 +1725,136 @@
                 </Border>
                 
                 <!-- Folder Loading Indicator (Improved - more spacious) -->
-                <Border x:Name="FolderLoadingPanel" 
-                        Background="#F5FFFFFF" 
-                        Visibility="Collapsed"
-                        VerticalAlignment="Stretch"
-                        HorizontalAlignment="Stretch"
-                        Padding="40">
-                    <StackPanel VerticalAlignment="Center" 
-                                HorizontalAlignment="Center"
-                                MinWidth="300">
-                        <!-- Loading spinner using ProgressBar -->
-                        <ProgressBar IsIndeterminate="True" 
-                                     Height="4" 
-                                     Width="240"
-                                     Foreground="#007AFF" 
-                                     Background="#E5E5E7" 
-                                     BorderThickness="0"
-                                     Margin="0,0,0,20"/>
-                        
-                        <TextBlock x:Name="FolderLoadingTitle" 
-                                   Text="📂 Masaüstü" 
-                                   FontSize="16" 
-                                   Foreground="#1D1D1F" 
-                                   HorizontalAlignment="Center"
-                                   FontWeight="SemiBold"
-                                   Margin="0,0,0,8"/>
-                        
-                        <TextBlock Text="Kontrol ediliyor..." 
-                                   FontSize="13" 
-                                   Foreground="#86868B" 
-                                   HorizontalAlignment="Center"/>
-                    </StackPanel>
-                </Border>
-                
+                <ProgressBar x:Name="FolderLoadingBar" Height="2" VerticalAlignment="Top" Margin="0" Panel.ZIndex="5"
+                             Visibility="Collapsed" IsIndeterminate="False" Foreground="#007AFF" Background="Transparent" BorderThickness="0"/>
                 <!-- Empty Folder Message -->
-                <Border x:Name="EmptyFolderPanel" 
-                        Background="Transparent" 
+                <Border x:Name="EmptyFolderPanel"
+                        Background="Transparent"
                         Visibility="Collapsed"
                         VerticalAlignment="Center"
                         HorizontalAlignment="Center"
-                        Padding="40">
-                    <StackPanel HorizontalAlignment="Center" 
-                                VerticalAlignment="Center">
-                        <TextBlock Text="📂" 
-                                   FontSize="64" 
-                                   HorizontalAlignment="Center"
-                                   Opacity="0.3"
-                                   Margin="0,0,0,16"/>
-                        
-                        <TextBlock x:Name="EmptyFolderTitle" 
-                                   Text="Klasör boş" 
-                                   FontSize="20" 
-                                   Foreground="#1D1D1F" 
-                                   HorizontalAlignment="Center"
+                        Padding="40,32">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,22">
+                            <Border CornerRadius="30" BorderThickness="1" BorderBrush="#D6E2F6">
+                                <Border.Background>
+                                    <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                        <GradientStop Color="#F3F7FE" Offset="0"/>
+                                        <GradientStop Color="#E3ECFB" Offset="1"/>
+                                    </LinearGradientBrush>
+                                </Border.Background>
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="18" ShadowDepth="6" Opacity="0.10" Color="#2B5CB8"/>
+                                </Border.Effect>
+                            </Border>
+                            <Viewbox Width="54" Height="54">
+                                <Canvas Width="24" Height="24">
+                                    <Path Fill="#3F7EE8" Data="{StaticResource FolderBackGeometry}"/>
+                                    <Path Fill="#6FA4F7" Data="{StaticResource FolderFrontGeometry}"/>
+                                    <Path Fill="#FFFFFF" Opacity="0.4" Data="{StaticResource FolderEdgeGeometry}"/>
+                                </Canvas>
+                            </Viewbox>
+                            <Border Width="30" Height="30" CornerRadius="15" Background="#FFFFFF" BorderBrush="#D6E2F6" BorderThickness="1"
+                                    HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,10,10">
+                                <Path Data="M4 0 L4 8 M0 4 L8 4" Stroke="#3F7EE8" StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Width="8" Height="8" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                        </Grid>
+                        <TextBlock x:Name="EmptyFolderTitle"
+                                   Text="Klasör boş"
+                                   FontSize="18"
                                    FontWeight="SemiBold"
-                                   Margin="0,0,0,8"/>
-                        
-                        <TextBlock Text="Bu klasörde hiçbir dosya veya klasör bulunmuyor." 
-                                   FontSize="14" 
-                                   Foreground="#86868B" 
+                                   Foreground="#111827"
                                    HorizontalAlignment="Center"
+                                   TextAlignment="Center"
                                    TextWrapping="Wrap"
-                                   MaxWidth="400"
-                                   TextAlignment="Center"/>
+                                   MaxWidth="380"
+                                   Margin="0,0,0,6"/>
+                        <TextBlock Text="Bu klasörde henüz dosya yok."
+                                   FontSize="13.5"
+                                   Foreground="#5B6472"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   MaxWidth="380"
+                                   Margin="0,0,0,18"/>
+                        <Button x:Name="EmptyFolderBackButton"
+                                Click="BackButton_Click"
+                                Cursor="Hand"
+                                Focusable="False"
+                                HorizontalAlignment="Center"
+                                Padding="16,8">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border x:Name="Surface" CornerRadius="10" Background="#FFFFFF" BorderBrush="#D6DEEA" BorderThickness="1" Padding="{TemplateBinding Padding}">
+                                        <StackPanel Orientation="Horizontal">
+                                            <Path Data="M9 1 L4 6 L9 11 M4 6 L14 6" Stroke="#2F4A73" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                  Width="14" Height="12" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                            <TextBlock Text="Üst klasöre dön" FontSize="13" FontWeight="SemiBold" Foreground="#2F4A73" VerticalAlignment="Center"/>
+                                        </StackPanel>
+                                    </Border>
+                                    <ControlTemplate.Triggers>
+                                        <Trigger Property="IsMouseOver" Value="True">
+                                            <Setter TargetName="Surface" Property="Background" Value="#F3F7FE"/>
+                                            <Setter TargetName="Surface" Property="BorderBrush" Value="#B9CCEC"/>
+                                        </Trigger>
+                                        <Trigger Property="IsPressed" Value="True">
+                                            <Setter TargetName="Surface" Property="Background" Value="#E3ECFB"/>
+                                        </Trigger>
+                                    </ControlTemplate.Triggers>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
                     </StackPanel>
                 </Border>
             </Grid>
             
             <!-- Delta Sync Progress Row (Row 2) - Below content, extends window height -->
             <Grid Grid.Row="2">
+                <!-- Search catalog build row -->
+                <Border x:Name="CatalogBuildPanel"
+                        Background="#FFFFFF"
+                        CornerRadius="0,0,8,8"
+                        Padding="14,11,14,14"
+                        Visibility="Collapsed"
+                        BorderBrush="#E2E8F0"
+                        BorderThickness="0,1,0,0">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Grid.Column="0" Style="{StaticResource BannerIconPill}" Background="#EEF4FF" VerticalAlignment="Top">
+                            <Path Data="{StaticResource MagnifierGeometry}" Stroke="#3F7EE8" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Width="15" Height="15" Stretch="Uniform"/>
+                        </Border>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                            <TextBlock Text="Arama kataloğu hazırlanıyor" Style="{StaticResource BannerTitle}"/>
+                            <TextBlock Text="Klasörlerde gezinebilirsiniz, arama birkaç saniye içinde hazır olur." Style="{StaticResource BannerDetail}"/>
+                            <Grid Height="3" Margin="0,9,0,0" ClipToBounds="True">
+                                <Border Background="#E3ECFB" CornerRadius="1.5"/>
+                                <Border x:Name="CatalogBuildPulse" Width="140" CornerRadius="1.5" HorizontalAlignment="Left">
+                                    <Border.Background>
+                                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
+                                            <GradientStop Color="#003F7EE8" Offset="0"/>
+                                            <GradientStop Color="#3F7EE8" Offset="0.5"/>
+                                            <GradientStop Color="#003F7EE8" Offset="1"/>
+                                        </LinearGradientBrush>
+                                    </Border.Background>
+                                    <Border.RenderTransform>
+                                        <TranslateTransform x:Name="CatalogBuildPulseShift" X="-140"/>
+                                    </Border.RenderTransform>
+                                </Border>
+                            </Grid>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
                 <!-- Delta Sync Progress Indicator (Expanded View) -->
-                <Border x:Name="DeltaSyncPanel" 
-                        Background="#FFFFFF" 
-                        CornerRadius="0,0,16,16"
-                        Padding="16,12,16,16"
+                <Border x:Name="DeltaSyncPanel"
+                        Background="#FFFFFF"
+                        CornerRadius="0,0,8,8"
+                        Padding="14,11,14,14"
                         Visibility="Collapsed"
                         BorderBrush="#E2E8F0"
                         BorderThickness="0,1,0,0">
@@ -1563,90 +1864,51 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        
-                        <!-- Simple sync icon -->
-                        <TextBlock Grid.Column="0"
-                                   Text="🔄" 
-                                   FontSize="16" 
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,12,0"/>
-                        
+                        <Border Grid.Column="0" Style="{StaticResource BannerIconPill}" Background="#EEF4FF" VerticalAlignment="Top">
+                            <Path Data="{StaticResource SyncGeometry}" Stroke="#3F7EE8" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                  Width="15" Height="15" Stretch="Uniform"/>
+                        </Border>
                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
                             <StackPanel Orientation="Horizontal">
-                                <TextBlock x:Name="DeltaSyncText" 
-                                           Text="Değişiklikler kontrol ediliyor" 
-                                           FontSize="12" 
-                                           Foreground="#1D1D1F" 
-                                           FontWeight="Medium"/>
-                                <TextBlock x:Name="DeltaSyncDetails" 
-                                           Text=""
-                                           FontSize="12" 
-                                           Foreground="#86868B"/>
+                                <TextBlock x:Name="DeltaSyncText" Text="Değişiklikler kontrol ediliyor" Style="{StaticResource BannerTitle}"/>
+                                <TextBlock x:Name="DeltaSyncDetails" Text="" Style="{StaticResource BannerDetail}" Margin="6,0,0,0" VerticalAlignment="Bottom"/>
                             </StackPanel>
-                            
-                            <!-- Progress bar -->
-                            <ProgressBar x:Name="DeltaSyncProgressBar" 
-                                         Height="3" 
+                            <ProgressBar x:Name="DeltaSyncProgressBar"
+                                         Height="3"
                                          Minimum="0"
                                          Maximum="100"
                                          Value="0"
                                          IsIndeterminate="True"
-                                         Foreground="#007AFF" 
-                                         Background="#E5E5E7" 
-                                         Margin="0,8,0,0"
+                                         Foreground="#3F7EE8"
+                                         Background="#E3ECFB"
+                                         Margin="0,9,0,0"
                                          BorderThickness="0"/>
                         </StackPanel>
-                        
-                        <!-- Minimize button -->
-                        <Button Grid.Column="2"
-                                Content="−"
-                                FontSize="16"
-                                FontWeight="Bold"
-                                Width="24"
-                                Height="24"
-                                Background="Transparent"
-                                BorderThickness="0"
-                                Foreground="#86868B"
-                                Cursor="Hand"
-                                VerticalAlignment="Center"
-                                Margin="10,0,0,0"
-                                Click="MinimizeDeltaSync_Click"
-                                ToolTip="Simge durumuna küçült">
-                            <Button.Style>
-                                <Style TargetType="Button">
-                                    <Style.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter Property="Foreground" Value="#1D1D1F"/>
-                                        </Trigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
+                        <Button Grid.Column="2" Style="{StaticResource BannerCloseButton}" VerticalAlignment="Top" Click="MinimizeDeltaSync_Click" ToolTip="Simge durumuna küçült">
+                            <Path Data="{StaticResource MinusGlyphGeometry}" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="8" Height="8" Stretch="None"/>
                         </Button>
                     </Grid>
                 </Border>
-                
+
                 <!-- Delta Sync Minimized Indicator -->
-                <Border x:Name="DeltaSyncMinimized" 
-                        Background="#FFFFFF" 
-                        CornerRadius="0,0,16,16"
-                        Padding="12,10"
+                <Border x:Name="DeltaSyncMinimized"
+                        Background="#FFFFFF"
+                        CornerRadius="0,0,8,8"
+                        Padding="12,9"
                         Visibility="Collapsed"
                         BorderBrush="#E2E8F0"
                         BorderThickness="0,1,0,0"
                         Cursor="Hand"
                         MouseLeftButtonDown="ExpandDeltaSync_Click"
                         ToolTip="Tıklayarak genişlet">
-                    <StackPanel Orientation="Horizontal" 
-                                HorizontalAlignment="Center" 
-                                VerticalAlignment="Center">
-                        <TextBlock Text="🔄" 
-                                   FontSize="14" 
-                                   VerticalAlignment="Center"
-                                   Margin="0,0,8,0"/>
-                        <TextBlock x:Name="DeltaSyncMinimizedText" 
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <Path Data="{StaticResource SyncGeometry}" Stroke="#3F7EE8" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                              Width="13" Height="13" Stretch="Uniform" VerticalAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock x:Name="DeltaSyncMinimizedText"
                                    Text="Kontrol ediliyor"
-                                   FontSize="12" 
-                                   Foreground="#007AFF" 
+                                   FontSize="12"
+                                   Foreground="#2F4A73"
                                    FontWeight="SemiBold"
                                    VerticalAlignment="Center"/>
                     </StackPanel>

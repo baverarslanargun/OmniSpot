@@ -69,8 +69,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            System.Windows.MessageBox.Show(this, $"Tercih kaydedilemedi: {ex.Message}", "Küçük resimler",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            ModernDialog.Show(this, "Tercih kaydedilemedi", ex.Message, DialogKind.Danger);
         }
     }
 }

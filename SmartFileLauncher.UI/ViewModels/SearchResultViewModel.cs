@@ -11,7 +11,7 @@ public class SearchResultViewModel : INotifyPropertyChanged
     public string Name { get; set; } = "";
     public string FullPath { get; set; } = "";
     public double Score { get; set; }
-    public string Icon { get; set; } = "📄";
+    public string Icon { get; set; } = "file";
     public bool IsDirectory { get; set; }
 
     private static MediaBrush GetFrozenBrush(byte r, byte g, byte b)
@@ -38,7 +38,36 @@ public class SearchResultViewModel : INotifyPropertyChanged
             {
                 _thumbnail = value;
                 PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ThumbnailHasFrame)));
             }
+        }
+    }
+
+    public bool ThumbnailHasFrame => Services.ThumbnailFraming.IsOpaque(Thumbnail);
+
+    private bool _isNew;
+
+    public bool IsNew
+    {
+        get => _isNew;
+        set
+        {
+            if (_isNew == value) return;
+            _isNew = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsNew)));
+        }
+    }
+
+    private bool _isRemoving;
+
+    public bool IsRemoving
+    {
+        get => _isRemoving;
+        set
+        {
+            if (_isRemoving == value) return;
+            _isRemoving = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsRemoving)));
         }
     }
 

@@ -265,6 +265,7 @@ public class ThumbnailService : IThumbnailService, IThumbnailCacheControl
 
             var shellThumbnail = shellFile.Thumbnail;
             shellThumbnail.AllowBiggerSize = false;
+            shellThumbnail.FormatOption = ShellThumbnailFormatOption.ThumbnailOnly;
             shellThumbnail.CurrentSize = new System.Windows.Size(size, size);
 
             var bitmapSource = shellThumbnail.BitmapSource;

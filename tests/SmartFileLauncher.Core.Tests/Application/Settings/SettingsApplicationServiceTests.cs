@@ -36,6 +36,7 @@ public sealed class SettingsApplicationServiceTests
                 StartWithWindows = true,
                 MinimizeToTrayOnClose = false,
                 NaturalLanguageModeEnabled = true,
+                AiReasoningEffort = "high",
                 GridViewEnabled = true,
                 SearchDebounceMs = 250
             };
@@ -54,6 +55,7 @@ public sealed class SettingsApplicationServiceTests
                 expected.NaturalLanguageModeEnabled,
                 actual.NaturalLanguageModeEnabled);
             Assert.Equal(expected.GridViewEnabled, actual.GridViewEnabled);
+            Assert.Equal(expected.AiReasoningEffort, actual.AiReasoningEffort);
             Assert.Equal(expected.SearchDebounceMs, actual.SearchDebounceMs);
         }
         finally
@@ -83,6 +85,16 @@ public sealed class SettingsApplicationServiceTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    [Fact]
+    public void OlderSettingsAndResetUseMediumEffort()
+    {
+        var settings = System.Text.Json.JsonSerializer.Deserialize<AppSettings>("{\"NaturalLanguageModeEnabled\":true}")!;
+        Assert.Equal("medium", settings.AiReasoningEffort);
+        settings.AiReasoningEffort = "high";
+        settings.ResetToDefaults();
+        Assert.Equal("medium", settings.AiReasoningEffort);
     }
 
     [Fact]

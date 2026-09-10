@@ -10,7 +10,7 @@ public class DesktopIconViewModel : INotifyPropertyChanged
 {
     private string _name = "";
     private string _fullPath = "";
-    private string _icon = "📄";
+    private string _icon = "file";
     private bool _isDirectory;
     private bool _isCut;
     private double _opacity = 1.0;
@@ -154,11 +154,14 @@ public class DesktopIconViewModel : INotifyPropertyChanged
             {
                 _thumbnail = value;
                 OnPropertyChanged(nameof(Thumbnail));
+                OnPropertyChanged(nameof(ThumbnailHasFrame));
             }
         }
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;
+
+    public bool ThumbnailHasFrame => Services.ThumbnailFraming.IsOpaque(Thumbnail);
 
     private void OnPropertyChanged(string propertyName)
     {

@@ -8,6 +8,7 @@ public sealed class AppSettings
     public bool StartWithWindows { get; set; }
     public bool MinimizeToTrayOnClose { get; set; } = true;
     public bool NaturalLanguageModeEnabled { get; set; }
+    public string AiReasoningEffort { get; set; } = "medium";
     public bool GridViewEnabled { get; set; }
     public int SearchDebounceMs { get; set; } = 1200;
     public bool DiagnosticsLoggingEnabled { get; set; }
@@ -32,6 +33,7 @@ public sealed class AppSettings
         StartWithWindows = false;
         MinimizeToTrayOnClose = true;
         NaturalLanguageModeEnabled = false;
+        AiReasoningEffort = "medium";
         GridViewEnabled = false;
         SearchDebounceMs = 1200;
         DiagnosticsLoggingEnabled = false;

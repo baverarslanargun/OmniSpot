@@ -123,7 +123,7 @@ internal sealed class ThumbnailViewportScheduler
         for (var index = load.Start; index < load.End; index++)
         {
             var item = items[index];
-            if (item.Thumbnail != null || !_requested.Add(item))
+            if (item.IsDirectory || !ThumbnailKinds.HasPreview(item.Icon) || item.Thumbnail != null || !_requested.Add(item))
             {
                 continue;
             }
