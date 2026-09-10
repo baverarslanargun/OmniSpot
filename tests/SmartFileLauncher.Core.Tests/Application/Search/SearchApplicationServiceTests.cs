@@ -6,6 +6,25 @@ namespace SmartFileLauncher.Core.Tests.Application.Search;
 
 public sealed class SearchApplicationServiceTests
 {
+    [Theory]
+    [InlineData("low", true, true)]
+    [InlineData("medium", true, true)]
+    [InlineData("high", true, true)]
+    [InlineData("high", false, true)]
+    [InlineData("high", true, false)]
+    public async Task SelectedEffortReachesOnlyOnlineAiParser(string effort, bool naturalLanguage, bool online)
+    {
+        string? received = null;
+        var service = new SearchApplicationService(
+            (_, _, _) => [], (_, _, _) => [],
+            (_, selected, _) => { received = selected; return Task.FromResult(new StructuredQuery()); },
+            _ => new StructuredQuery());
+
+        await service.SearchAsync(new SearchRequest("rapor", naturalLanguage, online, ReasoningEffort: effort));
+
+        Assert.Equal(naturalLanguage && online ? effort : null, received);
+    }
+
     [Fact]
     public async Task StandardModeUsesOnlyStandardSearch()
     {

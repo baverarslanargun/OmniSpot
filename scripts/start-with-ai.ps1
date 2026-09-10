@@ -3,10 +3,10 @@ param(
     [string]$ConfigPath = (Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OmniSpot\groq-keys.json"),
     [string]$ExecutablePath,
     [string]$ProbeQuery,
-    [ValidateSet("qwen/qwen3.6-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "llama-3.3-70b-versatile")]
-    [string]$ProbeModel = "qwen/qwen3.6-27b",
+    [ValidateSet("qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "llama-3.3-70b-versatile")]
+    [string]$ProbeModel = "qwen/qwen3.8-27b",
     [ValidateSet("none", "default", "low", "medium", "high")]
-    [string]$ProbeReasoningEffort = "none",
+    [string]$ProbeReasoningEffort = "medium",
     [switch]$ValidateOnly
 )
 

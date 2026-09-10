@@ -200,6 +200,27 @@ public class AdvancedSearchEngine
                 MergeMatches(group.Select(item => item.matches))))
             .ToList();
 
+        if (query.FolderContextTerms.Count > 0)
+        {
+            var groups = query.FolderContextTerms
+                .GroupBy(term => term.AnchorGroup)
+                .Select(group => group.Select(term => _tokenizer.Tokenize(term.Text)
+                    .Select(SearchTextNormalizer.Fold).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()).ToArray())
+                .ToArray();
+            finalResults = finalResults.Where(candidate =>
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var segments = (Path.GetDirectoryName(candidate.node.FullPath) ?? "")
+                    .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
+                    .Select(segment => _tokenizer.Tokenize(segment).Select(SearchTextNormalizer.Fold).ToHashSet(StringComparer.OrdinalIgnoreCase))
+                    .ToArray();
+                return groups.All(group => group.Any(tokens => tokens.Length > 0 &&
+                    segments.Any(segment => tokens.All(token => segment.Any(part =>
+                        part.Equals(token, StringComparison.OrdinalIgnoreCase) ||
+                        (token.Length >= 4 && part.Contains(token, StringComparison.OrdinalIgnoreCase)))))));
+            }).ToList();
+        }
+
         if (query.DateFilter != null)
         {
             finalResults = ApplyDateFilter(finalResults, query.DateFilter, cancellationToken);

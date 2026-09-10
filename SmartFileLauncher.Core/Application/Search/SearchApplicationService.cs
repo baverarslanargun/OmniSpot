@@ -6,13 +6,25 @@ public sealed class SearchApplicationService : ISearchApplicationService
 {
     private readonly Func<string, int, CancellationToken, IReadOnlyList<SearchResult>> _standardSearch;
     private readonly Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>> _advancedSearch;
-    private readonly Func<string, CancellationToken, Task<StructuredQuery>> _onlineIntentParser;
+    private readonly Func<string, string?, CancellationToken, Task<StructuredQuery>> _onlineIntentParser;
     private readonly Func<string, StructuredQuery> _ruleBasedIntentParser;
 
     public SearchApplicationService(
         Func<string, int, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
         Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
         Func<string, CancellationToken, Task<StructuredQuery>> onlineIntentParser,
+        Func<string, StructuredQuery> ruleBasedIntentParser)
+        : this(standardSearch, advancedSearch,
+            onlineIntentParser == null ? throw new ArgumentNullException(nameof(onlineIntentParser)) :
+                (query, _, cancellationToken) => onlineIntentParser(query, cancellationToken),
+            ruleBasedIntentParser)
+    {
+    }
+
+    public SearchApplicationService(
+        Func<string, int, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
+        Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
+        Func<string, string?, CancellationToken, Task<StructuredQuery>> onlineIntentParser,
         Func<string, StructuredQuery> ruleBasedIntentParser)
     {
         _standardSearch = standardSearch ?? throw new ArgumentNullException(nameof(standardSearch));
@@ -61,7 +73,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
 
         try
         {
-            structuredQuery = await _onlineIntentParser(request.Query, cancellationToken)
+            structuredQuery = await _onlineIntentParser(request.Query, request.ReasoningEffort, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException)

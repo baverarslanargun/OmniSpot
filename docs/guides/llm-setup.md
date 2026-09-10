@@ -6,12 +6,16 @@ OmniSpot'un aktif doğal dil akışı yerel Phi-3, ONNX veya LLamaSharp modeli k
 
 Standart arama Groq kullanmaz ve yerel indeks üzerinde çalışır.
 
+AI düğmesine fareyle gelindiğinde veya klavyeyle odaklanıldığında yanında efor ibresi görünür. İbreye her tıklama Low → Medium → High → Low döngüsünde ilerler. Varsayılan Orta düzeyidir; seçim kaydedilir ve hem intent hem keyword isteğine uygulanır. Efor değiştiğinde mevcut sorgu yeniden aranır. Her istek seçimini ayrı taşır; sonraki seçim devam eden çağrının profilini değiştirmez. Yüksek efor daha uzun sürebilir; daha iyi sonuç veya kota sorunlarının çözülmesini garanti etmez. Temperature 0.6, strict JSON ve mevcut çıktı bütçesi korunur.
+
 ## Akış
 
 1. Kullanıcı arayüzünde Doğal Dil modu açılır.
 2. `IntentParser.ParseWithGroqAsync` aynı sorgu için intent ve keyword isteklerini başlatır.
 3. Intent sonucu filtre, hedef türü, tarih/boyut ve benzeri yapılandırılmış alanlara dönüştürülür.
 4. Keyword sonucu başarılıysa terimler zorunlu `anchor`, sıralama amaçlı `phrase` ve düşük etkili `context` rollerine ayrılır. Aynı anchor grubundaki biçim ve çeviriler alternatif, farklı anchor grupları birlikte zorunludur. Ağırlıklar modelden alınmaz; rol, kategori ve sıra temelinde uygulama tarafından deterministik atanır.
+Dosya hedefli başarılı AI sorgusunda, intent klasör adıyla örtüşen anchor grubu `FolderContextTerms` alanına ayrılır. En az bir dosya anchor grubu korunur. Motor dosya adaylarını kalan anchorlarla bulur, klasör gruplarını üst klasörlerde doğrular; Türkçe/ASCII biçimleri ve grup içi alternatifler desteklenir. Klasör bağlamı dosya adıyla karşılanamaz. Klasör hedefi, yalnız tek anchor ve fallback akışları mevcut davranışını korur. Standart arama bu alanı üretmez.
+
 5. Intent yanlışlıkla `filter` dönse bile keyword yanıtında metadata olmayan bir anchor varsa sorgu keyword modunda korunur.
 6. Intent isteği, bağlantı veya zaman aşımı nedeniyle başarısızsa `ParseIntent` kural tabanlı fallback'i çalışır.
 
@@ -19,10 +23,10 @@ Aktif endpoint ve modeller:
 
 | Amaç | Model |
 |---|---|
-| Intent analizi | `openai/gpt-oss-120b` (`reasoning_effort=medium`) |
-| Keyword üretimi | `qwen/qwen3.6-27b` |
+| Intent analizi | `qwen/qwen3.8-27b` (`reasoning_effort=medium`) |
+| Keyword üretimi | `qwen/qwen3.8-27b` (`reasoning_effort=medium`) |
 
-İki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve her biri 30 saniyelik linked-timeout sınırına sahiptir. Intent çağrısı `medium`, keyword çağrısı `none` reasoning profiliyle çalışır. Varsayılan profilde araç yoktur; yalnız açıkça `groq/compound` seçilen alternatif profilde `code_interpreter` payload'ı ve `Groq-Model-Version: latest` header'ı eklenebilir.
+İki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve her biri 30 saniyelik linked-timeout sınırına sahiptir. İki çağrı da `medium` reasoning, `temperature=0.6`, `top_p=0.95`, `max_completion_tokens=2048` ve `reasoning_format=hidden` profiliyle çalışır. Temperature, JSON hatası sonrası kullanıcı tercihiyle 0.6 olarak denenmektedir; nedensellik ve arama kalitesi henüz doğrulanmamıştır. İki Qwen çağrısında da ayrı [Groq Structured Outputs](https://console.groq.com/docs/structured-outputs) şemaları (`json_schema`, `strict=true`) kullanılır. Varsayılan profilde araç yoktur; yalnız açıkça `groq/compound` seçilen alternatif profilde `code_interpreter` payload'ı ve `Groq-Model-Version: latest` header'ı eklenebilir.
 
 ## API anahtarı
 
@@ -114,7 +118,7 @@ Thinking karşılaştırması için yalnız probe çağrısında:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeReasoningEffort default
 ```
 
-Qwen 3.6 27B için `none` hızlı non-thinking, `default` ise thinking modudur. Probe thinking modunu yalnız intent çağrısında açar; keyword çağrısı hızlı `none` modunda kalır. Intent tarafında Groq'nun önerdiği `temperature=0.6`, `top_p=0.95` ve `max_completion_tokens=2048` profiliyle JSON çıktısına uygun `reasoning_format=hidden` kullanılır.
+Probe varsayılanları üretimle aynıdır: iki aşamada da Qwen 3.8 27B ve `medium`. Qwen için `none` reasoning'i kapatır; `default`, `low`, `medium` ve `high` açar. `-ProbeReasoningEffort` yalnız intent seviyesini değiştirir; keyword çağrısı `medium` olarak kalır. Thinking açıkken `temperature=0.6`, `top_p=0.95`, `max_completion_tokens=2048` ve JSON çıktısına uygun `reasoning_format=hidden` kullanılır. Açıkça seçilen `none` profilinde mevcut `temperature=0.3` korunur.
 
 GPT-OSS 20B veya 120B intent karşılaştırması için `low`, `medium` veya `high` kullanın:
 
@@ -122,13 +126,13 @@ GPT-OSS 20B veya 120B intent karşılaştırması için `low`, `medium` veya `hi
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeModel openai/gpt-oss-120b -ProbeReasoningEffort medium
 ```
 
-`-ProbeModel openai/gpt-oss-20b` değeriyle aynı profil 20B modelinde çalıştırılabilir. OSS profilinde intent çağrısı `temperature=1`, `top_p=1` ve `max_completion_tokens=2048` kullanır. Keyword modeli Qwen non-thinking olarak kalır.
+`-ProbeModel openai/gpt-oss-20b` değeriyle aynı profil 20B modelinde çalıştırılabilir. OSS profilinde intent çağrısı `temperature=1`, `top_p=1` ve `max_completion_tokens=2048` kullanır. Keyword modeli Qwen 3.8 `medium` olarak kalır.
 
 Groq Compound veya Llama 3.3 70B intent karşılaştırması için reasoning değeri `none` bırakılır:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeModel groq/compound
-powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeModel llama-3.3-70b-versatile
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeModel groq/compound -ProbeReasoningEffort none
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeModel llama-3.3-70b-versatile -ProbeReasoningEffort none
 ```
 
 İki profil de `temperature=1`, `top_p=1` ve `max_completion_tokens=2048` kullanır. Llama çağrısında JSON Object Mode açıktır. Compound çağrısında `Groq-Model-Version: latest` başlığı ile yalnız `code_interpreter` aracı açılır; `web_search` ve `visit_website` kapalıdır, `response_format` gönderilmez. Compound intent çağrısı araç bağlamını küçük tutmak için aynı JSON sözleşmesinin kısa prompt sürümünü kullanır.

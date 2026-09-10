@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Search;
 
 namespace SmartFileLauncher.Core.Services;
 
@@ -15,15 +16,15 @@ public class IntentParser
     private const string KeywordApiKeyEnvironmentVariable = "OMNISPOT_GROQ_KEYWORD_API_KEY";
     private const string SharedApiKeyEnvironmentVariable = "OMNISPOT_GROQ_API_KEY";
     private const string GroqApiUrl = "https://api.groq.com/openai/v1/chat/completions";
-    private const string QwenModel = "qwen/qwen3.6-27b";
+    private const string QwenModel = "qwen/qwen3.8-27b";
     private const string Oss20BModel = "openai/gpt-oss-20b";
     private const string Oss120BModel = "openai/gpt-oss-120b";
     private const string CompoundModel = "groq/compound";
     private const string Llama33Model = "llama-3.3-70b-versatile";
-    private const string DefaultIntentModel = Oss120BModel;
+    private const string DefaultIntentModel = QwenModel;
     private const string DefaultKeywordModel = QwenModel;
     private const string DefaultIntentReasoningEffort = "medium";
-    private const string DefaultKeywordReasoningEffort = "none";
+    private const string DefaultKeywordReasoningEffort = "medium";
     private const int MaxQueryLength = 500;
     private const int MaxAttempts = 2;
 
@@ -144,8 +145,14 @@ public class IntentParser
         _keywordConfigured = true;
     }
 
-    public async Task<StructuredQuery> ParseWithGroqAsync(
+    public Task<StructuredQuery> ParseWithGroqAsync(
         string query,
+        CancellationToken cancellationToken = default) =>
+        ParseWithGroqEffortAsync(query, null, cancellationToken);
+
+    public async Task<StructuredQuery> ParseWithGroqEffortAsync(
+        string query,
+        string? reasoningEffort,
         CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(query))
@@ -170,13 +177,18 @@ public class IntentParser
             var localNow = TimeZoneInfo.ConvertTime(_nowProvider(), _timeZone);
             var today = DateOnly.FromDateTime(localNow.DateTime).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
+            var intentEffort = reasoningEffort == null ? _intentReasoningEffort : NormalizeReasoningEffort(reasoningEffort, _intentModel);
+            var keywordEffort = reasoningEffort == null ? _keywordReasoningEffort : NormalizeReasoningEffort(reasoningEffort, _keywordModel);
             var intentTask = CallIntentApiWithErrorHandlingAsync(
                 query,
                 today,
                 _timeZone.Id,
+                intentEffort,
                 cancellationToken);
             var keywordTask = _keywordConfigured
-                ? CallKeywordApiWithErrorHandlingAsync(query, cancellationToken)
+                ? CallKeywordApiWithErrorHandlingAsync(query,
+                    keywordEffort,
+                    cancellationToken)
                 : Task.FromResult<(GroqKeywordResult? Result, Exception? Error)>(
                     (null, new InvalidOperationException("Groq keyword API anahtarı yapılandırılmamış")));
 
@@ -208,6 +220,7 @@ public class IntentParser
             else if (keywordResult != null && keywordError == null)
             {
                 result.SearchTerms = BuildSearchTerms(keywordResult);
+                SeparateFolderContext(result);
                 result.Keywords = result.SearchTerms.Select(term => term.Text).ToList();
             }
             else
@@ -275,11 +288,12 @@ public class IntentParser
         string query,
         string today,
         string timeZone,
+        string reasoningEffort,
         CancellationToken cancellationToken)
     {
         try
         {
-            return (await CallIntentApiAsync(query, today, timeZone, cancellationToken), null);
+            return (await CallIntentApiAsync(query, today, timeZone, reasoningEffort, cancellationToken), null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -293,11 +307,12 @@ public class IntentParser
 
     private async Task<(GroqKeywordResult? Result, Exception? Error)> CallKeywordApiWithErrorHandlingAsync(
         string query,
+        string reasoningEffort,
         CancellationToken cancellationToken)
     {
         try
         {
-            return (await CallKeywordApiAsync(query, cancellationToken), null);
+            return (await CallKeywordApiAsync(query, reasoningEffort, cancellationToken), null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -313,10 +328,11 @@ public class IntentParser
         string query,
         string today,
         string timeZone,
+        string reasoningEffort,
         CancellationToken cancellationToken)
     {
         var input = JsonSerializer.Serialize(new { today, timezone = timeZone, query });
-        var reasoningEnabled = IsReasoningEnabled(_intentReasoningEffort);
+        var reasoningEnabled = IsReasoningEnabled(reasoningEffort);
         var standardProfile = UsesStandardProfile(_intentModel);
         var intentPrompt = _intentModel == CompoundModel
             ? CompoundIntentPrompt
@@ -339,21 +355,17 @@ public class IntentParser
         {
             ["model"] = _intentModel,
             ["messages"] = messages,
-            ["temperature"] = standardProfile
-                ? 1.0
-                : reasoningEnabled
-                ? GetReasoningTemperature(_intentModel)
-                : 0.3,
+            ["temperature"] = reasoningEnabled && _intentModel == QwenModel ? 0.6 : standardProfile || reasoningEnabled ? 1.0 : 0.3,
             ["max_completion_tokens"] = reasoningEnabled || standardProfile ? 2048 : 450
         };
         if (SupportsReasoning(_intentModel))
         {
-            requestBody["reasoning_effort"] = _intentReasoningEffort;
+            requestBody["reasoning_effort"] = reasoningEffort;
         }
 
         if (_intentModel != CompoundModel)
         {
-            requestBody["response_format"] = new { type = "json_object" };
+            requestBody["response_format"] = CreateResponseFormat(_intentModel, keyword: false);
         }
 
         if (reasoningEnabled)
@@ -396,10 +408,11 @@ public class IntentParser
 
     private async Task<GroqKeywordResult> CallKeywordApiAsync(
         string query,
+        string reasoningEffort,
         CancellationToken cancellationToken)
     {
         var input = JsonSerializer.Serialize(new { query });
-        var reasoningEnabled = IsReasoningEnabled(_keywordReasoningEffort);
+        var reasoningEnabled = IsReasoningEnabled(reasoningEffort);
         var standardProfile = UsesStandardProfile(_keywordModel);
         object[] messages = reasoningEnabled || standardProfile
             ?
@@ -419,21 +432,17 @@ public class IntentParser
         {
             ["model"] = _keywordModel,
             ["messages"] = messages,
-            ["temperature"] = standardProfile
-                ? 1.0
-                : reasoningEnabled
-                ? GetReasoningTemperature(_keywordModel)
-                : 0.3,
+            ["temperature"] = reasoningEnabled && _keywordModel == QwenModel ? 0.6 : standardProfile || reasoningEnabled ? 1.0 : 0.3,
             ["max_completion_tokens"] = reasoningEnabled || standardProfile ? 2048 : 350
         };
         if (SupportsReasoning(_keywordModel))
         {
-            requestBody["reasoning_effort"] = _keywordReasoningEffort;
+            requestBody["reasoning_effort"] = reasoningEffort;
         }
 
         if (_keywordModel != CompoundModel)
         {
-            requestBody["response_format"] = new { type = "json_object" };
+            requestBody["response_format"] = CreateResponseFormat(_keywordModel, keyword: true);
         }
 
         if (reasoningEnabled)
@@ -542,7 +551,7 @@ public class IntentParser
             ? normalized
             : throw new ArgumentOutOfRangeException(
                 nameof(model),
-                "Model Qwen 3.6 27B, GPT-OSS 20B, GPT-OSS 120B, Groq Compound veya Llama 3.3 70B olmalıdır.");
+                "Model Qwen 3.8 27B, GPT-OSS 20B, GPT-OSS 120B, Groq Compound veya Llama 3.3 70B olmalıdır.");
     }
 
     private static string NormalizeReasoningEffort(
@@ -552,7 +561,7 @@ public class IntentParser
         var normalized = reasoningEffort.Trim().ToLowerInvariant();
         var supported = model switch
         {
-            QwenModel => normalized is "none" or "default",
+            QwenModel => normalized is "none" or "default" or "low" or "medium" or "high",
             Oss20BModel or Oss120BModel => normalized is "low" or "medium" or "high",
             _ => normalized == "none"
         };
@@ -566,14 +575,64 @@ public class IntentParser
     private static bool IsReasoningEnabled(string reasoningEffort) =>
         reasoningEffort != "none";
 
+    private static object CreateResponseFormat(string model, bool keyword)
+    {
+        if (model != QwenModel)
+        {
+            return new { type = "json_object" };
+        }
+
+        var strings = new { type = "array", items = new { type = "string" } };
+        var properties = keyword
+            ? new Dictionary<string, object>
+            {
+                ["anchors"] = new
+                {
+                    type = "array",
+                    items = new
+                    {
+                        type = "object",
+                        properties = new { primary = new { type = "string" }, variants = strings, translations = strings },
+                        required = new[] { "primary", "variants", "translations" },
+                        additionalProperties = false
+                    }
+                },
+                ["phrases"] = strings,
+                ["context"] = strings
+            }
+            : new Dictionary<string, object>
+            {
+                ["mode"] = new { type = "string", @enum = new[] { "filter", "keyword" } },
+                ["target"] = new { type = "string", @enum = new[] { "file", "folder", "both" } },
+                ["hard_extensions"] = strings,
+                ["soft_extensions"] = strings,
+                ["folders"] = strings,
+                ["created_from"] = new { type = new[] { "string", "null" } },
+                ["created_to_exclusive"] = new { type = new[] { "string", "null" } },
+                ["modified_from"] = new { type = new[] { "string", "null" } },
+                ["modified_to_exclusive"] = new { type = new[] { "string", "null" } },
+                ["min_mb"] = new { type = new[] { "number", "null" } },
+                ["max_mb"] = new { type = new[] { "number", "null" } },
+                ["open"] = new { type = "boolean" }
+            };
+
+        return new
+        {
+            type = "json_schema",
+            json_schema = new
+            {
+                name = keyword ? "search_keywords" : "search_intent",
+                strict = true,
+                schema = new { type = "object", properties, required = properties.Keys.ToArray(), additionalProperties = false }
+            }
+        };
+    }
+
     private static bool SupportsReasoning(string model) =>
         model is QwenModel or Oss20BModel or Oss120BModel;
 
     private static bool UsesStandardProfile(string model) =>
         model is CompoundModel or Llama33Model;
-
-    private static double GetReasoningTemperature(string model) =>
-        IsOssModel(model) ? 1.0 : 0.6;
 
     private static double GetReasoningTopP(string model) =>
         IsOssModel(model) ? 1.0 : 0.95;
@@ -857,6 +916,33 @@ public class IntentParser
             .ToList();
     }
 
+    private static void SeparateFolderContext(StructuredQuery query)
+    {
+        if (query.TargetType?.PrefersFile != true || query.FolderHints.Count == 0)
+        {
+            return;
+        }
+
+        var folders = query.FolderHints
+            .Select(hint => SearchTextNormalizer.Fold(hint.Name.ToLowerInvariant()))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var folderGroups = query.SearchTerms
+            .Where(term => term.Role == SearchTermRole.Anchor &&
+                folders.Contains(SearchTextNormalizer.Fold(term.Text.ToLowerInvariant())))
+            .Select(term => term.AnchorGroup)
+            .ToHashSet();
+        if (!query.SearchTerms.Any(term => term.Role == SearchTermRole.Anchor &&
+            !folderGroups.Contains(term.AnchorGroup)))
+        {
+            return;
+        }
+
+        query.FolderContextTerms = query.SearchTerms
+            .Where(term => term.Role == SearchTermRole.Anchor && folderGroups.Contains(term.AnchorGroup))
+            .ToList();
+        query.SearchTerms = query.SearchTerms.Except(query.FolderContextTerms).ToList();
+    }
+
     private static bool HasNonMetadataAnchor(
         StructuredQuery intent,
         GroqKeywordResult keywordResult)
@@ -1095,7 +1181,9 @@ Rules:
 - In filter mode, expand an explicit generic type into its common extensions.
 - soft_extensions are only semantic guesses for ranking. Never repeat hard extensions there.
 - Use extension names without a leading dot.
-- folders contain only locations explicitly mentioned by the user. Normalize common Turkish names to Desktop, Documents, Downloads, Pictures, Music or Videos.
+- folders contain locations explicitly mentioned by the user. Normalize common Turkish names to Desktop, Documents, Downloads, Pictures, Music or Videos.
+- In keyword mode a project, application, site or repository name the user mentions is also a folder. Emit the bare name in its likely on-disk form and drop words such as project, application or site. In filter mode emit only the standard folders listed above.
+- If the user identifies a containing site or project by its owner or client instead of a name, use that person's bare name as folder context. A person mentioned only as the author, recipient or subject of a file is not a folder.
 - Convert relative dates with the supplied today and timezone.
 - Date upper bounds are exclusive. A request for one day uses that day as from and the next day as to_exclusive.
 - Use created dates for downloaded, captured or created wording. Use modified dates for edited or changed wording.
@@ -1151,12 +1239,17 @@ Retrieval semantics:
 - Every token of a multiword anchor term is required together.
 - Only anchor terms can admit candidates.
 - phrases and context only improve ranking; they cannot admit candidates.
+- An anchor that matches no filename removes every candidate, even when every other anchor matches.
+- Exception: a name explicitly identifying the containing project, application, site or repository may be an anchor. This includes an owner or client name used to identify that site or project. The intent classifier identifies that name as folder context, and the search engine then checks it in ancestor folders instead of requiring it in the filename. A person mentioned only as author, recipient or subject is not a containing folder.
 
 Selection rules:
-- Put each independently required lexical concept in its own anchor.
-- Keep an inseparable name, title, entity, or artifact concept as one multiword anchor.
+- Put each independently required lexical concept in its own anchor, and prefer the fewest anchors that identify the file. Use one anchor when a single word identifies it, two in an ordinary query, and a third only when that word is certain to appear in the filename.
+- An anchor term must be a single word. Use a multiword anchor only for a proper name or identifier that files are actually named after, where those words nearly always appear together in such a name.
+- A concept unlikely to appear literally in a filename belongs in context, never in an anchor. This covers possessives, pronouns, relational descriptions, and the circumstances under which the file was made or received.
+- Do not discard spatial or directional terms merely because they describe position or direction. They may be anchors when they are distinctive filename clues supported by the query.
+- Name what the file is or does. When an action or role separates the file from many similar ones, make it an anchor and give its likely filename forms in Turkish and English.
 - primary: the closest concise expression of the user's concept.
-- variants: at most 3 high-confidence alternatives for the same concept. Prefer inflections, ASCII forms, joined/underscore/hyphen filename forms, established abbreviations, official aliases, and highly reliable same-intent artifact names.
+- variants: at most 3 high-confidence alternatives for the same concept. Prefer inflections, ASCII forms, joined/underscore/hyphen filename forms, established abbreviations, official aliases, and highly reliable same-intent artifact names. For a Turkish term always include the suffix-stripped stem and the ASCII-folded form.
 - translations: at most 2 direct, likely filename equivalents. Never add merely related foreign concepts.
 - phrases: at most 2 precise multiword combinations useful only for ranking.
 - context: at most 3 query-supported or strongly diagnostic ranking clues. Leave it empty rather than inventing a domain or meaning.
@@ -1164,6 +1257,7 @@ Selection rules:
 - Keep an explicit year only when it is part of the searched name or content identity, not merely a date filter.
 - For a metadata-only query involving file type, path, size, or date/time, return empty arrays.
 - For a mixed metadata-and-content query, output only its lexical content concepts; metadata is handled elsewhere.
+- Never emit a file type, an extension, a format name, or a word meaning file anywhere in the object.
 - Never add generic domain vocabulary, speculative topics, arbitrary dates, version words, or filler.
 - Do not broaden ambiguous proper names beyond the meaning supported by the query.
 - Do not duplicate a term, case-insensitively, anywhere in the object.
@@ -1181,13 +1275,19 @@ Input: Acme sözleşmesi
 Output: {"anchors":[{"primary":"Acme","variants":[],"translations":[]},{"primary":"sözleşme","variants":["sözleşmesi","sozlesme","sozlesmesi"],"translations":["contract","agreement"]}],"phrases":["Acme sözleşmesi"],"context":[]}
 
 Input: uçak bileti
-Output: {"anchors":[{"primary":"uçak bileti","variants":["ucakbileti","PNR","uçuş rezervasyonu"],"translations":["flight ticket","e-ticket"]}],"phrases":["boarding pass","airline booking confirmation"],"context":["biniş kartı","booking reference","passenger itinerary"]}
+Output: {"anchors":[{"primary":"bilet","variants":["bileti","biletim"],"translations":["ticket"]}],"phrases":["uçak bileti"],"context":["uçuş","PNR","boarding pass"]}
+
+Input: annemin bana attığı kek tarifi
+Output: {"anchors":[{"primary":"tarif","variants":["tarifi","tarifler"],"translations":["recipe"]},{"primary":"kek","variants":[],"translations":["cake"]}],"phrases":["kek tarifi"],"context":["anne"]}
+
+Input: geçen yıl hazırladığım yıllık faaliyet raporu
+Output: {"anchors":[{"primary":"rapor","variants":["raporu","raporlar"],"translations":["report"]},{"primary":"faaliyet","variants":["faaliyetleri"],"translations":["activity"]}],"phrases":["faaliyet raporu"],"context":["yıllık"]}
 
 Input: INC-204 yazışmaları
 Output: {"anchors":[{"primary":"INC-204","variants":["INC204","INC_204"],"translations":[]},{"primary":"yazışma","variants":["yazışmaları","yazismalari","yazışmalar"],"translations":["correspondence"]}],"phrases":["INC-204 yazışmaları"],"context":[]}
 
 Input: Jaguar bakım kılavuzu
-Output: {"anchors":[{"primary":"Jaguar","variants":[],"translations":[]},{"primary":"bakım kılavuzu","variants":["bakim kilavuzu","bakım_kılavuzu","servis kılavuzu"],"translations":["maintenance manual","service manual"]}],"phrases":["Jaguar bakım kılavuzu"],"context":[]}
+Output: {"anchors":[{"primary":"Jaguar","variants":[],"translations":[]},{"primary":"kılavuz","variants":["kilavuz","kılavuzu","kilavuzu"],"translations":["manual"]}],"phrases":["bakım kılavuzu"],"context":["bakım","servis"]}
 
 Input: geçen hafta değiştirilmiş PDF dosyaları
 Output: {"anchors":[],"phrases":[],"context":[]}
@@ -1196,7 +1296,7 @@ Input: club rom
 Output: {"anchors":[{"primary":"club rom","variants":["clubrom","club_rom","club-rom"],"translations":[]}],"phrases":[],"context":[]}
 
 Input: müşteri toplantı notları
-Output: {"anchors":[{"primary":"müşteri","variants":["musteri"],"translations":["customer","client"]},{"primary":"toplantı notları","variants":["toplanti notlari","toplantı_notları","tutanak"],"translations":["meeting notes","meeting minutes"]}],"phrases":["müşteri toplantısı","toplantı özeti"],"context":["gündem","aksiyon maddeleri"]}
+Output: {"anchors":[{"primary":"müşteri","variants":["musteri"],"translations":["customer","client"]},{"primary":"toplantı","variants":["toplanti","toplantısı"],"translations":["meeting"]}],"phrases":["toplantı notları"],"context":["not","tutanak","gündem"]}
 """;
 
     private sealed class GroqIntentResult
