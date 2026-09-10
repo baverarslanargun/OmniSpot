@@ -8,6 +8,57 @@ namespace SmartFileLauncher.Core.Tests.Search;
 
 public sealed class SearchBehaviorTests
 {
+    [Theory]
+    [InlineData("proj_sevval", true)]
+    [InlineData("proj_Şevval", true)]
+    [InlineData("proj_S\u0327evval", true)]
+    [InlineData("other", false)]
+    public void FolderContextCombinesAncestorNameWithFileAnchor(string project, bool expected)
+    {
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var target = new FileSystemNode("stocks.php", $@"C:\Root\{project}\admin\stocks.php", false);
+        var unrelated = new FileSystemNode("stocks.php", @"C:\Root\unrelated\stocks.php", false);
+        var nameOnly = new FileSystemNode("sevval_stocks.php", @"C:\Root\unrelated\sevval_stocks.php", false);
+        var wrongType = new FileSystemNode("stocks.txt", $@"C:\Root\{project}\admin\stocks.txt", false);
+        var engine = CreateAdvancedEngine(root, target, unrelated, nameOnly, wrongType);
+        var query = new StructuredQuery
+        {
+            SearchTerms = [new() { Text = "stock", Weight = 1 }],
+            FolderContextTerms = [new() { Text = "Şevval", AnchorGroup = 0, Weight = 1 }],
+            HardExtensions = ["php"],
+            TargetType = new() { File = 1, Folder = 0 }
+        };
+
+        var results = engine.Search(query);
+
+        if (expected) Assert.Equal(target.FullPath, Assert.Single(results).FullPath);
+        else Assert.Empty(results);
+        query.FolderContextTerms.Clear();
+        Assert.Equal(3, engine.Search(query).Count);
+    }
+
+    [Fact]
+    public void FolderContextRequiresEveryGroupAndKeepsMultiwordNamesInOneFolder()
+    {
+        var root = new FileSystemNode("Root", @"C:\Root", true);
+        var target = new FileSystemNode("report.pdf", @"C:\Root\acme_labs\archive\report.pdf", false);
+        var splitName = new FileSystemNode("report.pdf", @"C:\Root\acme\labs\archive\report.pdf", false);
+        var missingGroup = new FileSystemNode("report.pdf", @"C:\Root\acme_labs\other\report.pdf", false);
+        var engine = CreateAdvancedEngine(root, target, splitName, missingGroup);
+        var query = new StructuredQuery
+        {
+            SearchTerms = [new() { Text = "report", Weight = 1 }],
+            FolderContextTerms =
+            [
+                new() { Text = "acme labs", AnchorGroup = 0 },
+                new() { Text = "arşiv", AnchorGroup = 1 },
+                new() { Text = "archive", AnchorGroup = 1 }
+            ]
+        };
+
+        Assert.Equal(target.FullPath, Assert.Single(engine.Search(query)).FullPath);
+    }
+
     [Fact]
     public void StandardSearchRanksExactFileNameFirst()
     {
