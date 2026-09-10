@@ -149,18 +149,3 @@ Probe gerçek Groq isteği gönderir ve hesap kotasını kullanır. Anahtarları
 ## Manuel doğrulama
 
 Groq başarı ve fallback senaryolarını adım adım doğrulamak için [doğal dil arama test rehberini](nlu-integration.md) kullanın.
-
-## Güncelleme notu — 2026-07-31
-
-- Kompakt paralel prompt akışı ve uygulama tarafından atanan kategori ağırlıkları belgelendi.
-- Anahtarsız doğrudan başlatma ile Groq destekli AI başlatma birbirinden ayrıldı.
-- Eksik anahtar, VPN ve kısmi API başarısızlığı davranışları güncel uygulamayla eşleştirildi.
-- PowerShell HTTP katmanını kullanmadan gerçek .NET 8 çağrısı yapan hızlı prompt probe komutu eklendi.
-- Probe için `none` ve `default` reasoning karşılaştırması eklendi.
-- GPT-OSS 120B intent modeli için `low`, `medium` ve `high` probe profilleri eklendi.
-- GPT-OSS 20B intent modeli aynı reasoning profillerine eklendi.
-- Groq Compound ve Llama 3.3 70B intent probe profilleri eklendi.
-- İlk `bu yaza ait biletler` denemesinde üç araç açık Compound isteği `413 Request Entity Too Large` ile reddedildi. Yalnız `code_interpreter` ve kısa intent promptu kullanılan son denemede 4.946 ms içinde `2026-06-01`–`2026-09-01` aralığı doğru üretildi.
-- Üretim intent varsayılanı `openai/gpt-oss-120b` ve `medium` yapıldı; keyword varsayılanı Qwen `none` olarak korundu.
-- Keyword çıktısı zorunlu anchor, alternatif, phrase ve context rollerine ayrıldı; yalnız anchor'ların aday ürettiği davranış belgelendi.
-- `yaz dönemine ait biletler` dahil beş sabit canlı senaryo tek revizyon sınırıyla doğrulandı.
