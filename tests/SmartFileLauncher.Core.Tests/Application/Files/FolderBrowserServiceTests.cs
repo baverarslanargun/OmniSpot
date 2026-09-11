@@ -30,6 +30,24 @@ public sealed class FolderBrowserServiceTests
     }
 
     [Fact]
+    public async Task LoadCarriesSizeAndModifiedTimeForFilters()
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = workspace.CreateDirectory("root");
+        workspace.CreateDirectory(Path.Combine("root", "alt"));
+        var filePath = workspace.CreateFile(Path.Combine("root", "veri.txt"), "0123456789");
+
+        var page = await new FolderBrowserService().LoadAsync(root, 100);
+
+        var folder = Assert.Single(page.Entries, entry => entry.IsDirectory);
+        var file = Assert.Single(page.Entries, entry => !entry.IsDirectory);
+        Assert.Null(folder.SizeBytes);
+        Assert.NotNull(folder.LastWriteTime);
+        Assert.Equal(new FileInfo(filePath).Length, file.SizeBytes);
+        Assert.Equal(new FileInfo(filePath).LastWriteTime, file.LastWriteTime);
+    }
+
+    [Fact]
     public async Task LoadHonorsLimit()
     {
         using var workspace = new TemporaryDirectory();

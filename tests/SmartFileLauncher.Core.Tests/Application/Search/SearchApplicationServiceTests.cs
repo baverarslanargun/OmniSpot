@@ -16,7 +16,7 @@ public sealed class SearchApplicationServiceTests
     {
         string? received = null;
         var service = new SearchApplicationService(
-            (_, _, _) => [], (_, _, _) => [],
+            (_, _, _, _) => [], (_, _, _, _) => [],
             (_, selected, _) => { received = selected; return Task.FromResult(new StructuredQuery()); },
             _ => new StructuredQuery());
 
@@ -273,10 +273,12 @@ public sealed class SearchApplicationServiceTests
         Func<string, CancellationToken, Task<StructuredQuery>>? onlineParser = null,
         Func<string, StructuredQuery>? ruleBasedParser = null) =>
         new(
-            standardSearch ?? ((query, maxResults, cancellationToken) =>
-                Array.Empty<SearchResult>()),
-            advancedSearch ?? ((query, maxResults, cancellationToken) =>
-                Array.Empty<SearchResult>()),
+            (query, maxResults, view, cancellationToken) =>
+                standardSearch?.Invoke(query, maxResults, cancellationToken)
+                ?? Array.Empty<SearchResult>(),
+            (query, maxResults, view, cancellationToken) =>
+                advancedSearch?.Invoke(query, maxResults, cancellationToken)
+                ?? Array.Empty<SearchResult>(),
             onlineParser ?? ((query, cancellationToken) =>
                 Task.FromResult(new StructuredQuery())),
             ruleBasedParser ?? (query => new StructuredQuery()));

@@ -4,4 +4,6 @@ public class SearchResult {
     public string FullPath { get; init; } = string.Empty;
     public double Score { get; init; }
     public bool IsDirectory { get; init; }
+    public long? SizeBytes { get; init; }
+    public DateTime? LastWriteTime { get; init; }
 }

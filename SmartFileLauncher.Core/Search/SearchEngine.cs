@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.DataStructures;
+using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Search;
@@ -47,8 +48,16 @@ public class SearchEngine
     public IReadOnlyList<SearchResult> Search(
         string query,
         int maxResults = 50,
+        CancellationToken cancellationToken = default) =>
+        Search(query, maxResults, ResultView.SearchDefault, cancellationToken);
+
+    public IReadOnlyList<SearchResult> Search(
+        string query,
+        int maxResults,
+        ResultView view,
         CancellationToken cancellationToken = default)
     {
+        ArgumentNullException.ThrowIfNull(view);
         cancellationToken.ThrowIfCancellationRequested();
         var tokens = _tokenizer.Tokenize(query).ToArray();
         cancellationToken.ThrowIfCancellationRequested();
@@ -59,7 +68,7 @@ public class SearchEngine
 
         if (_searchStateProvider != null)
         {
-            return Search(_searchStateProvider(cancellationToken).ForQuery(), query, tokens, maxResults, cancellationToken);
+            return Search(_searchStateProvider(cancellationToken).ForQuery(), query, tokens, maxResults, view, cancellationToken);
         }
 
         return Search(
@@ -67,6 +76,7 @@ public class SearchEngine
             query,
             tokens,
             maxResults,
+            view,
             cancellationToken);
     }
 
@@ -75,8 +85,11 @@ public class SearchEngine
         string query,
         IReadOnlyList<string> tokens,
         int maxResults,
+        ResultView view,
         CancellationToken cancellationToken)
     {
+        var now = DateTime.Now;
+        var filter = view.Filter;
         var nodeMatches = new Dictionary<string, (FileSystemNode node, HashSet<string> matchedTokens)>();
 
         foreach (var token in tokens)
@@ -93,11 +106,21 @@ public class SearchEngine
             }
         }
 
-        var pq = new PriorityQueue<SearchResult, SearchResult>(SearchResultOrder.Instance);
+        var pq = new PriorityQueue<SearchResult, SearchResult>(SortedResultOrder.For(view.Sort));
         foreach (var (_, candidate) in nodeMatches)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var node = candidate.node;
+            if (!filter.Matches(
+                    node.Name,
+                    node.IsDirectory,
+                    node.Metadata?.SizeBytes,
+                    node.Metadata?.LastWriteTime,
+                    now))
+            {
+                continue;
+            }
+
             var matchedTokens = candidate.matchedTokens;
             var score = CalculateScore(
                 node.Name,
@@ -112,7 +135,9 @@ public class SearchEngine
                 Name = node.Name,
                 FullPath = node.FullPath,
                 Score = score,
-                IsDirectory = node.IsDirectory
+                IsDirectory = node.IsDirectory,
+                SizeBytes = node.Metadata?.SizeBytes,
+                LastWriteTime = node.Metadata?.LastWriteTime
             };
             pq.Enqueue(result, result);
         }
@@ -125,8 +150,11 @@ public class SearchEngine
         string query,
         IReadOnlyList<string> tokens,
         int maxResults,
+        ResultView view,
         CancellationToken cancellationToken)
     {
+        var now = DateTime.Now;
+        var filter = view.Filter;
         var itemMatches = new Dictionary<string, (SearchItem item, HashSet<string> matchedTokens)>(
             StringComparer.OrdinalIgnoreCase);
         var prefixOnly = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -166,11 +194,21 @@ public class SearchEngine
             }
         }
 
-        var pq = new PriorityQueue<SearchResult, SearchResult>(SearchResultOrder.Instance);
+        var pq = new PriorityQueue<SearchResult, SearchResult>(SortedResultOrder.For(view.Sort));
         foreach (var (_, candidate) in itemMatches)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var item = candidate.item;
+            if (!filter.Matches(
+                    item.Name,
+                    item.IsDirectory,
+                    item.SizeBytes,
+                    item.LastWriteTime,
+                    now))
+            {
+                continue;
+            }
+
             var score = CalculateScore(
                 item.Name,
                 item.OpenCount,
@@ -189,7 +227,9 @@ public class SearchEngine
                 Name = item.Name,
                 FullPath = item.FullPath,
                 Score = score,
-                IsDirectory = item.IsDirectory
+                IsDirectory = item.IsDirectory,
+                SizeBytes = item.SizeBytes,
+                LastWriteTime = item.LastWriteTime
             };
             pq.Enqueue(result, result);
         }

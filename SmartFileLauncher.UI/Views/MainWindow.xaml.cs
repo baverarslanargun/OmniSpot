@@ -15,6 +15,7 @@ using SmartFileLauncher.Core.Application.Refresh;
 using SmartFileLauncher.Core.Application.Search;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Diagnostics;
+using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 using SmartFileLauncher.Core.Models;
@@ -181,6 +182,7 @@ public partial class MainWindow : Window {
         LoadAiEffortSelection();
         
         InitializeThumbnailViewport();
+        InitializeFilters();
 
         Loaded += MainWindow_Loaded;
     }
@@ -948,9 +950,22 @@ public partial class MainWindow : Window {
                 item => item,
                 StringComparer.OrdinalIgnoreCase);
             var desired = new List<DesktopIconViewModel>(page.Entries.Count);
+            var folderView = _folderViews.Get(folderPath);
+            var now = DateTime.Now;
+            _currentFolderEntries = page.Entries;
 
-            foreach (var entry in page.Entries)
+            foreach (var entry in SortEntries(page.Entries, folderView.Sort))
             {
+                if (!folderView.Filter.Matches(
+                        entry.Name,
+                        entry.IsDirectory,
+                        entry.SizeBytes,
+                        entry.LastWriteTime,
+                        now))
+                {
+                    continue;
+                }
+
                 if (!existing.TryGetValue(entry.FullPath, out var viewModel))
                 {
                     viewModel = new DesktopIconViewModel();
@@ -987,21 +1002,11 @@ public partial class MainWindow : Window {
                 _desktopIcons.RemoveAt(_desktopIcons.Count - 1);
             }
 
-            if (desired.Count == 0)
-            {
-                var folderName = Path.GetFileName(folderPath);
-                if (string.IsNullOrEmpty(folderName))
-                {
-                    folderName = folderPath;
-                }
-
-                EmptyFolderTitle.Text = $"'{folderName}' klasörü boş";
-                EmptyFolderPanel.Visibility = Visibility.Visible;
-            }
-            else
-            {
-                EmptyFolderPanel.Visibility = Visibility.Collapsed;
-            }
+            UpdateEmptyFolderState(
+                folderPath,
+                desired.Count,
+                page.Entries.Count,
+                folderView.Filter);
             RetargetThumbnailViewport(_desktopIcons.ToList());
 
             Log($"🔄 Klasör güncellendi: {_desktopIcons.Count} öğe" +
@@ -1020,9 +1025,30 @@ public partial class MainWindow : Window {
     private void RefreshDesktopIconsSmart()
     {
         var indexedRoots = _indexLifecycle.GetIndexedRoots();
-        
+        var rootView = _folderViews.Get(null);
+        var now = DateTime.Now;
+        var rootEntries = indexedRoots.Select(CreateRootEntry).ToList();
+        _currentFolderEntries = rootEntries;
+        var visiblePaths = rootEntries
+            .Where(entry => rootView.Filter.Matches(
+                entry.Name,
+                entry.IsDirectory,
+                entry.SizeBytes,
+                entry.LastWriteTime,
+                now))
+            .Select(entry => entry.FullPath)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var visibleRoots = indexedRoots
+            .Where(child => visiblePaths.Contains(child.FullPath))
+            .ToList();
+
+        if (rootView.Sort != ResultView.FolderDefault.Sort) {
+            RenderFolderEntries();
+            return;
+        }
+
         var existingPaths = _desktopIcons.ToDictionary(d => d.FullPath, d => d, StringComparer.OrdinalIgnoreCase);
-        var currentPaths = indexedRoots.Select(c => c.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var currentPaths = visibleRoots.Select(c => c.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
         
         var toRemove = _desktopIcons.Where(d => !currentPaths.Contains(d.FullPath)).ToList();
         foreach (var item in toRemove)
@@ -1030,7 +1056,7 @@ public partial class MainWindow : Window {
             _desktopIcons.Remove(item);
         }
         
-        foreach (var child in indexedRoots.OrderBy(n => n.Name))
+        foreach (var child in visibleRoots.OrderBy(n => n.Name))
         {
             if (!existingPaths.ContainsKey(child.FullPath))
             {
@@ -1079,7 +1105,9 @@ public partial class MainWindow : Window {
                     query,
                     NaturalLanguageMode: false,
                     HasInternetConnection: _connectivityMonitor.IsConnected,
-                    MaxResults: 50),
+                    MaxResults: 50,
+                    Filter: _searchView.Filter,
+                    Sort: _searchView.Sort),
                 cancellationToken);
             var results = outcome.Results;
 
@@ -1136,24 +1164,21 @@ public partial class MainWindow : Window {
             .OrderBy(n => !n.IsDirectory)
             .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase);
 
-        var items = new List<DesktopIconViewModel>();
-        foreach (var child in sortedChildren) {
-            var viewModel = new DesktopIconViewModel {
-                Name = child.Name,
-                FullPath = child.FullPath,
-                Icon = child.IsDirectory ? "folder" : GetFileIcon(child.Name),
-                IsDirectory = child.IsDirectory
-            };
+        var entries = sortedChildren
+            .Select(CreateRootEntry)
+            .ToList();
 
-            if (child.IsDirectory) {
-                viewModel.SetFolderColors(child.Name);
-            }
-
-            _desktopIcons.Add(viewModel);
-            items.Add(viewModel);
+        var rootView = _folderViews.Get(null);
+        _currentFolderEntries = entries;
+        var items = BuildFolderItems(entries, rootView);
+        foreach (var item in items) {
+            _desktopIcons.Add(item);
         }
 
         RetargetThumbnailViewport(items);
+        if (entries.Count > 0) {
+            UpdateEmptyFolderState(null, items.Count, entries.Count, rootView.Filter);
+        }
         RebuildDesktopRows();
         AnimateFolderSwap(items.Count);
 
@@ -1190,6 +1215,7 @@ public partial class MainWindow : Window {
             
             ResultsContainer.Visibility = Visibility.Collapsed;
             ShowPanel(DesktopIconsScroll);
+            UpdateFilterBadge();
             CancelSearchThumbnailRequests();
         _searchResults.Clear();
         } else {
@@ -1229,6 +1255,7 @@ public partial class MainWindow : Window {
 
             DesktopIconsScroll.Visibility = Visibility.Collapsed;
             ShowPanel(ResultsContainer);
+            UpdateFilterBadge();
 
             if (_isNaturalLanguageMode) LogSearchQuery(query);
             if (_isNaturalLanguageMode ||
@@ -1465,7 +1492,9 @@ public partial class MainWindow : Window {
                     query,
                     _isNaturalLanguageMode,
                     _connectivityMonitor.IsConnected,
-                    ReasoningEffort: reasoningEffort),
+                    ReasoningEffort: reasoningEffort,
+                    Filter: _searchView.Filter,
+                    Sort: _searchView.Sort),
                 cancellationToken);
             var searchElapsed = Stopwatch.GetElapsedTime(searchTimestamp);
 
@@ -1633,6 +1662,9 @@ public partial class MainWindow : Window {
         ErrorPanel.Visibility = Visibility.Collapsed;
 
         if (results.Count == 0) {
+            NoResultsHint.Text = _searchView.Filter.IsActive
+                ? "Etkin filtre sonuçları gizliyor olabilir"
+                : "Farklı anahtar kelimeler deneyin";
             CancelSearchThumbnailRequests();
             foreach (var current in _searchResults) current.IsRemoving = false;
             _searchResults.Clear();
@@ -2048,6 +2080,7 @@ public partial class MainWindow : Window {
                 }
 
                 _currentFolderPath = folderPath;
+                UpdateFilterBadge();
                 
                 SearchBox.Clear();
                 ResultsContainer.Visibility = Visibility.Collapsed;
@@ -2171,40 +2204,31 @@ public partial class MainWindow : Window {
             _desktopIcons.Clear();
             EmptyFolderPanel.Visibility = Visibility.Collapsed;
 
-            var items = page.Entries.Select(entry => {
-                var viewModel = new DesktopIconViewModel {
-                    Name = entry.Name,
-                    FullPath = entry.FullPath,
-                    Icon = entry.IsDirectory ? "folder" : GetFileIcon(entry.Name),
-                    IsDirectory = entry.IsDirectory
-                };
-
-                if (entry.IsDirectory) {
-                    viewModel.SetFolderColors(entry.Name);
-                }
-
-                return viewModel;
-            }).ToList();
+            var folderView = _folderViews.Get(folderPath);
+            _currentFolderEntries = page.Entries;
+            var items = BuildFolderItems(page.Entries, folderView);
 
             RetargetThumbnailViewport(items);
 
-            if (items.Count == 0) {
-                var folderName = Path.GetFileName(folderPath);
-                if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
-
-                EmptyFolderTitle.Text = $"'{folderName}' klasörü boş";
-                EmptyFolderPanel.Visibility = Visibility.Visible;
-                Log("   📂 Klasör boş");
-                RecordFolderMetrics(folderPath, 0, page.IsTruncated);
-            } else {
-                foreach (var item in items) {
-                    _desktopIcons.Add(item);
-                }
-
-                Log($"   📊 {_desktopIcons.Count} öğe yüklendi" +
-                    (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
-                RecordFolderMetrics(folderPath, items.Count, page.IsTruncated);
+            foreach (var item in items) {
+                _desktopIcons.Add(item);
             }
+
+            UpdateEmptyFolderState(
+                folderPath,
+                items.Count,
+                page.Entries.Count,
+                folderView.Filter);
+
+            if (page.Entries.Count == 0) {
+                Log("   📂 Klasör boş");
+            } else {
+                Log($"   📊 {items.Count} öğe yüklendi" +
+                    (folderView.Filter.IsActive ? $" ({page.Entries.Count} öğeden filtrelendi)" : string.Empty) +
+                    (page.IsTruncated ? $" (limit: {MAX_FOLDER_ITEMS})" : string.Empty));
+            }
+
+            RecordFolderMetrics(folderPath, page.Entries.Count, page.IsTruncated);
 
             RebuildDesktopRows();
             AnimateFolderSwap(items.Count);
@@ -2356,6 +2380,7 @@ public partial class MainWindow : Window {
         BackButton.Visibility = Visibility.Collapsed;
         _navigationDirection = -1;
         LoadDesktopIcons();
+        UpdateFilterBadge();
         SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
     }
     
