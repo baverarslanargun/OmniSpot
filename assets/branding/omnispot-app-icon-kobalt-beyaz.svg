@@ -1,0 +1,92 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" color-interpolation="sRGB">
+<title>OmniSpot — cobalt app icon on white</title>
+<desc>The approved cobalt–cyan OmniSpot mark on a rounded white gradient tile, with a restrained cool reflection and a fine edge. Original mark geometry, placement, color gradients, and ribbon fade preserved. White particle halos separate the squares from the flowing ribbons. Self-contained editable SVG, transparent outside the rounded corners.</desc>
+<defs>
+ <linearGradient id="front-top" gradientUnits="userSpaceOnUse" x1="450" y1="213" x2="810" y2="663"><stop stop-color="#D2FCFF"/><stop offset=".2" stop-color="#76E5FA"/><stop offset=".4" stop-color="#31BFEF"/><stop offset=".6" stop-color="#2483E9"/><stop offset="1" stop-color="#2856D7"/></linearGradient>
+ <linearGradient id="front-bottom" gradientUnits="userSpaceOnUse" x1="440" y1="900" x2="970" y2="900"><stop stop-color="#73DDF5"/><stop offset=".45" stop-color="#258FEB"/><stop offset="1" stop-color="#244BCD"/></linearGradient>
+ <radialGradient id="depth-color" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(1020 600) scale(360 370)"><stop stop-color="#39ADEE"/><stop offset=".3" stop-color="#2685E5"/><stop offset=".6" stop-color="#225FCF"/><stop offset=".84" stop-color="#204CB3"/><stop offset="1" stop-color="#183F9B"/></radialGradient>
+ <linearGradient id="flow-top" gradientUnits="userSpaceOnUse" x1="352" y1="0" x2="901" y2="0"><stop stop-color="#C4E9FF" stop-opacity="0"/><stop offset=".17" stop-color="#BDE6FF" stop-opacity=".72"/><stop offset=".4" stop-color="#89CCFA"/><stop offset=".54" stop-color="#4BA8F0"/><stop offset=".68" stop-color="#7DCAF5"/><stop offset=".84" stop-color="#C5EFFA" stop-opacity=".8"/><stop offset="1" stop-color="#DFF9FF" stop-opacity="0"/></linearGradient>
+ <linearGradient id="flow-middle" gradientUnits="userSpaceOnUse" x1="254" y1="0" x2="867" y2="0"><stop stop-color="#C8ECFF" stop-opacity="0"/><stop offset=".2" stop-color="#B8E2FF" stop-opacity=".5"/><stop offset=".4" stop-color="#85C9F9" stop-opacity=".94"/><stop offset=".62" stop-color="#49A7EF"/><stop offset=".75" stop-color="#62B9F3"/><stop offset=".9" stop-color="#C5EFFA"/><stop offset="1" stop-color="#E8FBFF" stop-opacity=".6"/></linearGradient>
+ <linearGradient id="flow-bottom" gradientUnits="userSpaceOnUse" x1="440" y1="0" x2="901" y2="0"><stop stop-color="#C5EBFF" stop-opacity="0"/><stop offset=".2" stop-color="#A4DAFF" stop-opacity=".7"/><stop offset=".45" stop-color="#6DBCF5"/><stop offset=".62" stop-color="#5FB4F1"/><stop offset=".78" stop-color="#A4DFF8" stop-opacity=".9"/><stop offset="1" stop-color="#E1F7FF" stop-opacity="0"/></linearGradient>
+ <linearGradient id="particle-orange" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#48BDF5"/><stop offset=".6" stop-color="#2B8CEA"/><stop offset="1" stop-color="#2864DB"/></linearGradient>
+ <linearGradient id="particle-gold" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#51CDF5"/><stop offset="1" stop-color="#229AE8"/></linearGradient>
+ <linearGradient id="particle-strong" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#369FF1"/><stop offset="1" stop-color="#255ED5"/></linearGradient>
+ <linearGradient id="particle-soft" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#9FD8FA"/><stop offset="1" stop-color="#7DC6F7"/></linearGradient>
+ <linearGradient id="particle-pale" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#C4E8FC"/><stop offset="1" stop-color="#B0DFFB"/></linearGradient>
+ <linearGradient id="particle-light" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#B2E1FC"/><stop offset="1" stop-color="#92D2FA"/></linearGradient>
+ <linearGradient id="particle-small" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#75C7F8"/><stop offset="1" stop-color="#52ADF0"/></linearGradient>
+ <radialGradient id="focus-color" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(959 653) scale(124 119)"><stop stop-color="#E2FBFF"/><stop offset=".35" stop-color="#8DE5FA"/><stop offset=".72" stop-color="#35B6EE"/><stop offset="1" stop-color="#2581E0"/></radialGradient>
+ <path id="o-outline" d="M430 404 Q423 401 429 392 C513 280 643 214 782 214 C1019 214 1211 406 1211 643 C1211 880 1019 1072 782 1072 C644 1072 512 1006 431 904 Q424 895 435 890 C501 875 552 818 596 791 Q606 783 612 794 C651 841 708 868 775 868 C894 868 989 771 989 651 C989 531 894 434 775 434 C707 434 646 468 608 521 Q602 532 594 528 C542 510 490 428 430 404 Z"/>
+ <clipPath id="o-clip"><use xlink:href="#o-outline"/></clipPath>
+ <linearGradient id="flow-end-fade" gradientUnits="userSpaceOnUse" x1="758" y1="653" x2="899" y2="653"><stop stop-color="white"/><stop offset=".28" stop-color="white" stop-opacity=".86"/><stop offset=".55" stop-color="white" stop-opacity=".44"/><stop offset=".8" stop-color="white" stop-opacity=".08"/><stop offset="1" stop-color="white" stop-opacity="0"/></linearGradient>
+ <mask id="flow-end-mask" maskUnits="userSpaceOnUse" x="250" y="410" width="660" height="470"><rect x="250" y="410" width="660" height="470" fill="url(#flow-end-fade)"/></mask>
+
+ <filter id="particle-halo-blur" filterUnits="userSpaceOnUse" x="16" y="345" width="515" height="590" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="5.5"/></filter>
+ <radialGradient id="focus-white-light" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(957 650) scale(52 66)"><stop stop-color="white" stop-opacity=".96"/><stop offset=".2" stop-color="white" stop-opacity=".88"/><stop offset=".55" stop-color="white" stop-opacity=".36"/><stop offset="1" stop-color="white" stop-opacity="0"/></radialGradient>
+
+ <linearGradient id="icon-surface" gradientUnits="userSpaceOnUse" x1="150" y1="0" x2="805" y2="1024">
+  <stop stop-color="#FFFFFF"/><stop offset=".43" stop-color="#FCFDFE"/><stop offset="1" stop-color="#EFF4F9"/>
+ </linearGradient>
+ <radialGradient id="icon-top-light" gradientUnits="userSpaceOnUse" cx="240" cy="55" r="780">
+  <stop stop-color="#FFFFFF" stop-opacity=".85"/><stop offset=".68" stop-color="#FFFFFF" stop-opacity="0"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+ </radialGradient>
+ <radialGradient id="icon-warm-reflection" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1" gradientTransform="translate(592 676) scale(408 327)">
+  <stop stop-color="#65B5EF" stop-opacity=".028"/><stop offset=".55" stop-color="#65B5EF" stop-opacity=".01"/><stop offset="1" stop-color="#65B5EF" stop-opacity="0"/>
+ </radialGradient>
+ <linearGradient id="icon-rim" gradientUnits="userSpaceOnUse" x1="220" y1="0" x2="790" y2="1024">
+  <stop stop-color="#FFFFFF" stop-opacity=".95"/><stop offset=".30" stop-color="#D9E4EF" stop-opacity=".32"/><stop offset=".68" stop-color="#B4C4D7" stop-opacity=".30"/><stop offset="1" stop-color="#9CAFC6" stop-opacity=".36"/>
+ </linearGradient>
+ <clipPath id="icon-clip"><rect width="1024" height="1024" rx="224"/></clipPath>
+ <radialGradient id="icon-focus-bloom" gradientUnits="userSpaceOnUse" cx="899" cy="653" r="104">
+  <stop stop-color="#FFFFFF" stop-opacity=".38"/><stop offset=".45" stop-color="#FFFFFF" stop-opacity=".15"/><stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+ </radialGradient>
+</defs>
+<g id="icon-tile" inkscape:groupmode="layer" inkscape:label="Rounded white tile" clip-path="url(#icon-clip)">
+ <rect width="1024" height="1024" fill="url(#icon-surface)"/>
+ <rect width="1024" height="1024" fill="url(#icon-top-light)"/>
+ <rect width="1024" height="1024" fill="url(#icon-warm-reflection)"/>
+</g>
+<g id="omnispot-mark" inkscape:groupmode="layer" inkscape:label="Approved OmniSpot mark" transform="translate(72.75 61.9) scale(.7)">
+ <circle id="focus-bloom" cx="899" cy="653" r="104" fill="url(#icon-focus-bloom)"/>
+
+
+<g id="flows" inkscape:groupmode="layer" inkscape:label="Three flowing ribbons" mask="url(#flow-end-mask)">
+ <path id="upper-flow" fill="url(#flow-top)" d="M352 416 C423 424 459 444 513 497 C617 600 704 626 843 576 L899 551 L899 587 A66 66 0 0 0 866 595.842323350 C844.349365 608.342323 806 615 767 623 C646 649 541 609 458 574 C419 557 386 545 352 536 Z"/>
+ <path id="middle-flow" fill="url(#flow-middle)" d="M254 568 C360.100279 602.826809 457.672821 632.40578 560 640.798064 C566.666667 641.344825 573.333333 642.014512 580 642.39042 C586.666667 642.766327 593.333333 642.848455 600 642.838264 C608.333333 642.825524 616.666667 642.668536 625 642.599576 C633.333333 642.530616 641.666667 642.549684 650 642.328995 C658.333333 642.108306 666.666667 641.647861 675 641.127565 C685 640.50321 695 639.79267 705 638.860612 C715 637.928555 725 636.774978 735 635.307435 C743.333333 634.084482 751.666667 632.643495 760 630.952904 C766.666667 629.600431 773.333333 628.088211 780 626.490645 C786.666667 624.89308 793.333333 623.210168 800 621.359092 C806.666667 619.508015 813.333333 617.488773 820 615.276233 C826.666667 613.063693 833.333333 610.657854 840 607.977876 C844 606.369889 848 604.663212 852 602.863304 C856.666667 600.763413 861.333333 598.536625 866 595.842323 A66 66 0 0 0 833 653 A66 66 0 0 0 866 710.157676650 C861.333333 708.156755 856.666667 706.011604 852 703.784595 C848 701.87573 844 699.906723 840 697.964129 C833.333333 694.726473 826.666667 691.562186 820 688.606065 C813.333333 685.649943 806.666667 682.901986 800 680.425853 C793.333333 677.949721 786.666667 675.745412 780 673.874943 C773.333333 672.004473 766.666667 670.467843 760 669.152148 C751.666667 667.507531 743.333333 666.208125 735 665.181585 C725 663.949736 715 663.110812 705 662.636341 C695 662.16187 685 662.051852 675 662.169445 C666.666667 662.26744 658.333333 662.523498 650 663.157727 C641.666667 663.791956 633.333333 664.804356 625 665.736624 C616.666667 666.668892 608.333333 667.521028 600 668.50951 C593.333333 669.300296 586.666667 670.178344 580 670.853483 C573.333333 671.528623 566.666667 672.000853 560 672.711384 C459.503427 683.422261 378.074292 695.33624 319 700 L254 663 Z"/>
+ <path id="lower-flow" fill="url(#flow-bottom)" d="M440 756 C497 732 563 699 625 682 C717 656 791 678 866 710.157676650 A66 66 0 0 0 899 719 L899 755 C829 716 786 700 744 704 C654 702 588 751 527 810 C495 841 472 856 440 870 Z"/>
+</g>
+<g id="o" inkscape:groupmode="layer" inkscape:label="O — corrected depth">
+ <use id="o-depth" xlink:href="#o-outline" fill="url(#depth-color)"/>
+ <g clip-path="url(#o-clip)">
+  <path id="o-top-face" fill="url(#front-top)" d="M0 0 H1254 V281 H1023 C870 269 706 371 608 521 L620 550 H0 Z"/>
+  <path id="o-bottom-face" fill="url(#front-bottom)" d="M0 1254 H1254 V1017 H989 C832 1038 690 954 612 794 L620 750 H0 Z"/>
+ </g>
+</g>
+<g id="particle-halos" inkscape:groupmode="layer" inkscape:label="Soft white particle separation" fill="white" stroke="white" stroke-width="2" opacity=".92" filter="url(#particle-halo-blur)">
+ <rect x="267" y="373" width="98" height="98" rx="19.6"/>
+ <rect x="87" y="453.5" width="58" height="58" rx="11.6"/>
+ <rect x="370.5" y="494" width="88" height="88" rx="17.6"/>
+ <rect x="177.5" y="536" width="94" height="94" rx="18.8"/>
+ <rect x="44" y="609" width="78" height="78" rx="15.6"/>
+ <rect x="267.5" y="657.5" width="114" height="114" rx="22.8"/>
+ <rect x="129.5" y="750" width="60" height="60" rx="12"/>
+ <rect x="422" y="750.5" width="76" height="76" rx="15.2"/>
+ <rect x="302.5" y="818.5" width="86" height="86" rx="17.2"/>
+</g>
+<g id="particles" inkscape:groupmode="layer" inkscape:label="Nine consistent rounded squares">
+ <rect id="particle-top" x="267" y="373" width="98" height="98" rx="19.6" fill="url(#particle-orange)"/>
+ <rect id="particle-small-upper-left" x="87" y="453.5" width="58" height="58" rx="11.6" fill="url(#particle-soft)"/>
+ <rect id="particle-upper-right" x="370.5" y="494" width="88" height="88" rx="17.6" fill="url(#particle-gold)"/>
+ <rect id="particle-middle-left" x="177.5" y="536" width="94" height="94" rx="18.8" fill="url(#particle-gold)"/>
+ <rect id="particle-far-left" x="44" y="609" width="78" height="78" rx="15.6" fill="url(#particle-pale)"/>
+ <rect id="particle-large-middle" x="267.5" y="657.5" width="114" height="114" rx="22.8" fill="url(#particle-strong)"/>
+ <rect id="particle-small-lower-left" x="129.5" y="750" width="60" height="60" rx="12" fill="url(#particle-small)"/>
+ <rect id="particle-lower-right" x="422" y="750.5" width="76" height="76" rx="15.2" fill="url(#particle-strong)"/>
+ <rect id="particle-bottom" x="302.5" y="818.5" width="86" height="86" rx="17.2" fill="url(#particle-light)"/>
+</g>
+<g id="focus" inkscape:groupmode="layer" inkscape:label="Focus point"><circle cx="899" cy="653" r="64" fill="url(#focus-color)"/><circle id="focus-white-highlight" cx="899" cy="653" r="64" fill="url(#focus-white-light)"/></g>
+
+</g>
+<rect id="icon-edge" x="1.5" y="1.5" width="1021" height="1021" rx="222.5" stroke="url(#icon-rim)" stroke-width="3"/>
+</svg>
