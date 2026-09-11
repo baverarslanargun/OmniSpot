@@ -609,6 +609,100 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="FilterSubmenuHeader" TargetType="MenuItem">
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid>
+                            <Border x:Name="Border" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="24"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Path Grid.Column="0" Data="M 1.5,2.5 H 12.5 L 8.3,7.2 V 11.5 L 5.7,10.2 V 7.2 Z" Stroke="#94A3B8" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Width="14" Height="14" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center" Margin="8,0,16,0"/>
+                                    <Path Grid.Column="2" Data="M 1,1 L 5,5 L 1,9" Stroke="#94A3B8" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          Width="6" Height="10" Stretch="None" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="Fade">
+                                <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="8">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
+                                    </Border.Effect>
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsSubmenuOpen" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#CBD5E1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="SortSubmenuHeader" TargetType="MenuItem">
+            <Setter Property="Padding" Value="12,8"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="MenuItem">
+                        <Grid>
+                            <Border x:Name="Border" Background="Transparent" CornerRadius="4" Padding="{TemplateBinding Padding}">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="24"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Path Grid.Column="0" Data="M 2,3.5 H 12 M 2,7 H 9 M 2,10.5 H 6" Stroke="#94A3B8" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                          Width="14" Height="14" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                    <ContentPresenter Grid.Column="1" ContentSource="Header" VerticalAlignment="Center" Margin="8,0,16,0"/>
+                                    <Path Grid.Column="2" Data="M 1,1 L 5,5 L 1,9" Stroke="#94A3B8" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                          Width="6" Height="10" Stretch="None" VerticalAlignment="Center"/>
+                                </Grid>
+                            </Border>
+                            <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True" Focusable="False"
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="Fade">
+                                <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="8">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
+                                    </Border.Effect>
+                                    <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle"/>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsSubmenuOpen" Value="True">
+                                <Setter TargetName="Border" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#CBD5E1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="ModernCheckMenuItem" TargetType="MenuItem">
             <Setter Property="Padding" Value="12,8"/>
             <Setter Property="FontSize" Value="13"/>
@@ -646,6 +740,50 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="ChipCloseButton" TargetType="Button">
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" CornerRadius="9">
+                            <Path x:Name="Glyph" Data="M 1,1 L 8,8 M 8,1 L 1,8" Stroke="#7D93B5" StrokeThickness="1.4"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Width="9" Height="9" Stretch="None"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#D7E3F7"/>
+                                <Setter TargetName="Glyph" Property="Stroke" Value="#2F62BF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ChipClearAllButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="HorizontalContentAlignment" Value="Left"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" CornerRadius="6" Padding="8,5">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Separator Style -->
         <Style x:Key="MenuSeparator" TargetType="Separator">
             <Setter Property="Height" Value="1"/>
@@ -885,6 +1023,7 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/> <!-- Search Icon -->
                                 <ColumnDefinition Width="*"/> <!-- Search Input -->
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             
                             <!-- Modern Search Icon -->
@@ -915,6 +1054,90 @@
                                          VerticalContentAlignment="Center"
                                          FontWeight="Normal"
                                          Padding="0"/>
+                            </Grid>
+
+                            <Grid Grid.Column="2">
+                                <Border x:Name="FilterBadge"
+                                        Visibility="Collapsed"
+                                        Background="#E4EDFB"
+                                        BorderBrush="#C6D8F4"
+                                        BorderThickness="1"
+                                        CornerRadius="8"
+                                        Padding="8,3"
+                                        Margin="10,0,0,0"
+                                        VerticalAlignment="Center"
+                                        Cursor="Hand"
+                                        MouseLeftButtonDown="FilterBadge_MouseLeftButtonDown"
+                                        MouseEnter="FilterBadge_MouseEnter"
+                                        MouseLeave="FilterBadge_MouseLeave">
+                                    <StackPanel Orientation="Horizontal">
+                                        <Path Data="M 1.5,2.5 H 12.5 L 8.3,7.2 V 11.5 L 5.7,10.2 V 7.2 Z"
+                                              Stroke="#3F7EE8" StrokeThickness="1.3" StrokeLineJoin="Round"
+                                              Width="14" Height="14" Stretch="None"
+                                              VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <TextBlock x:Name="FilterBadgeText" Text=""
+                                                   FontSize="12" FontWeight="Medium" Foreground="#2F62BF"
+                                                   VerticalAlignment="Center"/>
+                                        <Button x:Name="FilterBadgeClear"
+                                                Style="{StaticResource ChipCloseButton}"
+                                                Click="FilterBadgeClear_Click"
+                                                ToolTip="Tüm filtreleri temizle"
+                                                Margin="6,0,-2,0"
+                                                VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <Popup x:Name="FilterBadgePopup"
+                                       PlacementTarget="{Binding ElementName=FilterBadge}"
+                                       Placement="Bottom"
+                                       VerticalOffset="6"
+                                       HorizontalOffset="-6"
+                                       AllowsTransparency="True"
+                                       StaysOpen="True"
+                                       PopupAnimation="Fade"
+                                       Closed="FilterBadgePopup_Closed">
+                                    <Border Background="White"
+                                            BorderBrush="#E2E8F0"
+                                            BorderThickness="1"
+                                            CornerRadius="10"
+                                            Padding="6"
+                                            Margin="0,0,12,12"
+                                            MouseEnter="FilterBadgePopup_MouseEnter"
+                                            MouseLeave="FilterBadgePopup_MouseLeave">
+                                        <Border.Effect>
+                                            <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
+                                        </Border.Effect>
+                                        <StackPanel MinWidth="170">
+                                            <TextBlock Text="Etkin filtreler" FontSize="11" Foreground="#94A3B8"
+                                                       Margin="8,2,8,6"/>
+                                            <ItemsControl x:Name="FilterChips">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="0,1">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Label}"
+                                                                       FontSize="12.5" Foreground="#334155"
+                                                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                                            <Button Grid.Column="1"
+                                                                    Style="{StaticResource ChipCloseButton}"
+                                                                    Click="FilterChipRemove_Click"
+                                                                    ToolTip="Bu filtreyi kaldır"
+                                                                    Margin="12,0,2,0"/>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <Border Height="1" Background="#E2E8F0" Margin="6,6,6,4"/>
+                                            <Button Click="FilterBadgeClear_Click"
+                                                    Style="{StaticResource ChipClearAllButton}">
+                                                <TextBlock Text="Hepsini temizle" FontSize="12.5" Foreground="#475569"/>
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+                                </Popup>
                             </Grid>
                         </Grid>
                     </Border>
@@ -1733,6 +1956,7 @@
                         Visibility="Collapsed"
                         VerticalAlignment="Center"
                         HorizontalAlignment="Center"
+                        ContextMenu="{StaticResource EmptyAreaContextMenu}"
                         Padding="40,32">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                         <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,22">

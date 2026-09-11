@@ -1,17 +1,18 @@
+using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Application.Search;
 
 public sealed class SearchApplicationService : ISearchApplicationService
 {
-    private readonly Func<string, int, CancellationToken, IReadOnlyList<SearchResult>> _standardSearch;
-    private readonly Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>> _advancedSearch;
+    private readonly Func<string, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> _standardSearch;
+    private readonly Func<StructuredQuery, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> _advancedSearch;
     private readonly Func<string, string?, CancellationToken, Task<StructuredQuery>> _onlineIntentParser;
     private readonly Func<string, StructuredQuery> _ruleBasedIntentParser;
 
     public SearchApplicationService(
-        Func<string, int, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
-        Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
+        Func<string, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
+        Func<StructuredQuery, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
         Func<string, CancellationToken, Task<StructuredQuery>> onlineIntentParser,
         Func<string, StructuredQuery> ruleBasedIntentParser)
         : this(standardSearch, advancedSearch,
@@ -22,8 +23,8 @@ public sealed class SearchApplicationService : ISearchApplicationService
     }
 
     public SearchApplicationService(
-        Func<string, int, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
-        Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
+        Func<string, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
+        Func<StructuredQuery, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
         Func<string, string?, CancellationToken, Task<StructuredQuery>> onlineIntentParser,
         Func<string, StructuredQuery> ruleBasedIntentParser)
     {
@@ -95,6 +96,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
                 () => _advancedSearch(
                     structuredQuery,
                     request.MaxResults,
+                    request.View,
                     cancellationToken),
                 cancellationToken)
             .ConfigureAwait(false);
@@ -121,6 +123,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
             () => _standardSearch(
                 request.Query,
                 request.MaxResults,
+                request.View,
                 cancellationToken),
             cancellationToken);
 

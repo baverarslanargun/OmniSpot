@@ -76,7 +76,9 @@ public sealed class FolderBrowserService : IFolderBrowserService
                 result.Add(new FolderEntry(
                     childDirectory.Name,
                     childDirectory.FullName,
-                    true));
+                    true,
+                    null,
+                    childDirectory.LastWriteTime));
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {
@@ -108,7 +110,9 @@ public sealed class FolderBrowserService : IFolderBrowserService
                 result.Add(new FolderEntry(
                     file.Name,
                     file.FullName,
-                    false));
+                    false,
+                    file.Length,
+                    file.LastWriteTime));
             }
             catch (Exception) when (!cancellationToken.IsCancellationRequested)
             {

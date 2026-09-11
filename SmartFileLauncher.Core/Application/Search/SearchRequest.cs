@@ -1,3 +1,5 @@
+using SmartFileLauncher.Core.Filtering;
+
 namespace SmartFileLauncher.Core.Application.Search;
 
 public sealed record SearchRequest(
@@ -5,4 +7,9 @@ public sealed record SearchRequest(
     bool NaturalLanguageMode,
     bool HasInternetConnection,
     int MaxResults = 100,
-    string? ReasoningEffort = null);
+    string? ReasoningEffort = null,
+    ItemFilter? Filter = null,
+    ItemSort? Sort = null)
+{
+    public ResultView View => new(Filter ?? ItemFilter.None, Sort ?? ItemSort.Relevance);
+}

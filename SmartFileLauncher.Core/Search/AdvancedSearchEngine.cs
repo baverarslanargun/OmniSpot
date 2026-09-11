@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using SmartFileLauncher.Core.DataStructures;
+using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Services;
 
@@ -65,9 +66,18 @@ public class AdvancedSearchEngine
     public IReadOnlyList<SearchResult> Search(
         StructuredQuery query,
         int maxResults = 100,
+        CancellationToken cancellationToken = default) =>
+        Search(query, maxResults, ResultView.SearchDefault, cancellationToken);
+
+    public IReadOnlyList<SearchResult> Search(
+        StructuredQuery query,
+        int maxResults,
+        ResultView view,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(view);
+        var filter = view.Filter;
         cancellationToken.ThrowIfCancellationRequested();
         var state = _stateProvider(cancellationToken).ForQuery();
         if (state.ItemCount == 0 || maxResults <= 0)
@@ -85,6 +95,7 @@ public class AdvancedSearchEngine
                 searchTerms,
                 catalogSnapshot,
                 maxResults,
+                view,
                 cancellationToken);
         }
 
@@ -231,6 +242,11 @@ public class AdvancedSearchEngine
             finalResults = ApplySizeFilter(finalResults, query.SizeFilter, cancellationToken);
         }
 
+        if (filter.IsActive)
+        {
+            finalResults = ApplyItemFilter(finalResults, filter, cancellationToken);
+        }
+
         var scoringContext = CreateScoringContext(query, searchTerms);
         var scoredResults = new List<SearchResult>(finalResults.Count);
         foreach (var (node, matches) in finalResults)
@@ -241,11 +257,13 @@ public class AdvancedSearchEngine
                 Name = node.Name,
                 FullPath = node.FullPath,
                 Score = CalculateScore(query, node, matches, scoringContext, cancellationToken),
-                IsDirectory = node.IsDirectory
+                IsDirectory = node.IsDirectory,
+                SizeBytes = node.SizeBytes,
+                LastWriteTime = node.LastWriteTime
             });
         }
 
-        var queue = new PriorityQueue<SearchResult, SearchResult>(SearchResultOrder.Instance);
+        var queue = new PriorityQueue<SearchResult, SearchResult>(SortedResultOrder.For(view.Sort));
         foreach (var result in scoredResults)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -266,24 +284,31 @@ public class AdvancedSearchEngine
 
     private sealed class FilterCandidateOrder : IComparer<FilterCandidate>
     {
-        internal static readonly FilterCandidateOrder BestFirst = new(reverse: false);
-        internal static readonly FilterCandidateOrder WorstFirst = new(reverse: true);
         private readonly bool _reverse;
+        private readonly ItemSort _sort;
 
-        private FilterCandidateOrder(bool reverse) => _reverse = reverse;
+        private FilterCandidateOrder(bool reverse, ItemSort sort)
+        {
+            _reverse = reverse;
+            _sort = sort;
+        }
+
+        internal static FilterCandidateOrder Create(ItemSort sort, bool reverse) =>
+            new(reverse, sort);
 
         public int Compare(FilterCandidate x, FilterCandidate y) =>
             _reverse ? CompareCore(y, x) : CompareCore(x, y);
 
-        private static int CompareCore(FilterCandidate x, FilterCandidate y)
-        {
-            var byScore = y.Score.CompareTo(x.Score);
-            if (byScore != 0) return byScore;
-            var byName = string.Compare(x.Item.Name, y.Item.Name, StringComparison.OrdinalIgnoreCase);
-            if (byName != 0) return byName;
-            var byPath = string.Compare(x.Item.FullPath, y.Item.FullPath, StringComparison.OrdinalIgnoreCase);
-            return byPath != 0 ? byPath : string.CompareOrdinal(x.Item.FullPath, y.Item.FullPath);
-        }
+        private int CompareCore(FilterCandidate x, FilterCandidate y) =>
+            _sort.Compare(Row(x), Row(y));
+
+        private static SortRow Row(FilterCandidate candidate) => new(
+            candidate.Item.Name,
+            candidate.Item.FullPath,
+            candidate.Item.IsDirectory,
+            candidate.Item.SizeBytes,
+            candidate.Item.LastWriteTime,
+            candidate.Score);
     }
 
     private IReadOnlyList<SearchResult> SearchFilterOnly(
@@ -291,8 +316,11 @@ public class AdvancedSearchEngine
         IReadOnlyList<SearchTerm> searchTerms,
         IQueryCatalogSnapshot state,
         int maxResults,
+        ResultView view,
         CancellationToken cancellationToken)
     {
+        var now = DateTime.Now;
+        var userFilter = view.Filter;
         var filter = CreateInitialCatalogFilter(query);
         var allowedExtensions = CreateFilterOnlyAllowedExtensions(query, cancellationToken);
         var expandedFolderNames = ExpandFilterFolderNames(query, cancellationToken);
@@ -300,7 +328,8 @@ public class AdvancedSearchEngine
         var expandsFolders = query.IncludeFolderContents && !userWantsFolders && filter.IncludeDirectories;
         var seen = expandsFolders ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         var winners = new PriorityQueue<FilterCandidate, FilterCandidate>(
-            FilterCandidateOrder.WorstFirst);
+            FilterCandidateOrder.Create(view.Sort, reverse: true));
+        var bestFirst = FilterCandidateOrder.Create(view.Sort, reverse: false);
         var scoringContext = CreateScoringContext(query, searchTerms);
         var noMatches = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
 
@@ -349,21 +378,29 @@ public class AdvancedSearchEngine
             cancellationToken.ThrowIfCancellationRequested();
             ordered[index] = winners.Dequeue();
         }
-        Array.Sort(ordered, FilterCandidateOrder.BestFirst);
+        Array.Sort(ordered, bestFirst);
 
         return ordered.Select(candidate => new SearchResult
         {
             Name = candidate.Item.Name,
             FullPath = candidate.Item.FullPath,
             Score = candidate.Score,
-            IsDirectory = candidate.Item.IsDirectory
+            IsDirectory = candidate.Item.IsDirectory,
+            SizeBytes = candidate.Item.SizeBytes,
+            LastWriteTime = candidate.Item.LastWriteTime
         }).ToArray();
 
         void Offer(SearchItem item)
         {
             if ((seen != null && !seen.Add(item.FullPath)) ||
                 !PassesFilterOnlyDate(item, query.DateFilter) ||
-                !PassesFilterOnlySize(item, query.SizeFilter))
+                !PassesFilterOnlySize(item, query.SizeFilter) ||
+                !userFilter.Matches(
+                    item.Name,
+                    item.IsDirectory,
+                    item.SizeBytes,
+                    item.LastWriteTime,
+                    now))
             {
                 return;
             }
@@ -375,7 +412,7 @@ public class AdvancedSearchEngine
             {
                 winners.Enqueue(candidate, candidate);
             }
-            else if (FilterCandidateOrder.BestFirst.Compare(candidate, winners.Peek()) < 0)
+            else if (bestFirst.Compare(candidate, winners.Peek()) < 0)
             {
                 winners.Dequeue();
                 winners.Enqueue(candidate, candidate);
@@ -789,6 +826,25 @@ public class AdvancedSearchEngine
                 destination[token] = contribution;
             }
         }
+    }
+
+    private static List<(SearchItem node, Dictionary<string, double> matches)> ApplyItemFilter(
+        List<(SearchItem node, Dictionary<string, double> matches)> candidates,
+        ItemFilter filter,
+        CancellationToken cancellationToken)
+    {
+        var now = DateTime.Now;
+        return candidates.Where(candidate =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var node = candidate.node;
+            return filter.Matches(
+                node.Name,
+                node.IsDirectory,
+                node.SizeBytes,
+                node.LastWriteTime,
+                now);
+        }).ToList();
     }
 
     private static List<(SearchItem node, Dictionary<string, double> matches)> ApplyDateFilter(
