@@ -111,11 +111,14 @@ public partial class IndexManager
                         parentPath);
 
                     loadedFiles++;
-                    if (loadedFiles % 100 == 0)
+                    var percentage = totalFiles == 0
+                        ? 100
+                        : (int)(loadedFiles * 100.0 / totalFiles);
+                    var previousPercentage = totalFiles == 0
+                        ? 100
+                        : (int)((loadedFiles - 1) * 100.0 / totalFiles);
+                    if (percentage != previousPercentage)
                     {
-                        var percentage = totalFiles == 0
-                            ? 100
-                            : (int)(loadedFiles * 100.0 / totalFiles);
                         ReportProgress(
                             $"Önbellek yükleniyor: {loadedFiles}/{totalFiles}",
                             percentage,

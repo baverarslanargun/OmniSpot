@@ -60,6 +60,7 @@ public partial class SettingsWindow : Window
         
         NaturalLanguageDefaultCheckbox.IsChecked = _settings.NaturalLanguageModeEnabled;
         GridViewDefaultCheckbox.IsChecked = _settings.GridViewEnabled;
+        CompactCatalogCheckbox.IsChecked = _settings.CompactSearchStateEnabled;
         
         UpdateIndexStatus();
         InitializeThumbnailSettings();
@@ -304,6 +305,7 @@ public partial class SettingsWindow : Window
         _settings.MinimizeToTrayOnClose = MinimizeToTrayCheckbox.IsChecked ?? true;
         _settings.NaturalLanguageModeEnabled = NaturalLanguageDefaultCheckbox.IsChecked ?? false;
         _settings.GridViewEnabled = GridViewDefaultCheckbox.IsChecked ?? false;
+        _settings.CompactSearchStateEnabled = CompactCatalogCheckbox.IsChecked ?? true;
 
         try
         {
