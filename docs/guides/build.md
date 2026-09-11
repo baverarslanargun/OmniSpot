@@ -20,11 +20,12 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj `
   --self-contained true `
   -p:PublishSingleFile=true `
   -p:IncludeNativeLibrariesForSelfExtract=true `
-  -p:EnableCompressionInSingleFile=true `
+  -p:EnableCompressionInSingleFile=false `
   -o .\publish
 ```
 
-Bu komut `publish\OmniSpot.exe` dosyasını oluşturur (~70MB).
+Bu komut `publish\OmniSpot.exe` dosyasını oluşturur. Sıkıştırmasız self-contained
+çıktının boyutu bağımlılıklara göre değişir; mevcut build yaklaşık 166 MB'tır.
 .NET runtime gerektirmez, tek başına çalışır.
 
 ## ⚠️ Uyarı Politikası
@@ -44,33 +45,39 @@ kullanılmamalıdır; normal akışta paket güvenlik denetimi açık kalır.
 1. [Inno Setup 6.x](https://jrsoftware.org/isdl.php) indir ve kur
 
 ### Kurulum Dosyası Oluştur
-1. Önce publish yap (yukarıdaki komut)
-2. `installer\OmniSpotSetup.iss` dosyasını Inno Setup ile aç
-3. **Build > Compile** (veya Ctrl+F9)
-4. `installer\output\OmniSpot-1.0.0-Setup.exe` oluşur
+
+Build betiği UI ve `OmniSpotChangeFeed` servisini ayrı ayrı sıkıştırmasız,
+self-contained single-file olarak publish eder; bundle manifestlerini doğrular ve
+installer ile SHA-256 dosyasını üretir.
 
 ### Komut Satırından
 ```powershell
-# Inno Setup kuruluysa
-& "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer\OmniSpotSetup.iss
+& .\scripts\Build-DemoInstaller.ps1 -Version 1.0.0
 ```
+
+Çıktılar:
+
+- `installer\output\OmniSpot-1.0.0-Demo-Setup.exe`
+- `installer\output\OmniSpot-1.0.0-Demo-Setup.exe.sha256`
+
+Installer yükseltilmiş per-machine kurulum yapar. Aynı adlı
+`OmniSpotChangeFeed` servisi zaten varsa mevcut kaydı devralmadan durur.
 
 ## 📁 Proje Yapısı
 
 ```
 OmniSpot/
-├── publish/                    # Yayınlanmış dosyalar
-│   └── OmniSpot.exe              # Ana uygulama (~70MB)
+├── artifacts/demo-installer/   # Geçici UI ve servis publish çıktıları
 ├── installer/
-│   ├── OmniSpotSetup.iss      # Inno Setup script
-│   └── output/                 # Kurulum dosyası çıktısı
+│   ├── OmniSpotSetup.iss       # Inno Setup script
+│   ├── Manage-ChangeFeedService.ps1
+│   └── output/                 # Kurulum dosyası ve SHA-256 çıktısı
 ├── SmartFileLauncher.Core/     # İş mantığı
 ├── SmartFileLauncher.UI/       # WPF arayüz
 ├── tests/                       # Otomatik testler
 ├── docs/                        # Teknik belgeler ve rehberler
 ├── scripts/                     # Geliştirme yardımcıları
-├── assets/branding/             # Logo kaynakları
-└── Tools/IconGenerator/         # İkon üretim aracı
+└── assets/branding/             # Logo kaynakları (SVG ve üretilen ICO)
 ```
 
 ## 🔧 Publish Seçenekleri
@@ -81,7 +88,7 @@ OmniSpot/
 | `-r win-x64` | 64-bit Windows |
 | `--self-contained true` | .NET runtime dahil |
 | `-p:PublishSingleFile=true` | Tek exe dosyası |
-| `-p:EnableCompressionInSingleFile=true` | Sıkıştırma |
+| `-p:EnableCompressionInSingleFile=false` | EXE bundle girdileri sıkıştırılmaz |
 
 ### Alternatif: Framework-dependent (Küçük dosya)
 ```powershell
@@ -101,10 +108,9 @@ Bu ~15MB ama .NET 8 runtime gerektirir.
 <FileVersion>1.0.0.0</FileVersion>
 ```
 
-2. `installer\OmniSpotSetup.iss`:
-```iss
-#define MyAppVersion "1.0.0"
-OutputBaseFilename=OmniSpot-1.0.0-Setup
+2. Build betiğine sürümü ver:
+```powershell
+& .\scripts\Build-DemoInstaller.ps1 -Version 1.0.0
 ```
 
 ## ✅ Release Checklist
@@ -112,8 +118,13 @@ OutputBaseFilename=OmniSpot-1.0.0-Setup
 - [ ] Version numarasını güncelle
 - [ ] Release modda test et
 - [ ] `dotnet publish` çalıştır
+- [ ] UI ve servis bundle'larında sıkıştırılmış girdi sayısının `0` olduğunu doğrula
 - [ ] Inno Setup ile kurulum dosyası oluştur
 - [ ] Kurulum dosyasını test et (temiz VM'de)
+- [ ] Servisin `LocalSystem`, `Automatic` ve `UNRESTRICTED` SID türünde olduğunu doğrula
+- [ ] İkinci normal başlatmanın yeni süreç bırakmadan mevcut pencereyi öne getirdiğini doğrula
+- [ ] Çalışan UI açıkken uninstall'ın UI'yi kapatıp dosyaları kaldırdığını doğrula
+- [ ] Stop/start ve uninstall sonrasında servis kaydının silindiğini doğrula
 - [ ] Antivirus taraması yap
 - [ ] Release notes hazırla
 
@@ -121,10 +132,14 @@ OutputBaseFilename=OmniSpot-1.0.0-Setup
 
 Kurulum programı şunları yapar:
 - ✅ Program Files'a uygulama kopyalar
+- ✅ `OmniSpotChangeFeed` servisini LocalSystem/Automatic olarak kurar
+- ✅ Servis SID türünü ilk başlangıçtan önce `UNRESTRICTED` yapar
+- ✅ Servisi başlatır ve IPC pipe hazır olana kadar bekler
 - ✅ Başlat menüsü kısayolu oluşturur
 - ✅ Masaüstü kısayolu (opsiyonel)
-- ✅ Windows başlangıcında çalıştır (opsiyonel)
-- ✅ Kaldırma desteği
+- ✅ Normal kullanımda tek OmniSpot örneği çalıştırır; sonraki başlatmalar mevcut pencereyi öne getirir
+- ✅ Kaldırmadan önce çalışan OmniSpot'u kontrollü kapatır, ardından servisi durdurup siler
+- ✅ Kullanıcı ayarlarını ve trusted change-feed deposunu kaldırmada korur
 
 ## 🔒 Gelecek: Code Signing
 

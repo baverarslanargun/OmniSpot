@@ -11,14 +11,29 @@ namespace SmartFileLauncher.UI;
 
 public partial class App : System.Windows.Application 
 {
+	private const string ShutdownForUninstallArgument = "--shutdown-for-uninstall";
+	private static readonly TimeSpan UninstallShutdownTimeout = TimeSpan.FromSeconds(30);
+
 	private string _logFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot_crash.log");
 	private bool _redactCrashPaths;
 	private ApplicationCompositionRoot? _compositionRoot;
 	private MainWindow? _mainWindow;
+	private SingleInstanceCoordinator? _singleInstanceCoordinator;
 
 	protected override void OnStartup(StartupEventArgs e)
 	{
 		base.OnStartup(e);
+
+		if (e.Args.Any(argument =>
+			string.Equals(argument, ShutdownForUninstallArgument, StringComparison.OrdinalIgnoreCase)))
+		{
+			using var coordinator = new SingleInstanceCoordinator();
+			var stopped = coordinator.IsPrimary ||
+				coordinator.SignalShutdownAndWait(UninstallShutdownTimeout);
+			Shutdown(stopped ? 0 : 3);
+			return;
+		}
+
 		var startupOptions = ApplicationStartupOptions.Parse(e.Args);
 		if (startupOptions.Error != null)
 		{
@@ -29,6 +44,33 @@ public partial class App : System.Windows.Application
 				MessageBoxImage.Error);
 			Shutdown(2);
 			return;
+		}
+
+		if (!startupOptions.IsMeasurement)
+		{
+			var coordinator = new SingleInstanceCoordinator();
+			if (!coordinator.IsPrimary)
+			{
+				coordinator.SignalActivation();
+				coordinator.Dispose();
+				Shutdown();
+				return;
+			}
+
+			_singleInstanceCoordinator = coordinator;
+			coordinator.StartListening(
+				() => QueueOnDispatcher(() => _mainWindow?.ShowAndActivate()),
+				() => QueueOnDispatcher(() =>
+				{
+					if (_mainWindow != null)
+					{
+						_mainWindow.ForceExit();
+					}
+					else
+					{
+						Shutdown();
+					}
+				}));
 		}
 
 		MeasurementRunLayout? measurementRun = null;
@@ -92,7 +134,25 @@ public partial class App : System.Windows.Application
 	{
 		_mainWindow?.PrepareForShutdown();
 		_compositionRoot?.Dispose();
+		_singleInstanceCoordinator?.Dispose();
 		base.OnExit(e);
+	}
+
+	private void QueueOnDispatcher(Action action)
+	{
+		try
+		{
+			if (Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+			{
+				return;
+			}
+
+			Dispatcher.BeginInvoke(action);
+		}
+		catch (InvalidOperationException) when (
+			Dispatcher.HasShutdownStarted || Dispatcher.HasShutdownFinished)
+		{
+		}
 	}
 
 	private void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
