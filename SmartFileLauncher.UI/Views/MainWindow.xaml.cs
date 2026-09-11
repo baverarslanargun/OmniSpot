@@ -258,7 +258,7 @@ public partial class MainWindow : Window {
     private void HandleShellExitRequested() {
         Dispatcher.Invoke(ForceExit);
     }
-    private void ShowAndActivate() {
+    internal void ShowAndActivate() {
         var wasHidden = !IsVisible || WindowState == WindowState.Minimized;
         Show();
         WindowState = WindowState.Normal;
@@ -323,7 +323,7 @@ public partial class MainWindow : Window {
         ForceExit();
     }
     
-    private void ForceExit() {
+    internal void ForceExit() {
         PrepareForShutdown();
         System.Windows.Application.Current.Shutdown();
     }
