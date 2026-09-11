@@ -877,9 +877,10 @@ public partial class IndexManager : IDisposable
 
 
                 fileCount++;
-                if (fileCount % 100 == 0)
+                int pct = (int)(fileCount * 100.0 / totalFiles);
+                int previousPct = (int)((fileCount - 1) * 100.0 / totalFiles);
+                if (pct != previousPct)
                 {
-                    int pct = (int)(fileCount * 100.0 / totalFiles);
                     ReportProgress($"Önbellek yükleniyor: {fileCount}/{totalFiles}", pct, fileCount, 0);
                 }
             }

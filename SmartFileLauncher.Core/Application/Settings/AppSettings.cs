@@ -16,7 +16,7 @@ public sealed class AppSettings
     public int DiagnosticsMetricIntervalSeconds { get; set; } = 5;
     public string DiagnosticsLogDirectory { get; set; } = string.Empty;
     public bool RememberDiagnosticsLogDirectory { get; set; } = true;
-    public bool CompactSearchStateEnabled { get; set; }
+    public bool CompactSearchStateEnabled { get; set; } = true;
     public bool ThumbnailPreviewsEnabled { get; set; } = true;
     public bool ThumbnailCacheUseRamRatio { get; set; }
     public int ThumbnailCacheMaxCount { get; set; } = 1000;
@@ -41,7 +41,7 @@ public sealed class AppSettings
         DiagnosticsMetricIntervalSeconds = 5;
         DiagnosticsLogDirectory = string.Empty;
         RememberDiagnosticsLogDirectory = true;
-        CompactSearchStateEnabled = false;
+        CompactSearchStateEnabled = true;
         ThumbnailPreviewsEnabled = true;
         ThumbnailCacheUseRamRatio = false;
         ThumbnailCacheMaxCount = 1000;
