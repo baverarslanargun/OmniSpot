@@ -1,7 +1,7 @@
 # OmniSpot V1.0 - Akıllı Dosya Tarayıcı
 
 <p align="center">
-  <img src="assets/branding/omnispot.svg" alt="OmniSpot logosu" width="180">
+  <img src="assets/branding/omnispot-kobalt-yazili.svg" alt="OmniSpot logosu" width="260">
 </p>
 
 Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek noktadan erişin!

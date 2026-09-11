@@ -217,73 +217,7 @@
         <Geometry x:Key="InfoGeometry">M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 11 V16 M12 8 V8.1</Geometry>
         <Geometry x:Key="WarningTriangleGeometry">M12 2.5 L22.5 20.5 H1.5 Z</Geometry>
         <Geometry x:Key="WarningMarkGeometry">M12 9 V14.2 M12 17.2 V17.3</Geometry>
-        <DrawingImage x:Key="OmniSpotLogo">
-            <DrawingImage.Drawing>
-                <DrawingGroup>
-                    <GeometryDrawing>
-                        <GeometryDrawing.Geometry><RectangleGeometry Rect="20,20,216,216" RadiusX="48" RadiusY="48"/></GeometryDrawing.Geometry>
-                        <GeometryDrawing.Brush>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
-                                <GradientStop Color="#101633" Offset="0"/>
-                                <GradientStop Color="#050812" Offset="1"/>
-                            </LinearGradientBrush>
-                        </GeometryDrawing.Brush>
-                    </GeometryDrawing>
-                    <GeometryDrawing>
-                        <GeometryDrawing.Geometry><EllipseGeometry Center="128,124" RadiusX="78" RadiusY="78"/></GeometryDrawing.Geometry>
-                        <GeometryDrawing.Brush>
-                            <RadialGradientBrush Center="0.5,0.35" GradientOrigin="0.5,0.35" RadiusX="0.6" RadiusY="0.6">
-                                <GradientStop Color="#37F3FF" Offset="0"/>
-                                <GradientStop Color="#00C4FF" Offset="0.45"/>
-                                <GradientStop Color="#0050B8" Offset="1"/>
-                            </RadialGradientBrush>
-                        </GeometryDrawing.Brush>
-                    </GeometryDrawing>
-                    <GeometryDrawing>
-                        <GeometryDrawing.Geometry><EllipseGeometry Center="128,124" RadiusX="58" RadiusY="58"/></GeometryDrawing.Geometry>
-                        <GeometryDrawing.Pen><Pen Brush="#5962E5FF" Thickness="3"/></GeometryDrawing.Pen>
-                    </GeometryDrawing>
-                    <GeometryDrawing>
-                        <GeometryDrawing.Geometry><EllipseGeometry Center="128,124" RadiusX="42" RadiusY="42"/></GeometryDrawing.Geometry>
-                        <GeometryDrawing.Pen><Pen Brush="#4062E5FF" Thickness="3"/></GeometryDrawing.Pen>
-                    </GeometryDrawing>
-                    <GeometryDrawing Geometry="M96 76 H148 L176 104 V168 C176 178 168 186 158 186 H96 C86 186 78 178 78 168 V94 C78 84 86 76 96 76 Z">
-                        <GeometryDrawing.Brush>
-                            <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                <GradientStop Color="#F8FBFF" Offset="0"/>
-                                <GradientStop Color="#D9E4FF" Offset="1"/>
-                            </LinearGradientBrush>
-                        </GeometryDrawing.Brush>
-                    </GeometryDrawing>
-                    <GeometryDrawing Brush="#C5D5FF" Geometry="M148 76 L176 104 H152 C150 104 148 102 148 100 Z"/>
-                    <GeometryDrawing Geometry="M94 112 H160">
-                        <GeometryDrawing.Pen><Pen Brush="#D9A0B6FF" Thickness="4" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
-                    </GeometryDrawing>
-                    <GeometryDrawing Geometry="M94 128 H152">
-                        <GeometryDrawing.Pen><Pen Brush="#BFA0B6FF" Thickness="4" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
-                    </GeometryDrawing>
-                    <GeometryDrawing Geometry="M94 144 H144">
-                        <GeometryDrawing.Pen><Pen Brush="#A6A0B6FF" Thickness="4" StartLineCap="Round" EndLineCap="Round"/></GeometryDrawing.Pen>
-                    </GeometryDrawing>
-                    <GeometryDrawing Brush="#CCC8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="72,150" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
-                    <GeometryDrawing Brush="#E6C8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="190,108" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
-                    <GeometryDrawing Brush="#B3C8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="176,162" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
-                    <GeometryDrawing Brush="#99C8F5FF"><GeometryDrawing.Geometry><EllipseGeometry Center="80,102" RadiusX="4" RadiusY="4"/></GeometryDrawing.Geometry></GeometryDrawing>
-                    <GeometryDrawing>
-                        <GeometryDrawing.Geometry><EllipseGeometry Center="184,152" RadiusX="22" RadiusY="22"/></GeometryDrawing.Geometry>
-                        <GeometryDrawing.Brush>
-                            <RadialGradientBrush>
-                                <GradientStop Color="#FF7CFFD8" Offset="0"/>
-                                <GradientStop Color="#D93DFFCC" Offset="0.4"/>
-                                <GradientStop Color="#0000FFCC" Offset="1"/>
-                            </RadialGradientBrush>
-                        </GeometryDrawing.Brush>
-                    </GeometryDrawing>
-                    <GeometryDrawing Brush="#E8FFF9"><GeometryDrawing.Geometry><EllipseGeometry Center="184,152" RadiusX="6" RadiusY="6"/></GeometryDrawing.Geometry></GeometryDrawing>
-                    <GeometryDrawing Brush="#12FFFFFF"><GeometryDrawing.Geometry><EllipseGeometry Center="128,70" RadiusX="80" RadiusY="26"/></GeometryDrawing.Geometry></GeometryDrawing>
-                </DrawingGroup>
-            </DrawingImage.Drawing>
-        </DrawingImage>
+        <BitmapImage x:Key="OmniSpotLogo" UriSource="/Resources/omnispot-amblem.png"/>
         <SolidColorBrush x:Key="ShimmerBrush" Color="#E6EBF3"/>
         <DataTemplate x:Key="SkeletonCardTemplate">
             <Border Width="132" Height="150" Margin="10,10" Background="White" CornerRadius="16" BorderBrush="#E2E8F0" BorderThickness="1" Padding="16,20,16,16">
@@ -1459,12 +1393,8 @@
                         Panel.ZIndex="10"
                         Padding="40,36">
                     <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Grid Width="104" Height="104" HorizontalAlignment="Center" Margin="0,0,0,20">
-                            <Image Source="{StaticResource OmniSpotLogo}" Width="88" Height="88" RenderOptions.BitmapScalingMode="HighQuality">
-                                <Image.Effect>
-                                    <DropShadowEffect BlurRadius="16" ShadowDepth="5" Opacity="0.18" Color="#0A1A4A"/>
-                                </Image.Effect>
-                            </Image>
+                        <Grid Width="128" Height="128" HorizontalAlignment="Center" Margin="0,0,0,20">
+                            <Image Source="{StaticResource OmniSpotLogo}" Width="112" Height="112" RenderOptions.BitmapScalingMode="HighQuality"/>
                         </Grid>
                         <TextBlock Text="OmniSpot hazırlanıyor" Style="{StaticResource StateTitle}"/>
                         <TextBlock x:Name="LoadingStatus" Text="Başlatılıyor..." FontSize="13.5" FontWeight="Normal" Foreground="#4A5462"

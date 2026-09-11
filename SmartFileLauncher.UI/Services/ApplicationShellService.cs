@@ -89,6 +89,21 @@ public sealed class ApplicationShellService : IApplicationShellService
         _contextMenu = null;
     }
 
+    private static System.Drawing.Icon? LoadTrayIcon()
+    {
+        var size = System.Windows.Forms.SystemInformation.SmallIconSize;
+        var resource = System.Windows.Application.GetResourceStream(
+            new Uri("pack://application:,,,/Resources/app.ico", UriKind.Absolute));
+        if (resource != null)
+        {
+            using var stream = resource.Stream;
+            return new System.Drawing.Icon(stream, size);
+        }
+
+        var iconPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "omnispot.ico");
+        return File.Exists(iconPath) ? new System.Drawing.Icon(iconPath, size) : null;
+    }
+
     private void SetupTray()
     {
         _notifyIcon = new System.Windows.Forms.NotifyIcon
@@ -98,18 +113,8 @@ public sealed class ApplicationShellService : IApplicationShellService
 
         try
         {
-            var iconPath = Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "omnispot.ico");
-            if (File.Exists(iconPath))
-            {
-                _ownedIcon = new System.Drawing.Icon(iconPath);
-                _notifyIcon.Icon = _ownedIcon;
-            }
-            else
-            {
-                _notifyIcon.Icon = System.Drawing.SystemIcons.Application;
-            }
+            _ownedIcon = LoadTrayIcon();
+            _notifyIcon.Icon = _ownedIcon ?? System.Drawing.SystemIcons.Application;
         }
         catch
         {
