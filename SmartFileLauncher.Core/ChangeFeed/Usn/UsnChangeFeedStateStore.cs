@@ -35,6 +35,7 @@ public sealed partial class UsnChangeFeedStateStore
 
     public UsnVolumeFeedState? Read()
     {
+        _persistedCursor = null;
         if (!File.Exists(_filePath))
         {
             _cachedBase = null; _snapshotId = Guid.Empty;
@@ -116,6 +117,7 @@ public sealed partial class UsnChangeFeedStateStore
 
     public void Delete()
     {
+        _persistedCursor = null;
         if (File.Exists(_filePath))
         {
             File.Delete(_filePath);
@@ -175,6 +177,7 @@ public sealed partial class UsnChangeFeedStateStore
         }
 
         var temporary = _filePath + TemporarySuffix;
+        _persistedCursor = null;
         using (var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
         { JsonSerializer.Serialize(output, document, SerializerOptions); output.Flush(true); }
         File.Move(temporary, _filePath, overwrite: true);
@@ -182,6 +185,7 @@ public sealed partial class UsnChangeFeedStateStore
         _cachedBase = new(journalId, nextUsn, roots, pendingSecurityChange);
         var file = new FileInfo(_filePath); _baseLength = file.Length; _baseModified = file.LastWriteTimeUtc.Ticks;
         File.Delete(_filePath + ".cursor");
+        _persistedCursor = new(_snapshotId, journalId, nextUsn, pendingSecurityChange);
     }
 
     private sealed class VolumeDocument

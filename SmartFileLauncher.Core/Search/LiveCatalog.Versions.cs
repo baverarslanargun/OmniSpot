@@ -24,7 +24,7 @@ internal sealed partial class LiveCatalog
     }
     private LiveCatalog(string directory, Frame frame)
     {
-        if (frame.Version != 2 || frame.Contract != "live-tr-nfc-fold-1" || frame.Areas.Length != AreaNames.Length || !frame.Areas.Select(area => area.Name).SequenceEqual(AreaNames))
+        if (frame.Version is not (2 or 3) || frame.Contract != "live-tr-nfc-fold-1" || frame.Areas.Length != AreaNames.Length || !frame.Areas.Select(area => area.Name).SequenceEqual(AreaNames))
             throw new InvalidDataException("Live sürüm sözleşmesi uyuşmuyor.");
         _directory = directory; _root = frame.Root; _rootPrefix = _root.EndsWith('\\') ? _root : _root + "\\"; _indexedUtc = frame.IndexedUtc;
         var areas = new List<LivePages>();
@@ -56,7 +56,7 @@ internal sealed partial class LiveCatalog
         if (_poisoned || _readyItems != _itemCount || _nodeCount - _deletedNodes != _itemCount) throw new InvalidDataException("Live işleminde eksik ebeveyn var.");
         Publish();
         foreach (var area in _areas) area.FlushDurable();
-        var frame = new Frame(2, _root, _indexedUtc, _stamp, _directoryCount, _nodeBase, _nodeSplit, _termBase, _termSplit,
+        var frame = new Frame(3, _root, _indexedUtc, _stamp, _directoryCount, _nodeBase, _nodeSplit, _termBase, _termSplit,
             sequence, deliveryId, _areas.Select((area, index) => new PageArea(AreaNames[index], area.Used, area.References())).ToArray(), DeletedNodes: _deletedNodes);
         _sealed = true; _nameOffsets = null; _nameCollisions = null; return frame;
     }

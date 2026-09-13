@@ -45,15 +45,16 @@ public partial class IndexManager
             change.OldPath is not null && !IsLiveStoragePath(change.OldPath)).ToArray();
         repairs.RemoveWhere(IsLiveStoragePath);
         if (changes.Count == 0 && repairs.Count == 0) return;
+        var mutations = CoalesceLiveModifications(changes);
         lock (_liveWriteGate)
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_isInitialized) throw new InvalidOperationException("Live katalog hazır değil.");
             foreach (var store in _liveStores)
             {
-                var relevant = changes.Where(change => IsSameOrDescendantPath(change.FullPath, store.RootPath) ||
+                var relevant = mutations.Where(change => IsSameOrDescendantPath(change.FullPath, store.RootPath) ||
                     change.OldPath is not null && IsSameOrDescendantPath(change.OldPath, store.RootPath)).ToArray();
-                if (relevant.Length == 0 && deliveryId is null) continue;
+                if (relevant.Length == 0 && !repairs.Any(path => IsSameOrDescendantPath(path, store.RootPath))) continue;
                 store.Commit(candidate =>
                 {
                     foreach (var change in relevant)
@@ -72,6 +73,22 @@ public partial class IndexManager
             PublishLiveState();
         }
         foreach (var change in changes) QueueNotification(() => OnFileChange?.Invoke(change));
+    }
+
+    internal static IReadOnlyList<FileChangeEvent> CoalesceLiveModifications(IReadOnlyList<FileChangeEvent> changes)
+    {
+        var result = new List<FileChangeEvent>(changes.Count);
+        var pending = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var change in changes)
+        {
+            if (change.ChangeType != FileChangeType.Modified || change.IsDirectory || change.OldPath is not null)
+            {
+                pending.Clear(); result.Add(change); continue;
+            }
+            if (pending.TryGetValue(change.FullPath, out var index)) result[index] = change;
+            else { pending.Add(change.FullPath, result.Count); result.Add(change); }
+        }
+        return result;
     }
 
     private void ApplyLiveEvent(LiveCatalog candidate, FileChangeEvent change, CancellationToken ct, HashSet<string> repairs)

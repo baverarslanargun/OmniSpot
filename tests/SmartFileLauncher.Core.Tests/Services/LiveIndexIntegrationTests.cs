@@ -12,6 +12,45 @@ namespace SmartFileLauncher.Core.Tests.Services;
 public sealed class LiveIndexIntegrationTests
 {
     [Fact]
+    public void ModificationCoalescingPreservesStructuralEventBoundaries()
+    {
+        FileChangeEvent Event(FileChangeType type, string path, bool directory = false) => new() { ChangeType = type, FullPath = path, IsDirectory = directory };
+        var first = Event(FileChangeType.Modified, @"C:\files\one.txt");
+        var other = Event(FileChangeType.Modified, @"C:\files\other.txt");
+        var latest = Event(FileChangeType.Modified, @"C:\FILES\one.txt");
+        var delete = Event(FileChangeType.Deleted, first.FullPath);
+        var create = Event(FileChangeType.Created, first.FullPath);
+        var after = Event(FileChangeType.Modified, first.FullPath);
+        var rename = new FileChangeEvent { ChangeType = FileChangeType.Renamed, FullPath = @"C:\files\new.txt", OldPath = first.FullPath };
+        var directory = Event(FileChangeType.Modified, @"C:\files", true);
+        Assert.Equal(new[] { latest, other, delete, create, after, rename, first, directory, latest },
+            IndexManager.CoalesceLiveModifications([first, other, latest, delete, create, after, rename, first, directory, latest]));
+    }
+
+    [Fact]
+    public async Task DeliveryWritesOnlyTheAffectedRootAndReplaysIdempotently()
+    {
+        using var space = new TemporaryDirectory();
+        var a = Directory.CreateDirectory(Path.Combine(space.Path, "a")).FullName;
+        var b = Directory.CreateDirectory(Path.Combine(space.Path, "b")).FullName;
+        var path = Path.Combine(a, "report.txt"); File.WriteAllText(path, "old");
+        var database = Path.Combine(space.Path, "index.db");
+        using var manager = Create(database);
+        await manager.InitializeLiveAsync([a, b], null, new(new Channel(), new IndexManagerChangeFeedTarget(manager)), CancellationToken.None);
+        var stores = Directory.GetFiles(database + ".live", "head.bin", SearchOption.AllDirectories).Select(file => Path.GetDirectoryName(file)!).ToArray();
+        var before = stores.ToDictionary(directory => directory, LiveCatalogStore.ReadHead);
+        File.WriteAllText(path, "new contents");
+        var events = Enumerable.Range(0, 25).Select(_ => new ChangeFeedEventDto(ChangeFeedEventKind.Modified, path, false, null)).ToArray();
+        await manager.CommitContinuousDeliveryAsync([Page(a, events)], "changed-a", CancellationToken.None);
+        foreach (var directory in stores)
+            Assert.Equal(before[directory].Sequence + (before[directory].Root == a ? 1 : 0), LiveCatalogStore.ReadHead(directory).Sequence);
+        Assert.Equal(new FileInfo(path).Length, manager.CurrentSearchState.Get("report").Single().SizeBytes);
+        await manager.CommitContinuousDeliveryAsync([Page(a, events)], "changed-a", CancellationToken.None);
+        foreach (var directory in stores)
+            Assert.Equal(before[directory].Sequence + (before[directory].Root == a ? 1 : 0), LiveCatalogStore.ReadHead(directory).Sequence);
+    }
+
+    [Fact]
     public async Task CatalogInsideIndexedRootNeverIndexesOrRewritesItself()
     {
         using var space = new TemporaryDirectory();

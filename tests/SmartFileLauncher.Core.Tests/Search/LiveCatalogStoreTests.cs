@@ -114,12 +114,16 @@ public sealed class LiveCatalogStoreTests
         }
         initial.Seal(); using var store = new LiveCatalogStore(path, initial);
         var before = LiveCatalogStore.ReadHead(path); var old = store.State;
+        var headBytes = File.ReadAllBytes(Path.Combine(path, "head.bin"));
         var changed = selected! with { Item = selected!.Item with { OpenCount = 1 } };
         store.Commit([new(changed.Item.FullPath, changed)]);
         var after = LiveCatalogStore.ReadHead(path);
         var originalPages = before.Areas.SelectMany(area => area.Pages).Select(page => page.File).ToHashSet();
         var nextPages = after.Areas.SelectMany(area => area.Pages).Select(page => page.File).ToArray();
         Assert.InRange(nextPages.Count(page => !originalPages.Contains(page)), 1, 3);
+        Assert.InRange(nextPages.Where(page => !originalPages.Contains(page)).Sum(page => new FileInfo(Path.Combine(path, page)).Length), 1, 4096);
+        Assert.Equal(headBytes, File.ReadAllBytes(Path.Combine(path, "head.bin")));
+        Assert.InRange(new FileInfo(Assert.Single(Directory.GetFiles(path, "commit-*.bin"))).Length, 1, 8192);
         Assert.Contains(nextPages, originalPages.Contains);
         Assert.Equal(0, old.Get("123").Single().OpenCount);
         Assert.Equal(1, store.State.Get("123").Single().OpenCount);

@@ -14,6 +14,34 @@ public sealed class UsnChangeFeedStateStoreTests
     private const long NextUsn = 4200;
 
     [Fact]
+    public void IdenticalCursorDoesNotWriteButSecurityOnlyChangesPersistAcrossRestart()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json");
+        var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var root = State(FirstRoot, 1);
+        store.Write(JournalId, NextUsn, [root]);
+        var oldTime = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, oldTime);
+        store.Write(JournalId, NextUsn, [root]);
+        Assert.False(File.Exists(path + ".cursor"));
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(path));
+
+        store.Write(JournalId, NextUsn + 100, [root.WithPosition(JournalId, NextUsn + 100)]);
+        File.SetLastWriteTimeUtc(path + ".cursor", oldTime);
+        store.Write(JournalId, NextUsn + 100, [root.WithPosition(JournalId, NextUsn + 100)]);
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(path + ".cursor"));
+        var reopened = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var state = reopened.Read()!;
+        reopened.Write(state.JournalId, state.NextUsn, state.Roots);
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(path + ".cursor"));
+        reopened.Write(state.JournalId, state.NextUsn, state.Roots, pendingSecurityChange: true);
+        Assert.True(new UsnChangeFeedStateStore(path).Read()!.PendingSecurityChange);
+        reopened.Write(state.JournalId, state.NextUsn, state.Roots, pendingSecurityChange: false);
+        Assert.False(new UsnChangeFeedStateStore(path).Read()!.PendingSecurityChange);
+    }
+
+    [Fact]
     public void Read_ReturnsNullBeforeAnythingIsWritten()
     {
         using var directory = new TemporaryDirectory();

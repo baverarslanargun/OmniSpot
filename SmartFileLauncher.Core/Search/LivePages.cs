@@ -7,7 +7,7 @@ using System.Text;
 
 namespace SmartFileLauncher.Core.Search;
 
-internal sealed unsafe class LivePages : Stream
+internal sealed unsafe partial class LivePages : Stream
 {
     internal const int PageSize = 1 << 18;
     private readonly string _directory, _name;
@@ -17,11 +17,11 @@ internal sealed unsafe class LivePages : Stream
     private int _length, _position;
     private bool _disposed;
 
-    private sealed class Page : IDisposable
+    private sealed partial class Page : IDisposable
     {
-        private readonly FileStream _file;
-        private readonly MemoryMappedFile _map;
-        private readonly MemoryMappedViewAccessor _view;
+        private readonly FileStream? _file;
+        private readonly MemoryMappedFile? _map;
+        private readonly MemoryMappedViewAccessor? _view;
         internal byte* Pointer;
         internal readonly string Path;
         private int _references = 1;
@@ -46,7 +46,7 @@ internal sealed unsafe class LivePages : Stream
             }
             catch { _view?.Dispose(); _map?.Dispose(); _file.Dispose(); throw; }
         }
-        internal void Flush() { _view.Flush(); _file.Flush(true); }
+        internal void Flush() { if (_owned) PersistPatch(); else { _view!.Flush(); _file!.Flush(true); } }
         internal void Retain() => Interlocked.Increment(ref _references);
         internal void Release() { if (Interlocked.Decrement(ref _references) == 0) Dispose(); }
         internal void Retire() => _retired = true;
@@ -54,14 +54,14 @@ internal sealed unsafe class LivePages : Stream
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _closed, 1) != 0) return;
-            if (Pointer != null) { _view.SafeMemoryMappedViewHandle.ReleasePointer(); Pointer = null; }
+            if (Pointer != null) { if (_owned) NativeMemory.Free(Pointer); else _view!.SafeMemoryMappedViewHandle.ReleasePointer(); Pointer = null; }
             _view?.Dispose(); _map?.Dispose(); _file?.Dispose(); GC.SuppressFinalize(this);
             if (_memoryPressure) { GC.RemoveMemoryPressure(PageSize); _memoryPressure = false; }
             if (_retired) { try { File.Delete(Path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
         }
         ~Page() => Dispose();
     }
-    internal sealed record PageReference(string File, string Sha256);
+    internal sealed record PageReference(string File, string Sha256, string? BaseFile = null, string? BaseSha256 = null);
     private LivePages(LivePages source, bool writable)
     {
         _directory = source._directory; _name = source._name; _readOnly = !writable;
@@ -79,25 +79,31 @@ internal sealed unsafe class LivePages : Stream
             foreach (var reference in pages)
             {
                 if (System.IO.Path.GetFileName(reference.File) != reference.File || !reference.File.EndsWith(".page", StringComparison.Ordinal)) throw new InvalidDataException("Live sayfa yolu geçersiz.");
-                var page = new Page(System.IO.Path.Combine(directory, reference.File), false); _pages.Add(page);
+                var page = reference.BaseFile is null ? new Page(System.IO.Path.Combine(directory, reference.File), false)
+                    : new Page(directory, reference); _pages.Add(page);
                 if (page.Hash() != reference.Sha256) throw new InvalidDataException("Live sayfa checksum uyuşmuyor.");
             }
         }
         catch { Dispose(); throw; }
     }
-    internal PageReference[] References() => _pages.Select(page => new PageReference(System.IO.Path.GetFileName(page.Path), page.Hash())).ToArray();
+    internal PageReference[] References() => _pages.Select(page => new PageReference(System.IO.Path.GetFileName(page.Path), page.Hash(), page.BaseFile, page.BaseSha256)).ToArray();
     internal void RetireReplacedPages(LivePages next)
     {
         for (var index = 0; index < _pages.Count; index++)
-            if (index >= next._pages.Count || !ReferenceEquals(_pages[index], next._pages[index])) _pages[index].Retire();
+            if (index >= next._pages.Count || !ReferenceEquals(_pages[index], next._pages[index]))
+            {
+                var old = _pages[index]; var replacement = index < next._pages.Count ? next._pages[index] : null;
+                if (replacement?.BaseFile != System.IO.Path.GetFileName(old.Path)) old.Retire();
+                if (old.BaseFile is { } baseline && baseline != replacement?.BaseFile && baseline != System.IO.Path.GetFileName(replacement?.Path))
+                { try { File.Delete(System.IO.Path.Combine(_directory, baseline)); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
+            }
     }
     internal void AbandonPrivatePages() { if (_privatePages is not null) foreach (var id in _privatePages) _pages[id].Retire(); }
     private Page WritablePage(int index)
     {
         if (_privatePages is null || _privatePages.Contains(index)) return _pages[index];
         var previous = _pages[index];
-        var page = new Page(System.IO.Path.Combine(_directory, $"{_name}-{Guid.NewGuid():N}.page"), true);
-        new ReadOnlySpan<byte>(previous.Pointer, PageSize).CopyTo(new Span<byte>(page.Pointer, PageSize));
+        var page = new Page(System.IO.Path.Combine(_directory, $"{_name}-{Guid.NewGuid():N}.page"), previous);
         _pages[index] = page; _privatePages.Add(index); previous.Release(); return page;
     }
 
@@ -128,7 +134,8 @@ internal sealed unsafe class LivePages : Stream
         var offset = Allocate(length);
         if ((offset & (PageSize - 1)) + length <= PageSize)
         {
-            var target = new Span<byte>(WritablePage(offset / PageSize).Pointer + (offset & (PageSize - 1)), length);
+            var page = WritablePage(offset / PageSize); page.MarkChanged(offset & (PageSize - 1), length);
+            var target = new Span<byte>(page.Pointer + (offset & (PageSize - 1)), length);
             PackedFormat.Utf8.GetBytes(text, target); GC.KeepAlive(this);
         }
         else
@@ -182,8 +189,13 @@ internal sealed unsafe class LivePages : Stream
         while (!bytes.IsEmpty)
         {
             var count = Math.Min(bytes.Length, PageSize - (offset & (PageSize - 1)));
-            var target = new Span<byte>(WritablePage(offset / PageSize).Pointer + (offset & (PageSize - 1)), count);
-            bytes[..count].CopyTo(target); bytes = bytes[count..]; offset += count;
+            if (!Slice(offset, count).SequenceEqual(bytes[..count]))
+            {
+                var page = WritablePage(offset / PageSize); page.MarkChanged(offset & (PageSize - 1), count);
+                var target = new Span<byte>(page.Pointer + (offset & (PageSize - 1)), count);
+                bytes[..count].CopyTo(target);
+            }
+            bytes = bytes[count..]; offset += count;
         }
         GC.KeepAlive(this);
     }
