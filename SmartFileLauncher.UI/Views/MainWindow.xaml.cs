@@ -842,7 +842,7 @@ public partial class MainWindow : Window {
             Log("Arka planda indeks uzlaştırması devam ediyor...");
             DeltaSyncPanel.Visibility = Visibility.Visible;
         } else {
-            Log("FileSystemWatcher aktif - değişiklikler otomatik izleniyor");
+            Log("Dosya değişiklikleri otomatik izleniyor");
         }
 
         var fromSkeleton = SkeletonPanel.Visibility == Visibility.Visible;

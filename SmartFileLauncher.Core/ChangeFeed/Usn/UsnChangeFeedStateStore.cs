@@ -9,7 +9,7 @@ public sealed record UsnVolumeFeedState(
     IReadOnlyList<UsnChangeFeedState> Roots,
     bool PendingSecurityChange = false);
 
-public sealed class UsnChangeFeedStateStore
+public sealed partial class UsnChangeFeedStateStore
 {
     private const string TemporarySuffix = ".tmp";
 
@@ -19,11 +19,16 @@ public sealed class UsnChangeFeedStateStore
     };
 
     private readonly string _filePath;
+    private readonly bool _cacheReads;
+    private UsnVolumeFeedState? _cachedBase;
+    private long _baseLength, _baseModified;
+    private Guid _snapshotId;
 
-    public UsnChangeFeedStateStore(string filePath)
+    public UsnChangeFeedStateStore(string filePath, bool cacheReads = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
         _filePath = filePath;
+        _cacheReads = cacheReads;
     }
 
     public string FilePath => _filePath;
@@ -32,8 +37,12 @@ public sealed class UsnChangeFeedStateStore
     {
         if (!File.Exists(_filePath))
         {
+            _cachedBase = null; _snapshotId = Guid.Empty;
             return null;
         }
+        var file = new FileInfo(_filePath);
+        if (_cacheReads && _cachedBase is not null && file.Length == _baseLength && file.LastWriteTimeUtc.Ticks == _baseModified)
+            return ApplyCursor(_cachedBase);
 
         VolumeDocument? document;
         try
@@ -91,11 +100,13 @@ public sealed class UsnChangeFeedStateStore
                     root.SynchronizedFromUsn))
                 .ToArray();
 
-            return new UsnVolumeFeedState(
+            _cachedBase = new UsnVolumeFeedState(
                 document.JournalId,
                 document.NextUsn,
                 roots,
                 document.PendingSecurityChange);
+            _snapshotId = document.SnapshotId; _baseLength = file.Length; _baseModified = file.LastWriteTimeUtc.Ticks;
+            return ApplyCursor(_cachedBase);
         }
         catch (ArgumentException failure)
         {
@@ -109,6 +120,7 @@ public sealed class UsnChangeFeedStateStore
         {
             File.Delete(_filePath);
         }
+        File.Delete(_filePath + ".cursor"); _cachedBase = null; _snapshotId = Guid.Empty;
     }
 
     public void Write(
@@ -125,8 +137,12 @@ public sealed class UsnChangeFeedStateStore
             throw new ArgumentException("En az bir kök durumu gerekiyor.", nameof(roots));
         }
 
+        if (_cacheReads && CanWriteCursor(journalId, roots))
+        { WriteCursor(new(_snapshotId, journalId, nextUsn, pendingSecurityChange)); return; }
+
         var document = new VolumeDocument
         {
+            SnapshotId = Guid.NewGuid(),
             JournalId = journalId,
             NextUsn = nextUsn,
             PendingSecurityChange = pendingSecurityChange,
@@ -159,14 +175,18 @@ public sealed class UsnChangeFeedStateStore
         }
 
         var temporary = _filePath + TemporarySuffix;
-        File.WriteAllBytes(
-            temporary,
-            JsonSerializer.SerializeToUtf8Bytes(document, SerializerOptions));
+        using (var output = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
+        { JsonSerializer.Serialize(output, document, SerializerOptions); output.Flush(true); }
         File.Move(temporary, _filePath, overwrite: true);
+        _snapshotId = document.SnapshotId;
+        _cachedBase = new(journalId, nextUsn, roots, pendingSecurityChange);
+        var file = new FileInfo(_filePath); _baseLength = file.Length; _baseModified = file.LastWriteTimeUtc.Ticks;
+        File.Delete(_filePath + ".cursor");
     }
 
     private sealed class VolumeDocument
     {
+        public Guid SnapshotId { get; set; }
         public ulong JournalId { get; set; }
 
         public long NextUsn { get; set; }

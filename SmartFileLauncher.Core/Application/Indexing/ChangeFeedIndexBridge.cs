@@ -13,6 +13,8 @@ public interface IChangeFeedRequestChannel
 
 public interface IChangeFeedIndexTarget
 {
+    Task CommitContinuousAsync(IReadOnlyList<ChangeFeedRootPageDto> roots, string deliveryId,
+        CancellationToken cancellationToken) => throw new NotSupportedException("Kalıcı teslim hedefi yok.");
     bool Apply(IReadOnlyList<FileChangeEvent> changes);
 
     Task<IReadOnlyList<string>> ApplyOrRepairAsync(IReadOnlyList<FileChangeEvent> changes, bool withinLifecycle,
@@ -47,7 +49,7 @@ public sealed record ChangeFeedAdoptionResult(
     IReadOnlyList<string>? PendingRepairScopes = null,
     bool OnlyKnownRepairs = false);
 
-public sealed class ChangeFeedIndexBridge
+public sealed partial class ChangeFeedIndexBridge
 {
     public const int MaximumPagesPerAdoption = 512;
 

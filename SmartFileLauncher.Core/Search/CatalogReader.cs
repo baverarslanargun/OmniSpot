@@ -12,6 +12,8 @@ internal abstract class CatalogReader
 {
     internal virtual bool RequiresOwnCheckpoint => false;
     internal abstract int ItemCount { get; }
+    internal virtual int IdCapacity => ItemCount;
+    internal virtual IEnumerable<int> ActiveIds => Enumerable.Range(0, ItemCount);
     internal abstract int TokenCount { get; }
     internal abstract int MissingParentCount { get; }
     internal abstract int PayloadBytes { get; }

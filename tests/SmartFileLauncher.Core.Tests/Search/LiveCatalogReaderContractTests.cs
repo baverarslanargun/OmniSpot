@@ -101,6 +101,8 @@ public sealed class LiveCatalogReaderContractTests
         var (owner, reader, oldSnapshot) = LeaseThenDispose(workspace.Path);
         CollectReaders();
         Assert.False(reader.IsAlive);
+        Assert.Single(oldSnapshot.Get("root"));
+        oldSnapshot.Dispose();
         Assert.Throws<ObjectDisposedException>(() => oldSnapshot.Get("root"));
         owner.Dispose();
     }

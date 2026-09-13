@@ -21,6 +21,7 @@ internal sealed partial class CompactSearchState : IIndexCatalogSnapshot
 
     public int ItemCount { get; }
     public int TokenCount { get; }
+    internal IEnumerable<string> BaseTokens => _catalog.Tokens;
     internal int QueryItemCacheCount => _queryItems?.Count ?? 0;
     internal int QueryPathCacheCount => _queryPaths?.Count ?? 0;
     internal static CompactSearchState Empty { get; } =
@@ -95,7 +96,7 @@ internal sealed partial class CompactSearchState : IIndexCatalogSnapshot
         : this(catalog, ImmutableDictionary.Create<string, Entry>(Comparer), ImmutableHashSet<int>.Empty,
             ImmutableDictionary.Create<string, ImmutableHashSet<string>>(Comparer),
             ImmutableDictionary.Create<string, ImmutableHashSet<string>>(Comparer),
-            catalog.ItemCount, catalog.TokenCount, catalog.MissingParentCount, catalog.ItemCount,
+            catalog.ItemCount, catalog.TokenCount, catalog.MissingParentCount, catalog.IdCapacity,
             capacity, varint, generation ?? catalog.Generation) { }
 
     private CompactSearchState(CatalogReader catalog, ImmutableDictionary<string, Entry> delta,
@@ -232,7 +233,7 @@ internal sealed partial class CompactSearchState : IIndexCatalogSnapshot
         var result = new Dictionary<string, SearchItem>(Comparer);
         if (_catalog is IDirectCatalogMatches direct)
         {
-            var wordCount = checked((int)((_catalog.ItemCount + 31L) / 32));
+            var wordCount = checked((int)((_catalog.IdCapacity + 31L) / 32));
             var seen = System.Buffers.ArrayPool<uint>.Shared.Rent(Math.Max(wordCount, 1));
             Array.Clear(seen, 0, wordCount);
             try
@@ -270,7 +271,7 @@ internal sealed partial class CompactSearchState : IIndexCatalogSnapshot
     public IReadOnlyCollection<SearchItem> GetAllItems(CancellationToken cancellationToken = default)
     {
         var items = new List<SearchItem>(ItemCount);
-        for (var id = 0; id < _catalog.ItemCount; id++)
+        foreach (var id in _catalog.ActiveIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_suppressed.Contains(id)) items.Add(ReadItem(id));
@@ -288,7 +289,7 @@ internal sealed partial class CompactSearchState : IIndexCatalogSnapshot
         CancellationToken cancellationToken)
     {
         var sharedPrefixPaths = new Dictionary<int, string>();
-        for (var id = 0; id < _catalog.ItemCount; id++)
+        foreach (var id in _catalog.ActiveIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_suppressed.Contains(id) && _catalog.Matches(id, filter))

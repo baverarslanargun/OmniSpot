@@ -71,7 +71,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             ? settingsStore.LoadStrict()
             : settingsStore.Load();
         var tokenizer = new BasicTokenizer();
-        var searchStateLayout = _settings.CompactSearchStateEnabled
+        var searchStateLayout = _measurementRun == null || _settings.CompactSearchStateEnabled
             ? SearchStateLayout.Compact
             : SearchStateLayout.Legacy;
         var indexManager = _measurementRun == null
@@ -84,6 +84,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 skipReparsePoints:
                     _startupOptions.Profile == MeasurementProfile.ProductionCopy,
                 layout: searchStateLayout);
+        if (_measurementRun == null) indexManager.EnableLiveCatalog();
         IIndexedLocationProvider locationProvider = _measurementRun == null
             ? Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") == "1"
                 ? new UserProfileIndexedLocationProvider()

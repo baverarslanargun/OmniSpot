@@ -177,7 +177,7 @@ public partial class IndexManager : IDisposable
     public bool IsInitialized => _isInitialized;
 
     public bool IsWatching => _watcher.IsWatching;
-    public string DatabasePath => _db.DatabasePath;
+    public string DatabasePath => UsesLiveCatalog ? LiveControlPath : _db.DatabasePath;
 
     internal int IndexedFileCount
     {
@@ -275,7 +275,8 @@ public partial class IndexManager : IDisposable
         CancellationToken ct,
         Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation,
         IIndexInventorySource? inventorySource = null)
-        => InitializeWithWatcherFenceCoreAsync(rootPaths, ct, beforeWatcherActivation, inventorySource);
+        => UsesLiveCatalog ? InitializeLiveAsync(rootPaths.ToArray(), inventorySource, null, ct)
+            : InitializeWithWatcherFenceCoreAsync(rootPaths, ct, beforeWatcherActivation, inventorySource);
 
     private async Task InitializeWithWatcherFenceCoreAsync(
         IEnumerable<string> rootPaths,
@@ -460,6 +461,7 @@ public partial class IndexManager : IDisposable
 
     public async Task RescanAsync(string rootPath, CancellationToken ct = default)
     {
+        if (UsesLiveCatalog) { await ReconcileLiveScopeAsync(NormalizeIndexedPath(rootPath), ct).ConfigureAwait(false); return; }
         if (UsesCompactCatalog)
         {
             await RescanCompactAsync(rootPath, ct).ConfigureAwait(false);
@@ -1082,6 +1084,12 @@ public partial class IndexManager : IDisposable
         ArgumentNullException.ThrowIfNull(changes);
         failed = [];
 
+        if (UsesLiveCatalog)
+        {
+            try { ApplyLiveChanges(changes, null, new(StringComparer.OrdinalIgnoreCase), CancellationToken.None); return true; }
+            catch (Exception error) { failed.AddRange(changes); NotifyError(error.Message); return false; }
+        }
+
         if (_disposed || !_isInitialized)
         {
             return false;
@@ -1119,6 +1127,14 @@ public partial class IndexManager : IDisposable
         if (string.IsNullOrWhiteSpace(path) || _disposed || !_isInitialized)
         {
             return false;
+        }
+
+        if (UsesLiveCatalog)
+        {
+            lock (_lock)
+                if (LiveServiceRoots.Any(root => IsSameOrDescendantPath(path, root)) &&
+                    !_pendingRepairs.Keys.Any(scope => IsSameOrDescendantPath(scope, path) || IsSameOrDescendantPath(path, scope))) return true;
+            return await ReconcileLiveScopeAsync(NormalizeIndexedPath(path), ct).ConfigureAwait(false);
         }
 
         try
@@ -1645,6 +1661,8 @@ public partial class IndexManager : IDisposable
             ct.ThrowIfCancellationRequested();
             var directoryPath = pending.Pop();
 
+            if (IsLiveStoragePath(directoryPath)) { snapshot.ExcludedScopes.Add(directoryPath); continue; }
+
             FileAttributes attributes;
             try
             {
@@ -1715,6 +1733,8 @@ public partial class IndexManager : IDisposable
                     ct.ThrowIfCancellationRequested();
                     var path = entry.Path;
 
+                    if (IsLiveStoragePath(path)) { snapshot.ExcludedScopes.Add(path); continue; }
+
                     try
                     {
                         if (ShouldSkipReparsePath(path))
@@ -1776,6 +1796,7 @@ public partial class IndexManager : IDisposable
         ReconciliationSnapshot snapshot)
     {
         var normalizedPath = NormalizeIndexedPath(filePath);
+        if (IsLiveStoragePath(normalizedPath)) { snapshot.ExcludedScopes.Add(normalizedPath); return; }
         try
         {
             if (ShouldSkipReparsePath(normalizedPath))
@@ -1848,6 +1869,7 @@ public partial class IndexManager : IDisposable
 
     private void HandleWatcherError(Exception exception)
     {
+        if (UsesLiveCatalog) { NotifyError(exception.Message); QueueLiveRepairs(LiveWatcherRoots); return; }
         Interlocked.Increment(ref _watcherErrorVersion);
         if (_initialWatcherCapture) NoteChangeFeedCoverage(false);
         NotifyError(exception.Message);
@@ -1856,6 +1878,7 @@ public partial class IndexManager : IDisposable
 
     private void HandleWatcherFault(Exception exception)
     {
+        if (UsesLiveCatalog) { NotifyError(exception.Message); QueueLiveRepairs(LiveWatcherRoots); return; }
         Interlocked.Increment(ref _watcherErrorVersion);
         if (_initialWatcherCapture) NoteChangeFeedCoverage(false);
         NoteChangeFeedLost();
@@ -2089,6 +2112,7 @@ public partial class IndexManager : IDisposable
 
     private bool TryHandleFileChange(FileChangeEvent evt, Func<string, bool>? deletedLater = null)
     {
+        if (UsesLiveCatalog) return ApplyExternalChanges([evt]);
         if (UsesCompactCatalog) return TryHandleCompactFileChange(evt, deletedLater);
         string? error = null;
         var processed = false;
@@ -2598,6 +2622,7 @@ public partial class IndexManager : IDisposable
 
     public void IncrementOpenCount(string path)
     {
+        if (UsesLiveCatalog) { IncrementLiveOpenCount(path); return; }
         if (UsesCompactCatalog)
         {
             IncrementCompactOpenCount(path);
@@ -2630,6 +2655,7 @@ public partial class IndexManager : IDisposable
 
     public IndexStats GetStats()
     {
+        if (UsesLiveCatalog) return GetLiveStats();
         lock (_lock)
         {
             return new IndexStats
@@ -2689,7 +2715,8 @@ public partial class IndexManager : IDisposable
                             lock (_lock)
                             {
                                 _db.Dispose();
-                                if (_isInitialized && !_enforceMeasurementPathSafety &&
+                                foreach (var store in _liveStores) store.Dispose();
+                                if (!UsesLiveCatalog && _isInitialized && !_enforceMeasurementPathSafety &&
                                     CurrentSearchState is CompactSearchState compact)
                                     CompactCatalogCache.TrySave(DatabasePath, _activeRootPaths, _tokenizer,
                                         compact, _compactSingleRootPath, _detachedNodeCount);

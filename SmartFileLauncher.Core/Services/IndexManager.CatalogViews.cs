@@ -28,7 +28,7 @@ public partial class IndexManager
     };
 
     private CatalogNodeProjection CreateCompactNodeProjection() => new(
-        (IIndexCatalogSnapshot)CurrentSearchState, _compactRootAvailable, _compactSingleRootPath);
+        (IQueryCatalogSnapshot)CurrentSearchState, _compactRootAvailable, _compactSingleRootPath);
 
     internal IReadOnlyList<FileSystemNode> GetIndexedRootNodes()
     {
@@ -61,13 +61,13 @@ public partial class IndexManager
 
     private sealed class CatalogNodeProjection
     {
-        private readonly IIndexCatalogSnapshot _snapshot;
+        private readonly IQueryCatalogSnapshot _snapshot;
         private readonly Dictionary<string, FileSystemNode> _nodes = new(StringComparer.OrdinalIgnoreCase);
         private readonly HashSet<string> _constructing = new(StringComparer.OrdinalIgnoreCase);
         private readonly object _gate = new();
         internal FileSystemNode? Root { get; }
 
-        internal CatalogNodeProjection(IIndexCatalogSnapshot snapshot, bool available, string? singleRoot)
+        internal CatalogNodeProjection(IQueryCatalogSnapshot snapshot, bool available, string? singleRoot)
         {
             _snapshot = snapshot;
             if (!available) return;

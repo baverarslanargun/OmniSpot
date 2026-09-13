@@ -29,7 +29,7 @@ public sealed class ChangeFeedWireMeasure : IChangeFeedPageMeasure
                     Array.Empty<ChangeFeedRootPageDto>(),
                     true,
                     TokenPlaceholder,
-                    TokenPlaceholder)));
+                    TokenPlaceholder, new string('0', 64), long.MaxValue)));
     }
 
     public long Envelope { get; }

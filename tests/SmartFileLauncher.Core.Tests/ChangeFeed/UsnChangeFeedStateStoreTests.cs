@@ -22,6 +22,24 @@ public sealed class UsnChangeFeedStateStoreTests
     }
 
     [Fact]
+    public void CursorOverlaySurvivesRestartAndCannotOverrideAnotherMapGeneration()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json"); var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var root = State(FirstRoot, 1, Entry(10, "old", 1));
+        store.Write(JournalId, NextUsn, [root]);
+        store.Write(JournalId, NextUsn + 100, [root.WithPosition(JournalId, NextUsn + 100)], pendingSecurityChange: true);
+        var cursor = File.ReadAllBytes(path + ".cursor");
+        var reopened = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 100, reopened.NextUsn); Assert.True(reopened.PendingSecurityChange);
+        store.Write(JournalId, NextUsn + 200, [State(FirstRoot, 1, Entry(10, "new", 1))]);
+        File.WriteAllBytes(path + ".cursor", cursor);
+        reopened = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 200, reopened.NextUsn); Assert.Equal("new", Assert.Single(Assert.Single(reopened.Roots).Directories).Name);
+        Assert.False(reopened.PendingSecurityChange);
+    }
+
+    [Fact]
     public void Write_ThenRead_RoundTripsEveryRootAndDirectory()
     {
         using var directory = new TemporaryDirectory();

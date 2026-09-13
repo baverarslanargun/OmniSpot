@@ -18,6 +18,17 @@ Bu sınıf, uygulamanın "Bulanık Arama" (Fuzzy Search) yeteneğini sağlayan k
 
 ## 2. Servisler (Services)
 
+### Normal uygulamada Live katalog
+
+Normal `ApplicationCompositionRoot`, ölçüm profili seçilmediğinde `EnableLiveCatalog` ile Live backend'i kullanır. Aşağıdaki SQLite/Compact bootstrap ve watcher kira devri açıklamaları eski backend ve onu açıkça seçen ölçüm yolları içindir.
+
+* **İlk edinim:** Seçili klasörler `FileSystemEnumerable` ile listelenir; kayıt geldiğinde ad, üst klasör kimliği, metadata ve arama listeleri doğrudan katalog sayfalarına yazılır. Tüm dosyaları nesne/dictionary olarak biriktirme ve ardından SQLite'a aktarma aşaması yoktur. Sürücü kökü için mevcut MFT envanter kaynağı korunur. Hidden/system ve erişim kuralları uygulanır; erişilemeyen ilk tarama kapsamları raporlanır. Kendi `index.db.live` çalışma ağacı indekslenmez.
+* **Kalıcılık:** Her kökün `LiveCatalogStore` nesli `index.db.live/root-<GUID>` altındadır. Değişen 256 KiB sayfalar yeni sürüme yazılır; checksum'lı `transaction.wal`, atomik `head.bin` ve sonrasında yayınlanan immutable arama görünümü commit sınırını oluşturur. Eski sorgular son okuyucu bitene kadar eski sayfalara erişir. Açılış geçerli head ve sayfa checksum'larını doğrular; yarım commit varsa günlüğü tekrar uygular. Format v2 sabit codec sözleşmesine bağlıdır; her build'in MVID'sine bağlı değildir.
+* **Canlı takip:** Destekli NTFS kökleri açık/kapalı uygulamada aynı servis USN kuyruğunu kullanır. Capability `continuous-usn-v1` gereklidir; Live istemci watcher kirası tutmaz. Devam sayfaları tamamlanıp ilgili kayıtlar dayanıklı commit edilmeden receipt ACK edilmez. Kalıcı teslim kimliği tekrar uygulamayı ayırır. Yalnız kendi depolama dosyalarını içeren olaylar katalog yazmadan onaylanır.
+* **Watcher ve onarım:** USN'nin desteklemediği kökler ve reparse bağlantı kapsamları `FileSystemWatcher` kullanır. Uygulanamayan metadata olayı yalnız bilinen dosya/alt klasör onarımına yazılır; generic servis arızası tam tarama başlatmaz. Gerçek journal/queue/cursor kaybı yalnız etkilenen kökü yeni nesilde yeniler. Eski katalog bu sırada aranabilir. `control.bin` kapsam/ilk kurulum/onarımları, kök frame'i teslim kimliği ve ilgili bekleyen onarımları taşır.
+* **Servis maliyeti:** Owner başına ortak USN coordinator projection'ı saklar. Dizin ilişkileri değişmediyse büyük harita tekrar serileştirilmez; yalnız checksum'lı küçük cursor dosyası ilerler. Harita nesli cursor ile eşleşmelidir; geçici journal erişim hatası önceki cursor'u korur.
+* **Özellikler:** `LiveSearchState` mevcut arama, AI yapılandırılmış sorgu, filtre, sıralama ve klasör genişletme sözleşmelerini besler. Tam yol ihtiyaç anında üst klasör zincirinden üretilir. Thumbnail üretim/önbellek ve AI sağlayıcı işlemleri değişmedi. Eski `index.db` yeni normal yol tarafından açılmaz; ayarlar ayrı kalır. UI bakım yüzeyi gerçek Live dizin boyutunu gösterir, kullanıcı yeniden oluşturma istediğinde sonraki açılışta yeni nesil kurulur.
+
 ### IndexManager.cs
 *   **İşlev:** Tüm standart köklerde ilk taramayı, kalıcı indeks yüklemeyi, veritabanı/bellek senkronizasyonunu ve canlı dosya izlemeyi yönetir.
 *   **Veri Yapıları:** HashSet (Senkronize dosyalar için $O(1)$), Dictionary.

@@ -5,7 +5,7 @@ using SmartFileLauncher.Core.Services;
 
 namespace SmartFileLauncher.Core.Application.Indexing;
 
-public sealed class IndexLifecycleService : IIndexLifecycleService
+public sealed partial class IndexLifecycleService : IIndexLifecycleService
 {
     private readonly IndexManager _indexManager;
     private readonly IIndexedLocationProvider _locationProvider;
@@ -105,6 +105,12 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         var locations = _locationProvider.Resolve();
         var inventorySource = _preferDirectoryEnumeration &&
             ShouldUseDirectoryEnumeration(locations.RootPaths) ? null : _inventorySource;
+        if (_indexManager.UsesLiveCatalog)
+        {
+            await _indexManager.InitializeLiveAsync(locations.RootPaths, inventorySource, _changeFeed, cancellationToken).ConfigureAwait(false);
+            _leaseTask = Task.Run(() => RunContinuousAsync(locations.RootPaths, _leaseCancellation.Token), CancellationToken.None);
+            return new IndexStartupResult(locations.DesktopPath, locations.RootPaths, _indexManager.GetStats());
+        }
         await _indexManager.InitializeWithWatcherFenceAsync(
                 locations.RootPaths,
                 cancellationToken,
@@ -424,6 +430,14 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     private void HandOverChangeFeed()
     {
         _leaseCancellation.Cancel();
+
+        if (_indexManager.UsesLiveCatalog)
+        {
+            try { _leaseTask?.GetAwaiter().GetResult(); }
+            catch (OperationCanceledException) { }
+            Interlocked.Exchange(ref _leaseReleaseConfirmed, 1);
+            return;
+        }
 
         if (_changeFeed is null)
         {

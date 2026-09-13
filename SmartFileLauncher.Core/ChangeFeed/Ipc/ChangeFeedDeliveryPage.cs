@@ -74,5 +74,7 @@ public sealed class ChangeFeedDeliveryPage
 
     public long CompletedThroughSequence { get; }
 
+    public string? StableBatchId { get; internal set; }
+
     public bool HasMore { get; }
 }

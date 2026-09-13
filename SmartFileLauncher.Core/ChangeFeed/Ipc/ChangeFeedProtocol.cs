@@ -37,7 +37,10 @@ public enum ChangeFeedRequestKind
     ReleaseLease,
     Inventory,
     ValidateInventory,
-    CancelInventory
+    CancelInventory,
+    GetCapabilities,
+    PrepareContinuousRoot,
+    DrainContinuous
 }
 
 public enum ChangeFeedResponseStatus
@@ -49,7 +52,8 @@ public enum ChangeFeedResponseStatus
     RootUnusable,
     Unavailable,
     NoSubscription,
-    StaleChain
+    StaleChain,
+    UnsupportedFileSystem
 }
 
 public sealed record ChangeFeedRequest(

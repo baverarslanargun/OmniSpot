@@ -14,7 +14,7 @@ public sealed class ChangeFeedDeliveryContractTests
     public void TheDeliveryShape_PublishesOnlyItsAllowlistedFields()
     {
         Assert.Equal(
-            new[] { "Roots", "HasMore", "Continuation", "Receipt" },
+            new[] { "Roots", "HasMore", "Continuation", "Receipt", "StableBatchId", "CompletedThroughSequence" },
             Members(typeof(ChangeFeedDeliveryDto)));
 
         Assert.Equal(
@@ -94,16 +94,14 @@ public sealed class ChangeFeedDeliveryContractTests
                      "EventCount",
                      "FromUsn",
                      "ToUsn",
-                     "Sequence",
-                     "CompletedThrough",
                      "FullPath"
                  })
         {
             Assert.DoesNotContain(forbidden, payload, StringComparison.OrdinalIgnoreCase);
         }
 
-        Assert.Contains("41", "41");
-        Assert.DoesNotContain("41", payload, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Sequence\":", payload, StringComparison.Ordinal);
+        Assert.Contains("\"CompletedThroughSequence\":41", payload, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -180,7 +178,7 @@ public sealed class ChangeFeedDeliveryContractTests
             "DeliveryQueueOverflow",
             Enum.GetNames<ChangeFeedGapReason>().OrderByDescending(name => name.Length).First());
         Assert.Equal(
-            "NativeProtocolRejected",
+            "JournalTemporarilyUnavailable",
             Enum.GetNames<ChangeFeedFaultReason>().OrderByDescending(name => name.Length).First());
 
         var pages = Enumerable
@@ -189,7 +187,7 @@ public sealed class ChangeFeedDeliveryContractTests
                 @"C:\Kok" + new string('k', 40) + index,
                 Array.Empty<ChangeFeedEvent>(),
                 ChangeFeedGapReason.DeliveryQueueOverflow,
-                ChangeFeedFaultReason.NativeProtocolRejected,
+                ChangeFeedFaultReason.JournalTemporarilyUnavailable,
                 false,
                 false))
             .ToArray();

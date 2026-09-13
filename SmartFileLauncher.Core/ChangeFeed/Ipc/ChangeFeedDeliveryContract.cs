@@ -23,7 +23,9 @@ public sealed record ChangeFeedDeliveryDto(
     IReadOnlyList<ChangeFeedRootPageDto> Roots,
     bool HasMore,
     string? Continuation,
-    string? Receipt);
+    string? Receipt,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? StableBatchId = null,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] long CompletedThroughSequence = 0);
 
 public static class ChangeFeedDeliveryContract
 {
@@ -38,7 +40,7 @@ public static class ChangeFeedDeliveryContract
             page.Roots.Select(ToWire).ToArray(),
             page.HasMore,
             continuation,
-            receipt);
+            receipt, page.StableBatchId, page.CompletedThroughSequence);
     }
 
     public static ChangeFeedRootPageDto ToWire(ChangeFeedRootPage root)

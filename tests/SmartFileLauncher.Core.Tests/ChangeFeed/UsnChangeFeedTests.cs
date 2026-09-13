@@ -293,13 +293,15 @@ public sealed class UsnChangeFeedTests
     }
 
     [Fact]
-    public void Read_ReportsGapWhenJournalCannotBeQueried()
+    public void Read_PreservesTheCursorWhenJournalTemporarilyCannotBeQueried()
     {
         var reader = CreateReader();
         reader.QueryFails = true;
         using var feed = CreateFeed(reader);
 
-        Assert.Equal(ChangeFeedGapReason.JournalUnavailable, feed.Read().GapReason);
+        var before = feed.AcceptedUsn;
+        Assert.Equal(ChangeFeedFaultReason.JournalTemporarilyUnavailable, feed.Read().FaultReason);
+        Assert.Equal(before, feed.AcceptedUsn);
     }
 
     [Fact]

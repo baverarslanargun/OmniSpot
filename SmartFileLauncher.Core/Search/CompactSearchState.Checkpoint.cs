@@ -44,7 +44,7 @@ internal sealed partial class CompactSearchState
         var capacity = reader.ReadInt32();
         var nextId = reader.ReadInt32();
         var count = reader.ReadInt32();
-        if (capacity < 1 || count < 0 || count > capacity || nextId < _catalog.ItemCount)
+        if (capacity < 1 || count < 0 || count > capacity || nextId < _catalog.IdCapacity)
             throw new InvalidDataException("Katalog değişiklik sayısı geçersiz.");
         var state = this;
         var changes = ImmutableDictionary.CreateBuilder<string, Entry>(Comparer);

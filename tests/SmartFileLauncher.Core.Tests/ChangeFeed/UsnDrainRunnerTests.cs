@@ -497,7 +497,7 @@ public sealed class UsnDrainRunnerTests : IDisposable
 
         var delivery = Assert.Single(Assert.Single(store.ReadPending().Entries).Roots);
         Assert.Equal(_firstRoot.Path, delivery.RootPath);
-        Assert.Equal(ChangeFeedGapReason.JournalUnavailable, delivery.Batch.GapReason);
+        Assert.Equal(ChangeFeedFaultReason.JournalTemporarilyUnavailable, delivery.Batch.FaultReason);
     }
 
     [Fact]
@@ -1031,6 +1031,30 @@ public sealed class UsnDrainRunnerTests : IDisposable
             0,
             result.RootsGapped);
         Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
+    }
+
+    [Fact]
+    public void CachedRunnerKeepsTheMapCheckpointWhenOnlyTheCursorAndFileMetadataChange()
+    {
+        var store = CreateStore(); Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        var runner = new UsnDrainRunner(Layout(), store, new SingleReaderFactory(reader), _probe,
+            new FakeUsnSubtreeReader(), cacheState: true);
+        runner.Run(); store.Acknowledge(long.MaxValue);
+        var checkpoint = Directory.GetFiles(Layout().StateDirectory, "*.json").Single();
+        var baseline = File.ReadAllBytes(checkpoint);
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(2000, new UsnRecordBuffer().AddVersion2(1500, 50, RootReference(_firstRoot), UsnReason.FileCreate, "rapor.txt").Build());
+        Assert.Equal(1, runner.Run().EventsWritten);
+        Assert.Equal(baseline, File.ReadAllBytes(checkpoint));
+        Assert.InRange(new FileInfo(checkpoint + ".cursor").Length, 33, 4096);
+        Assert.Equal(2000, new UsnChangeFeedStateStore(checkpoint).Read()!.NextUsn);
+        store.Acknowledge(long.MaxValue);
+        reader.Descriptor = Descriptor(nextUsn: 3000);
+        reader.EnqueuePage(3000, new UsnRecordBuffer().AddVersion2(2500, 51, 999999, UsnReason.FileCreate, "outside.txt").Build());
+        Assert.Equal(0, runner.Run().EventsWritten);
+        Assert.Equal(baseline, File.ReadAllBytes(checkpoint));
+        Assert.Equal(3000, new UsnChangeFeedStateStore(checkpoint).Read()!.NextUsn);
     }
 
     private FileSystemChangeFeedStore CreateStore() => new(Layout());

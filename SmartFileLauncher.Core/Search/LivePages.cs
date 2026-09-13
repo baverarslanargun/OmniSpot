@@ -12,6 +12,7 @@ internal sealed unsafe class LivePages : Stream
     internal const int PageSize = 1 << 18;
     private readonly string _directory, _name;
     private readonly bool _readOnly;
+    private readonly HashSet<int>? _privatePages;
     private readonly List<Page> _pages = [];
     private int _length, _position;
     private bool _disposed;
@@ -22,8 +23,15 @@ internal sealed unsafe class LivePages : Stream
         private readonly MemoryMappedFile _map;
         private readonly MemoryMappedViewAccessor _view;
         internal byte* Pointer;
+        internal readonly string Path;
+        private int _references = 1;
+        private bool _retired;
+        private string? _hash;
+        private int _closed;
+        private bool _memoryPressure;
         internal Page(string path, bool create)
         {
+            Path = path;
             _file = new(path, create ? FileMode.CreateNew : FileMode.Open,
                 create ? FileAccess.ReadWrite : FileAccess.Read, create ? FileShare.Read | FileShare.Delete : FileShare.ReadWrite | FileShare.Delete);
             try
@@ -34,16 +42,63 @@ internal sealed unsafe class LivePages : Stream
                 _map = MemoryMappedFile.CreateFromFile(_file, null, PageSize, access, HandleInheritability.None, true);
                 _view = _map.CreateViewAccessor(0, PageSize, access);
                 _view.SafeMemoryMappedViewHandle.AcquirePointer(ref Pointer);
+                GC.AddMemoryPressure(PageSize); _memoryPressure = true;
             }
             catch { _view?.Dispose(); _map?.Dispose(); _file.Dispose(); throw; }
         }
         internal void Flush() { _view.Flush(); _file.Flush(true); }
+        internal void Retain() => Interlocked.Increment(ref _references);
+        internal void Release() { if (Interlocked.Decrement(ref _references) == 0) Dispose(); }
+        internal void Retire() => _retired = true;
+        internal string Hash() => _hash ??= Convert.ToHexString(SHA256.HashData(new ReadOnlySpan<byte>(Pointer, PageSize)));
         public void Dispose()
         {
+            if (Interlocked.Exchange(ref _closed, 1) != 0) return;
             if (Pointer != null) { _view.SafeMemoryMappedViewHandle.ReleasePointer(); Pointer = null; }
             _view?.Dispose(); _map?.Dispose(); _file?.Dispose(); GC.SuppressFinalize(this);
+            if (_memoryPressure) { GC.RemoveMemoryPressure(PageSize); _memoryPressure = false; }
+            if (_retired) { try { File.Delete(Path); } catch (IOException) { } catch (UnauthorizedAccessException) { } }
         }
         ~Page() => Dispose();
+    }
+    internal sealed record PageReference(string File, string Sha256);
+    private LivePages(LivePages source, bool writable)
+    {
+        _directory = source._directory; _name = source._name; _readOnly = !writable;
+        _length = source._length; _position = _length;
+        _privatePages = writable ? [] : null;
+        foreach (var page in source._pages) { page.Retain(); _pages.Add(page); }
+    }
+    internal LivePages Fork(bool writable) => new(this, writable);
+    internal LivePages(string directory, string name, int length, PageReference[] pages)
+    {
+        _directory = directory; _name = name; _readOnly = true; _length = length;
+        if (length < 0 || pages.Length != (length + (long)PageSize - 1) / PageSize) throw new InvalidDataException("Live sayfa listesi uyuşmuyor.");
+        try
+        {
+            foreach (var reference in pages)
+            {
+                if (System.IO.Path.GetFileName(reference.File) != reference.File || !reference.File.EndsWith(".page", StringComparison.Ordinal)) throw new InvalidDataException("Live sayfa yolu geçersiz.");
+                var page = new Page(System.IO.Path.Combine(directory, reference.File), false); _pages.Add(page);
+                if (page.Hash() != reference.Sha256) throw new InvalidDataException("Live sayfa checksum uyuşmuyor.");
+            }
+        }
+        catch { Dispose(); throw; }
+    }
+    internal PageReference[] References() => _pages.Select(page => new PageReference(System.IO.Path.GetFileName(page.Path), page.Hash())).ToArray();
+    internal void RetireReplacedPages(LivePages next)
+    {
+        for (var index = 0; index < _pages.Count; index++)
+            if (index >= next._pages.Count || !ReferenceEquals(_pages[index], next._pages[index])) _pages[index].Retire();
+    }
+    internal void AbandonPrivatePages() { if (_privatePages is not null) foreach (var id in _privatePages) _pages[id].Retire(); }
+    private Page WritablePage(int index)
+    {
+        if (_privatePages is null || _privatePages.Contains(index)) return _pages[index];
+        var previous = _pages[index];
+        var page = new Page(System.IO.Path.Combine(_directory, $"{_name}-{Guid.NewGuid():N}.page"), true);
+        new ReadOnlySpan<byte>(previous.Pointer, PageSize).CopyTo(new Span<byte>(page.Pointer, PageSize));
+        _pages[index] = page; _privatePages.Add(index); previous.Release(); return page;
     }
 
     internal LivePages(string directory, string name, bool readOnly = false, int length = 0)
@@ -73,7 +128,7 @@ internal sealed unsafe class LivePages : Stream
         var offset = Allocate(length);
         if ((offset & (PageSize - 1)) + length <= PageSize)
         {
-            var target = new Span<byte>(_pages[offset / PageSize].Pointer + (offset & (PageSize - 1)), length);
+            var target = new Span<byte>(WritablePage(offset / PageSize).Pointer + (offset & (PageSize - 1)), length);
             PackedFormat.Utf8.GetBytes(text, target); GC.KeepAlive(this);
         }
         else
@@ -90,7 +145,12 @@ internal sealed unsafe class LivePages : Stream
         if (_readOnly) throw new InvalidOperationException("Live alan salt okunur.");
         ArgumentOutOfRangeException.ThrowIfNegative(count);
         var next = checked(_length + count);
-        while ((long)_pages.Count * PageSize < next) _pages.Add(new Page(FileName(_pages.Count), true));
+        while ((long)_pages.Count * PageSize < next)
+        {
+            var index = _pages.Count;
+            _pages.Add(new Page(_privatePages is null ? FileName(index) : System.IO.Path.Combine(_directory, $"{_name}-{Guid.NewGuid():N}.page"), true));
+            _privatePages?.Add(index);
+        }
         var start = _length; _length = next; _position = next; return start;
     }
     private ReadOnlySpan<byte> Slice(int offset, int count)
@@ -122,7 +182,7 @@ internal sealed unsafe class LivePages : Stream
         while (!bytes.IsEmpty)
         {
             var count = Math.Min(bytes.Length, PageSize - (offset & (PageSize - 1)));
-            var target = new Span<byte>(_pages[offset / PageSize].Pointer + (offset & (PageSize - 1)), count);
+            var target = new Span<byte>(WritablePage(offset / PageSize).Pointer + (offset & (PageSize - 1)), count);
             bytes[..count].CopyTo(target); bytes = bytes[count..]; offset += count;
         }
         GC.KeepAlive(this);
@@ -247,7 +307,12 @@ internal sealed unsafe class LivePages : Stream
         { var count = Math.Min(PageSize, _length - offset); hash.AppendData(Slice(offset, count)); offset += count; }
         GC.KeepAlive(this); return Convert.ToHexString(hash.GetHashAndReset());
     }
-    internal void FlushDurable() { if (!_readOnly) foreach (var page in _pages) page.Flush(); }
+    internal void FlushDurable()
+    {
+        if (_readOnly) return;
+        if (_privatePages is null) foreach (var page in _pages) page.Flush();
+        else foreach (var id in _privatePages) _pages[id].Flush();
+    }
     public override void Flush() { }
     public override bool CanRead => true;
     public override bool CanSeek => true;
@@ -272,6 +337,8 @@ internal sealed unsafe class LivePages : Stream
     protected override void Dispose(bool disposing)
     {
         if (_disposed) return;
-        _disposed = true; foreach (var page in _pages) page.Dispose(); _pages.Clear(); base.Dispose(disposing);
+        _disposed = true; foreach (var page in _pages) page.Release(); _pages.Clear(); base.Dispose(disposing);
+        GC.SuppressFinalize(this);
     }
+    ~LivePages() => Dispose(false);
 }

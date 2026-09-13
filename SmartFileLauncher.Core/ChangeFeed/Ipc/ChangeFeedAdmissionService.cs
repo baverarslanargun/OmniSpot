@@ -76,6 +76,9 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
                     DrainAndHoldLease(pipe, request.LeaseSeconds, cancellationToken),
                 ChangeFeedRequestKind.ReleaseLease =>
                     ReleaseLease(pipe, cancellationToken),
+                ChangeFeedRequestKind.GetCapabilities => ChangeFeedResponse.Granted("continuous-usn-v1"),
+                ChangeFeedRequestKind.PrepareContinuousRoot => PrepareContinuousRoot(pipe, request.RootPath, cancellationToken),
+                ChangeFeedRequestKind.DrainContinuous => DrainContinuous(pipe, cancellationToken),
                 ChangeFeedRequestKind.Inventory or ChangeFeedRequestKind.ValidateInventory or
                     ChangeFeedRequestKind.CancelInventory => Inventory(pipe, request, cancellationToken),
                 _ => ChangeFeedResponse.Failed(

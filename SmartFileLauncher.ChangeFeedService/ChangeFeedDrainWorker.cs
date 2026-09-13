@@ -7,6 +7,13 @@ namespace SmartFileLauncher.ChangeFeedService;
 
 internal sealed class ChangeFeedDrainWorker : BackgroundService
 {
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, UsnDrainRunner> Coordinators = new(StringComparer.OrdinalIgnoreCase);
+    private static UsnDrainRunner Coordinator(string owner) => Coordinators.GetOrAdd(owner, sid =>
+    {
+        var layout = TrustedLayoutFor(sid);
+        return new UsnDrainRunner(layout, new FileSystemChangeFeedStore(layout), new UsnVolumeJournalReaderFactory(),
+            new UsnFileSystemIdentityProbe(), cacheState: true);
+    });
     public const string ServiceName = ChangeFeedServiceIdentity.ServiceName;
 
     public static TimeSpan DefaultDrainPeriod => TimeSpan.FromSeconds(15);
@@ -112,7 +119,7 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
         string ownerSid,
         CancellationToken cancellationToken)
     {
-        var result = CreateRunner(TrustedLayoutFor(ownerSid)).Runner.Run(cancellationToken);
+        var result = Coordinator(ownerSid).Run(cancellationToken);
         return result.Outcome == UsnDrainOutcome.Completed && result.VolumesFaulted == 0;
     }
 
@@ -201,7 +208,7 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
         UsnDrainResult result;
         try
         {
-            result = CreateRunner(TrustedLayoutFor(owner)).Runner.Run(cancellationToken);
+            result = Coordinator(owner).Run(cancellationToken);
         }
         catch (OperationCanceledException)
         {

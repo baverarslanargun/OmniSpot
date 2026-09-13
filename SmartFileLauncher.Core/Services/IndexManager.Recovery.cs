@@ -18,6 +18,7 @@ public partial class IndexManager
 
     internal bool QueueKnownRepairs(IReadOnlyList<string> paths)
     {
+        if (UsesLiveCatalog) return QueueLiveRepairs(paths);
         string? failure = null;
         lock (_lock)
         {

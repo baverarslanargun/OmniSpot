@@ -7,7 +7,7 @@ using SmartFileLauncher.Core.Indexing.Ntfs;
 
 namespace SmartFileLauncher.Core.Search;
 
-internal readonly record struct LiveReadStamp(int Nodes, int Items, int Terms, int NamesEnd, int MetadataEnd, int MaxTerm, int ReadyItems = 0);
+internal readonly record struct LiveReadStamp(int Nodes, int Items, int Terms, int NamesEnd, int MetadataEnd, int MaxTerm, int ReadyItems = 0, int ActiveTerms = -1);
 internal sealed record LivePendingMatch(int Id, string Name, int ParentId);
 internal enum LiveBuildStage { Begin, Placement, Metadata, Tokens, Published }
 
@@ -17,12 +17,15 @@ internal sealed partial class LiveCatalog : IDisposable
     private readonly string _directory, _root, _rootPrefix;
     private readonly long _indexedUtc;
     private readonly ReaderWriterLockSlim _gate = new();
-    private readonly LivePages _nodes, _names, _metadata, _terms, _postings, _nodeBuckets, _termBuckets;
+    private readonly LivePages _nodes, _names, _metadata, _terms, _postings, _nodeBuckets, _termBuckets, _nodeState, _termState;
     private readonly LivePages[] _areas;
     private readonly BinaryWriter _metadataWriter;
     private readonly BasicTokenizer _tokenizer = new();
     private int _nodeCount, _itemCount, _termCount, _maxTerm;
     private int _readyItems;
+    private int _activeTerms;
+    private int _directoryCount;
+    private int _deletedNodes;
     private const int Connected = 1 << 30, LateName = 1 << 29, ParentMask = LateName - 1;
     private Dictionary<ulong, int>? _nameOffsets;
     private Dictionary<ulong, List<int>>? _nameCollisions;
@@ -35,19 +38,20 @@ internal sealed partial class LiveCatalog : IDisposable
     internal Action<LiveBuildStage>? AllocationCheckpoint { get; set; }
     private sealed record AreaState(string Name, int Length, string Hash);
     private sealed record Manifest(int Version, string Contract, string Root, long IndexedUtc, LiveReadStamp Stamp,
-        int NodeBase, int NodeSplit, int TermBase, int TermSplit, AreaState[] Areas);
-    private static readonly string[] AreaNames = ["nodes", "names", "metadata", "terms", "postings", "node-buckets", "term-buckets"];
+        int NodeBase, int NodeSplit, int TermBase, int TermSplit, AreaState[] Areas, int DirectoryCount = 0);
+    private static readonly string[] AreaNames = ["nodes", "names", "metadata", "terms", "postings", "node-buckets", "term-buckets", "node-state", "term-state"];
 
-    internal LiveCatalog(string directory, string root)
+    internal LiveCatalog(string directory, string root, long? indexedUtc = null)
     {
         _directory = Path.GetFullPath(directory); _root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(root));
         _rootPrefix = _root.EndsWith('\\') ? _root : _root + "\\";
-        _indexedUtc = DateTime.UtcNow.Ticks;
+        _indexedUtc = indexedUtc ?? DateTime.UtcNow.Ticks;
         _nameOffsets = new();
         if (Directory.Exists(_directory)) throw new ArgumentException("Yeni live katalog dizini gerekli.");
         Directory.CreateDirectory(_directory);
         _areas = AreaNames.Select(name => new LivePages(_directory, name)).ToArray();
         (_nodes, _names, _metadata, _terms, _postings, _nodeBuckets, _termBuckets) = (_areas[0], _areas[1], _areas[2], _areas[3], _areas[4], _areas[5], _areas[6]);
+        (_nodeState, _termState) = (_areas[7], _areas[8]);
         _metadataWriter = new BinaryWriter(_metadata, Encoding.UTF8, true);
         _names.Allocate(1); _metadata.Allocate(8); _postings.Allocate(8);
         _nodeBuckets.Allocate(_nodeBase * 4); _termBuckets.Allocate(_termBase * 4);
@@ -62,9 +66,12 @@ internal sealed partial class LiveCatalog : IDisposable
         _rootPrefix = _root.EndsWith('\\') ? _root : _root + "\\";
         _areas = manifest.Areas.Select(area => new LivePages(directory, area.Name, true, area.Length)).ToArray();
         (_nodes, _names, _metadata, _terms, _postings, _nodeBuckets, _termBuckets) = (_areas[0], _areas[1], _areas[2], _areas[3], _areas[4], _areas[5], _areas[6]);
+        (_nodeState, _termState) = (_areas[7], _areas[8]);
         _metadataWriter = new BinaryWriter(Stream.Null);
         _nodeCount = manifest.Stamp.Nodes; _itemCount = manifest.Stamp.Items; _termCount = manifest.Stamp.Terms; _maxTerm = manifest.Stamp.MaxTerm;
         _readyItems = manifest.Stamp.ReadyItems;
+        _activeTerms = manifest.Stamp.ActiveTerms < 0 ? manifest.Stamp.Terms : manifest.Stamp.ActiveTerms;
+        _directoryCount = manifest.DirectoryCount;
         _nodeBase = manifest.NodeBase; _nodeSplit = manifest.NodeSplit; _termBase = manifest.TermBase; _termSplit = manifest.TermSplit;
         _stamp = manifest.Stamp; _sealed = true;
         try
@@ -82,6 +89,7 @@ internal sealed partial class LiveCatalog : IDisposable
     internal static LiveCatalog Open(string directory)
     {
         directory = Path.GetFullPath(directory);
+        if (File.Exists(Path.Combine(directory, "head.bin"))) return OpenFrame(directory, LiveCatalogStore.ReadHead(directory));
         var bytes = File.ReadAllBytes(Path.Combine(directory, "manifest.bin"));
         if (bytes.Length < 32 || bytes.Length > 65536 || !CryptographicOperations.FixedTimeEquals(SHA256.HashData(bytes.AsSpan(0, bytes.Length - 32)), bytes.AsSpan(bytes.Length - 32)))
             throw new InvalidDataException("Live manifest checksum uyuşmuyor.");
@@ -94,9 +102,9 @@ internal sealed partial class LiveCatalog : IDisposable
 
     internal LiveCatalogSnapshot Snapshot()
     {
-        _gate.EnterReadLock();
-        try { ObjectDisposedException.ThrowIf(_disposeRequested, this); return new(this, _stamp); }
-        finally { _gate.ExitReadLock(); }
+        _gate.EnterWriteLock();
+        try { ObjectDisposedException.ThrowIf(_disposeRequested, this); _readerLeases++; return new(this, _stamp); }
+        finally { _gate.ExitWriteLock(); }
     }
     internal int Add(PackedRecord record)
     {
@@ -111,6 +119,7 @@ internal sealed partial class LiveCatalog : IDisposable
                 if (ReadRecord(id, _stamp) != Normalize(record)) throw new InvalidDataException("Live ilk edinimde çelişen aynı kayıt.");
                 return id;
             }
+            if (NodeDeleted(id)) { SetPackedState(_nodeState, id, 2); _deletedNodes--; }
             var canonicalParent = id == 1 ? ReadOnlySpan<char>.Empty : Parent(id) == 1 ? _root.AsSpan()
                 : record.Item.FullPath.AsSpan(0, record.Item.FullPath.LastIndexOf('\\'));
             var complex = lexicalDifference || !NameEquals(_nodes.Int32(Row(id) + 4), record.Item.Name, StringComparison.Ordinal) ||
@@ -129,11 +138,12 @@ internal sealed partial class LiveCatalog : IDisposable
     private bool IsConnected(int id) => (_nodes.Int32(Row(id)) & Connected) != 0;
     private bool DirectoryNode(int id) => _nodes.Int32(Row(id)) < 0;
     private int MetadataAt(int id) => _nodes.Int32(Row(id) + 8) & int.MaxValue;
-    private bool Arrived(int id, LiveReadStamp stamp) => id <= stamp.Nodes && _nodes.Int32(Row(id) + 8) < 0 && MetadataAt(id) < stamp.MetadataEnd;
+    private bool Arrived(int id, LiveReadStamp stamp) => id > 0 && id <= stamp.Nodes && !NodeDeleted(id) && _nodes.Int32(Row(id) + 8) < 0 && MetadataAt(id) < stamp.MetadataEnd;
     private string? Name(int id)
     { var offset = _nodes.Int32(Row(id) + 4); return offset == 0 ? null : _names.Text(ref offset, _names.Used); }
     private int AddName(ReadOnlySpan<char> name)
     {
+        _nameOffsets ??= new();
         var hash = 14695981039346656037UL;
         foreach (var ch in name) hash = unchecked((hash ^ ch) * 1099511628211UL);
         var found = _nameOffsets!.TryGetValue(hash, out var existing);
@@ -215,6 +225,7 @@ internal sealed partial class LiveCatalog : IDisposable
         AllocationCheckpoint?.Invoke(LiveBuildStage.Tokens);
         _nodes.PutInt32(Row(id) + 8, start | int.MinValue);
         _itemCount++;
+        if (record.Item.IsDirectory) _directoryCount++;
         if (IsConnected(id)) _readyItems++;
     }
     private void ConnectSubtree(int id)
@@ -228,7 +239,7 @@ internal sealed partial class LiveCatalog : IDisposable
             foreach (var child in ChildIds(node)) queue.Enqueue(child);
         }
     }
-    private void Publish() => _stamp = new(_nodeCount, _itemCount, _termCount, _names.Used, _metadata.Used, _maxTerm, _readyItems);
+    private void Publish() => _stamp = new(_nodeCount, _itemCount, _termCount, _names.Used, _metadata.Used, _maxTerm, _readyItems, _activeTerms);
     private void CheckWritable()
     {
         ObjectDisposedException.ThrowIf(_disposeRequested, this);
@@ -244,7 +255,7 @@ internal sealed partial class LiveCatalog : IDisposable
             foreach (var area in _areas) area.FlushDurable();
             var manifest = new Manifest(1, PackedCheckpoint.CurrentContract, _root, _indexedUtc, _stamp,
                 _nodeBase, _nodeSplit, _termBase, _termSplit,
-                _areas.Select((area, i) => new AreaState(AreaNames[i], area.Used, area.Hash())).ToArray());
+                _areas.Select((area, i) => new AreaState(AreaNames[i], area.Used, area.Hash())).ToArray(), _directoryCount);
             var bytes = JsonSerializer.SerializeToUtf8Bytes(manifest);
             var temp = Path.Combine(_directory, "manifest.next");
             using (var output = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))

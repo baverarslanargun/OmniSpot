@@ -43,7 +43,7 @@ internal sealed partial class LiveCatalog
     {
         var bucket = Bucket(Hash(parent, name), _nodeBase, _nodeSplit);
         for (var id = _nodeBuckets.Int32(bucket * 4); id != 0; id = _nodes.Int32(Row(id) + 16))
-            if (Parent(id) == parent && NameEquals(_nodes.Int32(Row(id) + 4), name)) return id;
+            if (!NodeDeleted(id) && Parent(id) == parent && NameEquals(_nodes.Int32(Row(id) + 4), name)) return id;
         return 0;
     }
     private void InsertNodeHash(int id, uint hash)
@@ -75,8 +75,13 @@ internal sealed partial class LiveCatalog
     private int GetOrAddTerm(ReadOnlySpan<char> token)
     {
         var id = FindTerm(token);
-        if (id != 0) return id;
+        if (id != 0)
+        {
+            if (TermInactive(id)) { SetPackedState(_termState, id, 0); _activeTerms++; }
+            return id;
+        }
         id = ++_termCount; var row = _terms.Allocate(TermSize);
+        _activeTerms++;
         _terms.PutInt32(row, AddName(token));
         var bucket = Bucket(Hash(0, token), _termBase, _termSplit);
         _terms.PutInt32(row + 4, _termBuckets.Int32(bucket * 4)); _termBuckets.PutInt32(bucket * 4, id);
@@ -135,10 +140,10 @@ internal sealed partial class LiveCatalog
         if (term == 0 || term > stamp.Terms) yield break;
         var row = Term(term); var count = _terms.Int32(row + 8); var id = _terms.Int32(row + 12);
         if (count == 0) yield break;
-        if (Arrived(id, stamp)) yield return id;
+        if (PostingVisible(term, id, stamp)) yield return id;
         if (count <= 3)
         {
-            for (var i = 1; i < count; i++) { id = _terms.Int32(row + 12 + i * 4); if (Arrived(id, stamp)) yield return id; }
+            for (var i = 1; i < count; i++) { id = _terms.Int32(row + 12 + i * 4); if (PostingVisible(term, id, stamp)) yield return id; }
             yield break;
         }
         var found = 1;
@@ -150,7 +155,7 @@ internal sealed partial class LiveCatalog
             {
                 id = checked(id + (int)PackedFormat.DecodeSigned(_postings.Unsigned(ref offset, end)));
                 if (++found > count) throw new InvalidDataException("Live posting sayısı bozuk.");
-                if (Arrived(id, stamp)) yield return id;
+                if (PostingVisible(term, id, stamp)) yield return id;
             }
         }
         if (found != count) throw new InvalidDataException("Live posting zinciri eksik.");

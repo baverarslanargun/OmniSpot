@@ -13,7 +13,7 @@ internal sealed partial class LiveCatalog
     }
     private int FindPath(string path)
     {
-        if (string.Equals(path, _root, StringComparison.OrdinalIgnoreCase)) return 1;
+        if (string.Equals(path, _root, StringComparison.OrdinalIgnoreCase)) return NodeDeleted(1) ? 0 : 1;
         if (!path.StartsWith(_rootPrefix, StringComparison.OrdinalIgnoreCase)) return 0;
         var id = 1; var rest = path.AsSpan(_rootPrefix.Length);
         while (!rest.IsEmpty)
@@ -170,15 +170,18 @@ internal sealed partial class LiveCatalog
         finally { ArrayPool<char>.Shared.Return(buffer); if (scratch is not null) ArrayPool<int>.Shared.Return(scratch); }
     }
 
-    internal sealed class LiveCatalogSnapshot : IQueryCatalogSnapshot
+    internal sealed class LiveCatalogSnapshot : IQueryCatalogSnapshot, IDisposable
     {
         private readonly LiveCatalog _owner;
         private readonly LiveReadStamp _stamp;
+        private int _released;
         internal LiveCatalogSnapshot(LiveCatalog owner, LiveReadStamp stamp) { _owner = owner; _stamp = stamp; }
+        public void Dispose() { if (Interlocked.Exchange(ref _released, 1) == 0) _owner.ReleaseReader(); GC.SuppressFinalize(this); }
+        ~LiveCatalogSnapshot() { Dispose(); }
         public int ItemCount => _stamp.ReadyItems;
         internal int AcceptedItemCount => _stamp.Items;
         internal int PendingItemCount => _stamp.Items - _stamp.ReadyItems;
-        public int TokenCount => _stamp.Terms;
+        public int TokenCount => _stamp.ActiveTerms < 0 ? _stamp.Terms : _stamp.ActiveTerms;
         internal int StructuralNodeCount => _stamp.Nodes;
         public ISearchStateReader ForQuery() => this;
         internal PackedRecord? GetRecord(int id) => _owner.Read(() => id <= 0 || id > _stamp.Nodes ? null : _owner.ReadRecord(id, _stamp));

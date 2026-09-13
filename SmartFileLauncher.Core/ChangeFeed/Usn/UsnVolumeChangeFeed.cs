@@ -113,7 +113,7 @@ public sealed class UsnVolumeChangeFeed : IDisposable
         }
         catch (UsnJournalUnavailableException)
         {
-            return Uniform(ChangeFeedBatch.Gap(ChangeFeedGapReason.JournalUnavailable));
+            return Uniform(ChangeFeedBatch.Faulted(ChangeFeedFaultReason.JournalTemporarilyUnavailable, "USN günlüğü geçici olarak okunamıyor; konum korunuyor."));
         }
         catch (UsnProtocolRejectedException rejection)
         {
@@ -158,7 +158,7 @@ public sealed class UsnVolumeChangeFeed : IDisposable
         }
         catch (UsnJournalUnavailableException)
         {
-            return Fill(results, readable, ChangeFeedBatch.Gap(ChangeFeedGapReason.JournalUnavailable));
+            return Fill(results, readable, ChangeFeedBatch.Faulted(ChangeFeedFaultReason.JournalTemporarilyUnavailable, "USN okuması geçici olarak kesildi; konum korunuyor."));
         }
         catch (UsnRecordFormatException)
         {
@@ -235,7 +235,7 @@ public sealed class UsnVolumeChangeFeed : IDisposable
         }
         catch (UsnJournalUnavailableException)
         {
-            return ChangeFeedBatch.Gap(ChangeFeedGapReason.JournalUnavailable);
+            return ChangeFeedBatch.Faulted(ChangeFeedFaultReason.JournalTemporarilyUnavailable, "USN günlüğü geçici olarak okunamıyor; konum korunuyor.");
         }
         catch (UsnProtocolRejectedException nested)
         {
