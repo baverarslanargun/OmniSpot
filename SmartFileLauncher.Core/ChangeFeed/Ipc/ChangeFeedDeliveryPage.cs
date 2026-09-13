@@ -8,7 +8,8 @@ public sealed class ChangeFeedRootPage
         ChangeFeedGapReason producerGap,
         ChangeFeedFaultReason producerFault,
         bool authorizationGap,
-        bool payloadTooLarge)
+        bool payloadTooLarge,
+        IReadOnlyList<string>? authorizationScopes = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootPath);
 
@@ -18,6 +19,7 @@ public sealed class ChangeFeedRootPage
         ProducerFault = producerFault;
         AuthorizationGap = authorizationGap;
         PayloadTooLarge = payloadTooLarge;
+        AuthorizationScopes = authorizationScopes;
     }
 
     public string RootPath { get; }
@@ -31,6 +33,8 @@ public sealed class ChangeFeedRootPage
     public bool AuthorizationGap { get; }
 
     public bool PayloadTooLarge { get; }
+
+    public IReadOnlyList<string>? AuthorizationScopes { get; }
 
     public bool HasAnyGap =>
         ProducerGap != ChangeFeedGapReason.None ||

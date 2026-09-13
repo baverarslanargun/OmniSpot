@@ -129,19 +129,24 @@ public sealed class ChangeFeedRootGenerationTests : IDisposable
     }
 
     [Fact]
-    public void OverflowAndRepairGaps_KeepTheGenerationOfTheirRoot()
+    public void AppendedPacketsKeepTheirRootGenerationAndEvents()
     {
-        var store = CreateStore(maximumEntryCount: 1);
+        var store = CreateStore();
         var root = Root(@"C:\Kok");
         store.WriteSubscription(new ChangeFeedSubscription(OwnerSid, new[] { root }));
 
         store.Enqueue(VolumeId, JournalId, 0, 10, new[] { Delivery(root.RootPath, root.Generation) });
         store.Enqueue(VolumeId, JournalId, 10, 20, new[] { Delivery(root.RootPath, root.Generation) });
 
-        var overflow = Assert.Single(Assert.Single(ReadAll(store)).Roots);
-
-        Assert.Equal(ChangeFeedGapReason.DeliveryQueueOverflow, overflow.Batch.GapReason);
-        Assert.Equal(root.Generation, overflow.Generation);
+        var retained = ReadAll(store);
+        Assert.Equal(2, retained.Count);
+        Assert.All(retained, entry =>
+        {
+            var delivery = Assert.Single(entry.Roots);
+            Assert.Equal(ChangeFeedGapReason.None, delivery.Batch.GapReason);
+            Assert.Equal(root.Generation, delivery.Generation);
+            Assert.Single(delivery.Batch.Events);
+        });
     }
 
     private static ChangeFeedQueueEntry Entry(params ChangeFeedRootDelivery[] deliveries) =>
@@ -170,8 +175,6 @@ public sealed class ChangeFeedRootGenerationTests : IDisposable
     private static IReadOnlyList<ChangeFeedQueueEntry> ReadAll(IChangeFeedStore store) =>
         store.ReadPending(new ChangeFeedReadBudget(int.MaxValue, long.MaxValue)).Entries;
 
-    private FileSystemChangeFeedStore CreateStore(int maximumEntryCount = 512) =>
-        new(
-            ChangeFeedStoreLayout.ForOwner(_storeRoot.Path, OwnerSid),
-            maximumEntryCount);
+    private FileSystemChangeFeedStore CreateStore() =>
+        new(ChangeFeedStoreLayout.ForOwner(_storeRoot.Path, OwnerSid));
 }

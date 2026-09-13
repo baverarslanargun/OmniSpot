@@ -328,6 +328,11 @@ public sealed class DiagnosticsCollector
 
     private void CollectIndex()
     {
+        if (!_indexLifecycle.IsInitialized)
+        {
+            Metrics.Set(GroupIndex, "durum", "hazırlanıyor", DiagnosticsSeverity.Warning);
+            return;
+        }
         try
         {
             var stats = _indexLifecycle.GetStats();

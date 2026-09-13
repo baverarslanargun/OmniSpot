@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO.Enumeration;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.IO;
+using SmartFileLauncher.Core.Indexing;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Search;
 
@@ -203,6 +205,7 @@ public partial class IndexManager : IDisposable
     {
         _changeFeedCoversDowntime = coversDowntime;
         _changeFeedGuarding = coversDowntime;
+        _knownRecoveryOnly = false;
     }
 
     internal void NoteChangeFeedLost()
@@ -212,7 +215,9 @@ public partial class IndexManager : IDisposable
     }
 
     internal TimeSpan NextReconciliationDelay() =>
-        _changeFeedGuarding ? Timeout.InfiniteTimeSpan : _reconciliationInterval;
+        PendingRepairCount > 0 || Volatile.Read(ref _fullReconciliationRequested) != 0
+            ? _reconciliationInterval
+            : _changeFeedGuarding || _knownRecoveryOnly ? Timeout.InfiniteTimeSpan : _reconciliationInterval;
 
     public IndexDiagnosticsReport GetDiagnosticsReport()
     {
@@ -268,22 +273,38 @@ public partial class IndexManager : IDisposable
     internal Task InitializeWithWatcherFenceAsync(
         IEnumerable<string> rootPaths,
         CancellationToken ct,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation)
-        => InitializeWithWatcherFenceCoreAsync(rootPaths, ct, beforeWatcherActivation);
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation,
+        IIndexInventorySource? inventorySource = null)
+        => InitializeWithWatcherFenceCoreAsync(rootPaths, ct, beforeWatcherActivation, inventorySource);
 
     private async Task InitializeWithWatcherFenceCoreAsync(
         IEnumerable<string> rootPaths,
         CancellationToken ct,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation)
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation,
+        IIndexInventorySource? inventorySource)
     {
         await _lifecycleGate.WaitAsync(ct);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            await InitializeCoreAsync(rootPaths, ct, beforeWatcherActivation);
+            await InitializeCoreAsync(rootPaths, ct, beforeWatcherActivation, inventorySource);
+        }
+        catch
+        {
+            _watcher.Stop();
+            _watcher.ClearWatches();
+            _isInitialized = false;
+            throw;
         }
         finally
         {
+            if (_initialInventory is not null)
+                await _initialInventory.DisposeAsync().ConfigureAwait(false);
+            _initialInventory = null;
+            _initialWatcherCapture = false;
+            _initialInventoryPublished = false;
+            _initialLinkSnapshot = null;
+            _initialLinkScopes = Array.Empty<string>();
             _lifecycleGate.Release();
         }
     }
@@ -291,7 +312,8 @@ public partial class IndexManager : IDisposable
     private async Task InitializeCoreAsync(
         IEnumerable<string> rootPaths,
         CancellationToken ct,
-        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation = null)
+        Func<IReadOnlyList<string>, CancellationToken, Task<bool>>? beforeWatcherActivation = null,
+        IIndexInventorySource? inventorySource = null)
     {
         await StopBackgroundSyncAsync();
         _watcher.Stop();
@@ -311,6 +333,7 @@ public partial class IndexManager : IDisposable
             var cachedRoot = _db.GetMetadata(IndexMetadata.Keys.ScanRootPath);
             hasCache = cachedRoot != null &&
                        cachedRoot.Equals(newRootsKey, StringComparison.OrdinalIgnoreCase) &&
+                       _db.GetMetadata(IndexMetadata.Keys.InitialInventoryPending) != "1" &&
                        _db.GetFileCount() > 0;
         }
 
@@ -324,7 +347,20 @@ public partial class IndexManager : IDisposable
         if (!loadedFromCache)
         {
             ReportProgress("İlk kurulum - dosyalar taranıyor...", 0, 0, 0);
-            await BootstrapScanMultiAsync(paths, ct);
+            var inventory = UsesCompactCatalog && inventorySource is not null
+                ? await ReadInitialInventoryAsync(paths, inventorySource, ct).ConfigureAwait(false)
+                : null;
+            if (inventory is not null)
+                await BootstrapCompactScanCoreAsync(paths, null, ct, inventory).ConfigureAwait(false);
+            else
+            {
+                if (_initialInventory is not null)
+                    await _initialInventory.DisposeAsync().ConfigureAwait(false);
+                _initialInventory = null;
+                if (inventorySource is not null && UsesCompactCatalog)
+                    ReportProgress("MFT envanteri kullanılamadı; dosyalar taranıyor...", 0, 0, 0);
+                await BootstrapScanMultiAsync(paths, ct);
+            }
         }
 
         ReportProgress(
@@ -332,7 +368,8 @@ public partial class IndexManager : IDisposable
             0,
             IndexedFileCount,
             sw.ElapsedMilliseconds,
-            isIndeterminate: true);
+            isIndeterminate: true,
+            phase: "publish");
         await Task.Run(() =>
         {
             ct.ThrowIfCancellationRequested();
@@ -344,14 +381,18 @@ public partial class IndexManager : IDisposable
 
         ReleaseCompactStartupWorkspace();
         _activeRootPaths = paths;
+        LoadPendingRepairs();
         _isInitialized = true;
+        _initialInventoryPublished = _initialInventory is not null;
 
-        var watcherPrepared = false;
+        var watcherPrepared = _initialWatcherCapture && _watcher.IsWatching;
+        ReportProgress("Son değişiklikler denetleniyor...", 0, IndexedFileCount,
+            sw.ElapsedMilliseconds, isIndeterminate: true, phase: "handoff");
         if (beforeWatcherActivation is not null)
         {
             try
             {
-                watcherPrepared = await beforeWatcherActivation(paths, ct).ConfigureAwait(false);
+                watcherPrepared = await beforeWatcherActivation(paths, ct).ConfigureAwait(false) || watcherPrepared;
             }
             catch
             {
@@ -362,13 +403,43 @@ public partial class IndexManager : IDisposable
             }
         }
 
-        if (watcherPrepared)
+        if (_initialWatcherCapture && (!InitialCaptureHealthy() ||
+            (_initialInventory is not null && !await ValidateInitialInventoryAsync(ct).ConfigureAwait(false))))
+        {
+            NoteChangeFeedCoverage(false);
+            foreach (var path in paths)
+                await ReconcileWithinLifecycleAsync(path, ct).ConfigureAwait(false);
+        }
+
+        if (watcherPrepared && _watcher.IsWatching)
         {
             _watcher.ResumeDispatch();
         }
         else
         {
             SetupWatchers(paths);
+        }
+
+        if (_initialWatcherCapture)
+        {
+            using var drainBudget = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            drainBudget.CancelAfter(TimeSpan.FromSeconds(10));
+            try
+            {
+                if (await _watcher.DrainAsync(drainBudget.Token).ConfigureAwait(false) &&
+                    _initialInventory is not null && await ValidateInitialInventoryAsync(ct).ConfigureAwait(false))
+                {
+                    lock (_lock)
+                        _db.SetMetadata(IndexMetadata.Keys.InitialInventoryPending, "0");
+                }
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { }
+            if (!InitialCaptureHealthy())
+            {
+                NoteChangeFeedCoverage(false);
+                foreach (var path in paths)
+                    await ReconcileWithinLifecycleAsync(path, ct).ConfigureAwait(false);
+            }
         }
 
         sw.Stop();
@@ -379,7 +450,7 @@ public partial class IndexManager : IDisposable
         }
 
         StartBackgroundReconciliation(paths);
-        ReportProgress("Hazır", 100, IndexedFileCount, sw.ElapsedMilliseconds);
+        ReportProgress("Hazır", 100, IndexedFileCount, sw.ElapsedMilliseconds, phase: "ready");
     }
 
     public async Task InitializeAsync(string rootPath, CancellationToken ct = default)
@@ -913,7 +984,8 @@ public partial class IndexManager : IDisposable
     {
         while (_reconciliationSignal.Wait(0)) { }
 
-        var skipStartupPass = _changeFeedCoversDowntime;
+        LoadPendingRepairs();
+        var skipStartupPass = _changeFeedCoversDowntime || _knownRecoveryOnly;
         _changeFeedCoversDowntime = false;
         var syncCts = new CancellationTokenSource();
         _backgroundSyncCts = syncCts;
@@ -927,20 +999,21 @@ public partial class IndexManager : IDisposable
         bool skipStartupPass,
         CancellationToken ct)
     {
-        var skipping = skipStartupPass;
+        if (!skipStartupPass) Interlocked.Exchange(ref _fullReconciliationRequested, 1);
 
         while (!ct.IsCancellationRequested)
         {
+            var attemptingFull = false;
             try
             {
-                if (skipping)
+                if (Interlocked.Exchange(ref _fullReconciliationRequested, 0) != 0)
                 {
-                    skipping = false;
+                    attemptingFull = true;
+                    if (!await ReconcilePathsAsync(rootPaths, ct).ConfigureAwait(false))
+                        Interlocked.Exchange(ref _fullReconciliationRequested, 1);
+                    attemptingFull = false;
                 }
-                else
-                {
-                    await ReconcilePathsAsync(rootPaths, ct).ConfigureAwait(false);
-                }
+                await RepairPendingScopesAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -948,6 +1021,7 @@ public partial class IndexManager : IDisposable
             }
             catch (Exception ex)
             {
+                if (attemptingFull) Interlocked.Exchange(ref _fullReconciliationRequested, 1);
                 NotifyError($"Background reconciliation error: {ex.Message}");
             }
 
@@ -956,6 +1030,8 @@ public partial class IndexManager : IDisposable
                 await _reconciliationSignal
                     .WaitAsync(NextReconciliationDelay(), ct)
                     .ConfigureAwait(false);
+                if (!_changeFeedGuarding && !_knownRecoveryOnly)
+                    Interlocked.Exchange(ref _fullReconciliationRequested, 1);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -997,19 +1073,40 @@ public partial class IndexManager : IDisposable
 
     public void NotifyExternalError(string message) => NotifyError(message);
 
-    public bool ApplyExternalChanges(IReadOnlyList<FileChangeEvent> changes)
+    public bool ApplyExternalChanges(IReadOnlyList<FileChangeEvent> changes) =>
+        ApplyExternalChangesCore(changes, out _);
+
+    private bool ApplyExternalChangesCore(IReadOnlyList<FileChangeEvent> changes, out List<FileChangeEvent> failed,
+        bool deferFailures = true)
     {
         ArgumentNullException.ThrowIfNull(changes);
+        failed = [];
 
         if (_disposed || !_isInitialized)
         {
             return false;
         }
 
+        var lastDeletes = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (UsesCompactCatalog)
+            for (var index = 0; index < changes.Count; index++)
+            {
+                if (changes[index].ChangeType != FileChangeType.Deleted) continue;
+                try { lastDeletes[NormalizeIndexedPath(changes[index].FullPath)] = index; }
+                catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { }
+            }
+        var position = 0;
+        bool DeletedLater(string path) => lastDeletes.TryGetValue(path, out var deletedAt) && deletedAt > position;
         var applied = true;
-        foreach (var change in changes)
+        for (; position < changes.Count; position++)
         {
-            applied &= TryHandleFileChange(change);
+            var handled = UsesCompactCatalog
+                ? TryHandleCompactFileChange(changes[position], DeletedLater, deferFailures)
+                : TryHandleFileChange(changes[position], DeletedLater);
+            if (!handled) failed.Add(changes[position]);
+            if (!handled && applied)
+                NotifyError($"Change feed event could not be applied: {changes[position].ChangeType} {changes[position].FullPath}");
+            applied &= handled;
         }
 
         return applied;
@@ -1026,8 +1123,22 @@ public partial class IndexManager : IDisposable
 
         try
         {
+            var normalized = NormalizeIndexedPath(path);
+            ct.ThrowIfCancellationRequested();
+            if (UsesCompactCatalog && _activeRootPaths.Any(root => IsSameOrDescendantPath(normalized, root)) &&
+                !_activeRootPaths.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+            {
+                lock (_lock)
+                {
+                    var absent = false;
+                    try { File.GetAttributes(normalized); }
+                    catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { absent = true; }
+                    if (absent || IsCompactEventExcluded(normalized))
+                        return DeleteCompactEventPath((IIndexCatalogSnapshot)CurrentSearchState, normalized, true);
+                }
+            }
             return await ReconcilePathsAsync(
-                    new[] { NormalizeIndexedPath(path) },
+                    new[] { normalized },
                     ct)
                 .ConfigureAwait(false);
         }
@@ -1049,6 +1160,8 @@ public partial class IndexManager : IDisposable
     internal bool BeginWatcherCaptureWithinLifecycle(IReadOnlyList<string> rootPaths)
     {
         ArgumentNullException.ThrowIfNull(rootPaths);
+
+        if (_initialWatcherCapture && _watcher.IsWatching) return true;
 
         if (_disposed || !_isInitialized || _watcher.IsWatching)
         {
@@ -1078,10 +1191,7 @@ public partial class IndexManager : IDisposable
 
         try
         {
-            return await ReconcilePathsAsync(
-                    new[] { NormalizeIndexedPath(path) },
-                    ct)
-                .ConfigureAwait(false);
+            return await ReconcileWithinLifecycleAsync(path, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -1496,9 +1606,11 @@ public partial class IndexManager : IDisposable
     private ReconciliationSnapshot CaptureDiskSnapshot(
         IReadOnlyList<string> rootPaths,
         CancellationToken ct,
-        bool followReparsePoints = false)
+        bool followReparsePoints = false,
+        Action<int>? progress = null,
+        Action<ReconciliationEntry>? entrySink = null)
     {
-        var snapshot = new ReconciliationSnapshot();
+        var snapshot = new ReconciliationSnapshot(entrySink);
 
         foreach (var rootPath in rootPaths)
         {
@@ -1506,12 +1618,13 @@ public partial class IndexManager : IDisposable
 
             if (Directory.Exists(rootPath))
             {
-                CaptureDirectoryTree(rootPath, snapshot, ct, followReparsePoints);
+                CaptureDirectoryTree(rootPath, snapshot, ct, followReparsePoints, progress);
             }
             else if (File.Exists(rootPath))
             {
                 CaptureFile(rootPath, snapshot);
             }
+            progress?.Invoke(snapshot.CapturedCount);
         }
 
         return snapshot;
@@ -1521,7 +1634,8 @@ public partial class IndexManager : IDisposable
         string rootPath,
         ReconciliationSnapshot snapshot,
         CancellationToken ct,
-        bool followReparsePoints = false)
+        bool followReparsePoints = false,
+        Action<int>? progress = null)
     {
         var pending = new Stack<string>();
         pending.Push(rootPath);
@@ -1553,11 +1667,12 @@ public partial class IndexManager : IDisposable
                 }
 
                 var directoryInfo = new DirectoryInfo(directoryPath);
-                snapshot.Entries[directoryPath] = new ReconciliationEntry(
+                snapshot.Capture(new ReconciliationEntry(
                     directoryPath,
                     IsDirectory: true,
                     directoryInfo.LastWriteTimeUtc.Ticks,
-                    SizeBytes: 0);
+                    SizeBytes: 0,
+                    attributes));
 
                 if (!followReparsePoints && (attributes & FileAttributes.ReparsePoint) != 0)
                 {
@@ -1578,10 +1693,69 @@ public partial class IndexManager : IDisposable
                 continue;
             }
 
-            string[] entries;
             try
             {
-                entries = Directory.GetFileSystemEntries(directoryPath);
+                var entries = new FileSystemEnumerable<ReconciliationEntry>(
+                    directoryPath,
+                    static (ref FileSystemEntry entry) => new ReconciliationEntry(
+                        NormalizeIndexedPath(entry.ToFullPath()),
+                        entry.IsDirectory,
+                        entry.LastWriteTimeUtc.UtcTicks,
+                        entry.IsDirectory ? 0 : entry.Length,
+                        entry.Attributes,
+                        entry.IsDirectory ? 0 : entry.CreationTimeUtc.UtcTicks),
+                    new EnumerationOptions
+                    {
+                        RecurseSubdirectories = false,
+                        AttributesToSkip = 0,
+                        IgnoreInaccessible = false
+                    });
+                foreach (var entry in entries)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var path = entry.Path;
+
+                    try
+                    {
+                        if (ShouldSkipReparsePath(path))
+                        {
+                            snapshot.ProtectedScopes.Add(path);
+                            snapshot.Errors.Add($"{path}: reparse point traversal skipped");
+                            continue;
+                        }
+
+                        if (IsHiddenOrSystem(entry.Attributes))
+                        {
+                            snapshot.ExcludedScopes.Add(path);
+                            continue;
+                        }
+
+                        if (entry.IsDirectory)
+                        {
+                            pending.Push(path);
+                        }
+                        else if ((entry.Attributes & FileAttributes.ReparsePoint) != 0)
+                        {
+                            CaptureFile(path, snapshot);
+                        }
+                        else
+                        {
+                            snapshot.Capture(entry);
+                        }
+                        if (snapshot.CapturedCount % 1000 == 0)
+                            progress?.Invoke(snapshot.CapturedCount);
+                    }
+                    catch (Exception ex) when (
+                        ex is UnauthorizedAccessException or IOException)
+                    {
+                        if (Directory.Exists(path) || File.Exists(path))
+                        {
+                            snapshot.ProtectedScopes.Add(path);
+                            snapshot.UnreadableScopes.Add(path);
+                            snapshot.Errors.Add($"{path}: {ex.Message}");
+                        }
+                    }
+                }
             }
             catch (Exception ex) when (
                 ex is UnauthorizedAccessException or IOException)
@@ -1592,51 +1766,8 @@ public partial class IndexManager : IDisposable
                     snapshot.UnreadableScopes.Add(directoryPath);
                     snapshot.Errors.Add($"{directoryPath}: {ex.Message}");
                 }
-                continue;
             }
-
-            foreach (var path in entries)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                try
-                {
-                    var entryAttributes = File.GetAttributes(path);
-                    if (ShouldSkipReparsePath(path))
-                    {
-                        var normalizedPath = NormalizeIndexedPath(path);
-                        snapshot.ProtectedScopes.Add(normalizedPath);
-                        snapshot.Errors.Add($"{normalizedPath}: reparse point traversal skipped");
-                        continue;
-                    }
-
-                    if (IsHiddenOrSystem(entryAttributes))
-                    {
-                        snapshot.ExcludedScopes.Add(path);
-                        continue;
-                    }
-
-                    if ((entryAttributes & FileAttributes.Directory) != 0)
-                    {
-                        pending.Push(NormalizeIndexedPath(path));
-                    }
-                    else
-                    {
-                        CaptureFile(path, snapshot);
-                    }
-                }
-                catch (Exception ex) when (
-                    ex is UnauthorizedAccessException or IOException)
-                {
-                    if (Directory.Exists(path) || File.Exists(path))
-                    {
-                        var normalizedPath = NormalizeIndexedPath(path);
-                        snapshot.ProtectedScopes.Add(normalizedPath);
-                        snapshot.UnreadableScopes.Add(normalizedPath);
-                        snapshot.Errors.Add($"{normalizedPath}: {ex.Message}");
-                    }
-                }
-            }
+            progress?.Invoke(snapshot.CapturedCount);
         }
     }
 
@@ -1655,11 +1786,13 @@ public partial class IndexManager : IDisposable
             }
 
             var fileInfo = new FileInfo(normalizedPath);
-            snapshot.Entries[normalizedPath] = new ReconciliationEntry(
+            snapshot.Capture(new ReconciliationEntry(
                 normalizedPath,
                 IsDirectory: false,
                 fileInfo.LastWriteTimeUtc.Ticks,
-                fileInfo.Length);
+                fileInfo.Length,
+                fileInfo.Attributes,
+                fileInfo.CreationTimeUtc.Ticks));
         }
         catch (Exception ex) when (
             ex is UnauthorizedAccessException or IOException)
@@ -1679,10 +1812,21 @@ public partial class IndexManager : IDisposable
         string Path,
         bool IsDirectory,
         long LastWriteTimeUtc,
-        long SizeBytes);
+        long SizeBytes,
+        FileAttributes Attributes,
+        long CreatedTimeUtc = 0);
 
-    private sealed class ReconciliationSnapshot
+    private sealed class ReconciliationSnapshot(Action<ReconciliationEntry>? sink = null)
     {
+        private int _capturedCount;
+        public int CapturedCount => sink is null ? Entries.Count : _capturedCount;
+
+        public void Capture(ReconciliationEntry entry)
+        {
+            if (sink is null) Entries[entry.Path] = entry;
+            else { sink(entry); _capturedCount++; }
+        }
+
         public Dictionary<string, ReconciliationEntry> Entries { get; } =
             new(StringComparer.OrdinalIgnoreCase);
 
@@ -1704,12 +1848,16 @@ public partial class IndexManager : IDisposable
 
     private void HandleWatcherError(Exception exception)
     {
+        Interlocked.Increment(ref _watcherErrorVersion);
+        if (_initialWatcherCapture) NoteChangeFeedCoverage(false);
         NotifyError(exception.Message);
         RequestReconciliation();
     }
 
     private void HandleWatcherFault(Exception exception)
     {
+        Interlocked.Increment(ref _watcherErrorVersion);
+        if (_initialWatcherCapture) NoteChangeFeedCoverage(false);
         NoteChangeFeedLost();
         NotifyWatcherFault();
         BeginWatcherRevival();
@@ -1794,6 +1942,13 @@ public partial class IndexManager : IDisposable
 
     private void RequestReconciliation()
     {
+        _knownRecoveryOnly = false;
+        Interlocked.Exchange(ref _fullReconciliationRequested, 1);
+        SignalReconciliation();
+    }
+
+    private void SignalReconciliation()
+    {
         if (_disposed || !_isInitialized || _activeRootPaths.Count == 0)
             return;
 
@@ -1811,7 +1966,8 @@ public partial class IndexManager : IDisposable
 
     private bool SetupWatchers(
         IEnumerable<string> rootPaths,
-        bool dispatchPaused = false)
+        bool dispatchPaused = false,
+        bool captureAllChanges = false)
     {
         _watcher.Stop();
         _watcher.ClearWatches();
@@ -1843,7 +1999,7 @@ public partial class IndexManager : IDisposable
 
         if (configured)
         {
-            _watcher.Start(dispatchPaused);
+            _watcher.Start(dispatchPaused, captureAllChanges);
         }
 
         return configured;
@@ -1931,9 +2087,9 @@ public partial class IndexManager : IDisposable
 
     private void HandleFileChange(FileChangeEvent evt) => TryHandleFileChange(evt);
 
-    private bool TryHandleFileChange(FileChangeEvent evt)
+    private bool TryHandleFileChange(FileChangeEvent evt, Func<string, bool>? deletedLater = null)
     {
-        if (UsesCompactCatalog) return TryHandleCompactFileChange(evt);
+        if (UsesCompactCatalog) return TryHandleCompactFileChange(evt, deletedLater);
         string? error = null;
         var processed = false;
 
@@ -2399,7 +2555,9 @@ public partial class IndexManager : IDisposable
         int itemCount,
         long elapsedMs,
         bool isIndeterminate = false,
-        bool isCatalogBuild = false)
+        bool isCatalogBuild = false,
+        string? phase = null,
+        int totalItemCount = 0)
     {
         var progress = new IndexProgress
         {
@@ -2408,7 +2566,9 @@ public partial class IndexManager : IDisposable
             ItemCount = itemCount,
             ElapsedMs = elapsedMs,
             IsIndeterminate = isIndeterminate,
-            IsCatalogBuild = isCatalogBuild
+            IsCatalogBuild = isCatalogBuild,
+            Phase = phase,
+            TotalItemCount = totalItemCount
         };
         QueueNotification(() => OnProgress?.Invoke(progress));
     }
@@ -2529,6 +2689,10 @@ public partial class IndexManager : IDisposable
                             lock (_lock)
                             {
                                 _db.Dispose();
+                                if (_isInitialized && !_enforceMeasurementPathSafety &&
+                                    CurrentSearchState is CompactSearchState compact)
+                                    CompactCatalogCache.TrySave(DatabasePath, _activeRootPaths, _tokenizer,
+                                        compact, _compactSingleRootPath, _detachedNodeCount);
                             }
                         }
                         finally
@@ -2603,12 +2767,15 @@ public partial class IndexManager : IDisposable
 
 public class IndexProgress
 {
+    public long ReportedTimestamp { get; } = Stopwatch.GetTimestamp();
     public string Status { get; set; } = string.Empty;
     public int Percentage { get; set; }
     public int ItemCount { get; set; }
     public long ElapsedMs { get; set; }
     public bool IsIndeterminate { get; set; }
     public bool IsCatalogBuild { get; set; }
+    public string? Phase { get; set; }
+    public int TotalItemCount { get; set; }
 }
 
 public class IndexStats

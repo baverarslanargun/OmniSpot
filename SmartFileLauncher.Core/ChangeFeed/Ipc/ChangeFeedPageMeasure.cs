@@ -7,4 +7,7 @@ public interface IChangeFeedPageMeasure
     long Root(string rootPath);
 
     long Event(ChangeFeedEvent change);
+
+    long AuthorizationScopes(IReadOnlyList<string> scopes) =>
+        ChangeFeedWireMeasure.MeasureAuthorizationScopes(scopes);
 }

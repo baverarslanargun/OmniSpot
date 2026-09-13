@@ -1,3 +1,6 @@
+using System.Runtime.InteropServices;
+using System.Text.Json.Serialization;
+
 namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public sealed record ChangeFeedEventDto(
@@ -12,7 +15,9 @@ public sealed record ChangeFeedRootPageDto(
     ChangeFeedGapReason ProducerGap,
     ChangeFeedFaultReason ProducerFault,
     bool AuthorizationGap,
-    bool PayloadTooLarge);
+    bool PayloadTooLarge,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? AuthorizationScopesUtf16 = null);
 
 public sealed record ChangeFeedDeliveryDto(
     IReadOnlyList<ChangeFeedRootPageDto> Roots,
@@ -46,7 +51,19 @@ public static class ChangeFeedDeliveryContract
             root.ProducerGap,
             root.ProducerFault,
             root.AuthorizationGap,
-            root.PayloadTooLarge);
+            root.PayloadTooLarge,
+            root.AuthorizationScopes?.Select(EncodeScope).ToArray());
+    }
+
+    internal static string EncodeScope(string path) =>
+        Convert.ToBase64String(MemoryMarshal.AsBytes(path.AsSpan()));
+
+    internal static string DecodeScope(string encoded)
+    {
+        var bytes = Convert.FromBase64String(encoded);
+        if (bytes.Length == 0 || bytes.Length % 2 != 0)
+            throw new InvalidDataException("Uzlaştırma kapsamı geçersiz.");
+        return new string(MemoryMarshal.Cast<byte, char>(bytes));
     }
 
     public static ChangeFeedEventDto ToWire(ChangeFeedEvent change)

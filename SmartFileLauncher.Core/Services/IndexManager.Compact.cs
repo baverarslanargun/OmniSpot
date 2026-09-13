@@ -25,6 +25,23 @@ public partial class IndexManager
         {
             lock (_lock)
             {
+                ct.ThrowIfCancellationRequested();
+                using (var cacheRead = _db.BeginTransaction())
+                {
+                    if (!_enforceMeasurementPathSafety &&
+                        CompactCatalogCache.TryLoad(DatabasePath, rootPaths, _tokenizer, ct, out var cached))
+                    {
+                        ReportProgress("Hazır katalog yükleniyor...", 100, cached!.State.ItemCount,
+                            started.ElapsedMilliseconds, phase: "cache_catalog");
+                        _pathToNode.Clear();
+                        _rootNode = null;
+                        _detachedNodeCount = cached.DetachedCount;
+                        _compactRootAvailable = true;
+                        _compactSingleRootPath = cached.SingleRootPath;
+                        PublishCompactSnapshot(cached.State, incrementalReconciliation: false);
+                        return true;
+                    }
+                }
                 var directories = _db.GetAllDirectories().ToArray();
                 if (directories.Any(directory => !IsCanonicalIndexedPath(directory.FullPath)))
                 {
@@ -159,7 +176,8 @@ public partial class IndexManager
     private async Task BootstrapCompactScanCoreAsync(
         List<string> rootPaths,
         string? singleRootPath,
-        CancellationToken ct)
+        CancellationToken ct,
+        ReconciliationSnapshot? initialInventory = null)
     {
         foreach (var rootPath in rootPaths)
             EnsureMeasurementDirectorySafe(rootPath);
@@ -172,11 +190,27 @@ public partial class IndexManager
                 foreach (var rootPath in rootPaths)
                     EnsureMeasurementDirectorySafe(rootPath);
 
-                var snapshot = CaptureDiskSnapshot(
-                    rootPaths,
-                    ct,
-                    followReparsePoints: true);
-                var prepared = PrepareCompactEntries(snapshot, rootPaths, ct);
+                var snapshot = initialInventory;
+                if (snapshot is null)
+                {
+                    long lastProgress = 0;
+                    ReportProgress("Seçili klasörler taranıyor...", 0, 0,
+                        started.ElapsedMilliseconds, isIndeterminate: true, phase: "directory_inventory");
+                    snapshot = CaptureDiskSnapshot(rootPaths, ct, followReparsePoints: true,
+                        progress: count =>
+                        {
+                            if (started.ElapsedMilliseconds - lastProgress < 250) return;
+                            lastProgress = started.ElapsedMilliseconds;
+                            ReportProgress("Seçili klasörler taranıyor...", 0, count, lastProgress,
+                                isIndeterminate: true, phase: "directory_inventory");
+                        });
+                }
+                void Progress(string phase, string status, int count, int total) =>
+                    ReportProgress(status, total == 0 ? 100 : (int)(count * 100L / total),
+                        count, started.ElapsedMilliseconds, phase: phase, totalItemCount: total);
+                Progress("prepare", "Dosyalar hazırlanıyor...", 0, snapshot.Entries.Count);
+                var prepared = PrepareCompactEntries(snapshot, rootPaths, ct,
+                    progress: count => Progress("prepare", "Dosyalar hazırlanıyor...", count, snapshot.Entries.Count));
                 var searchItems = singleRootPath is null
                     ? prepared.Select(entry => entry.Item)
                     : prepared
@@ -185,19 +219,33 @@ public partial class IndexManager
                             singleRootPath,
                             StringComparison.OrdinalIgnoreCase))
                         .Select(entry => entry.Item);
+                ReportProgress("Arama kataloğu hazırlanıyor...", 0, prepared.Count,
+                    started.ElapsedMilliseconds, isIndeterminate: true, phase: "catalog");
                 var candidate = CompactSearchState.Create(searchItems, _tokenizer);
 
                 using var transaction = _db.BeginTransaction();
                 try
                 {
+                    ReportProgress("Önceki indeks temizleniyor...", 0, 0,
+                        started.ElapsedMilliseconds, isIndeterminate: true, phase: "clear_database");
                     _db.ClearIndex();
-                    PersistCompactEntries(prepared, ct);
+                    Progress("persist", "İndeks kaydediliyor...", 0, prepared.Count);
+                    PersistCompactEntries(prepared, ct,
+                        progress: count => Progress("persist", "İndeks kaydediliyor...", count, prepared.Count));
                     var rootsKey = string.Join(
                         "|",
                         rootPaths.OrderBy(path => path, StringComparer.OrdinalIgnoreCase));
                     _db.SetMetadata(IndexMetadata.Keys.ScanRootPath, rootsKey);
                     _db.SetMetadata(IndexMetadata.Keys.LastFullScanTime, DateTime.UtcNow.Ticks.ToString());
                     _db.SetMetadata(IndexMetadata.Keys.TotalFilesIndexed, prepared.Count.ToString());
+                    _db.SetMetadata(IndexMetadata.Keys.InitialInventoryPending,
+                        initialInventory is null ? "0" : "1");
+                    _db.SetMetadata(IndexMetadata.Keys.LastBootstrapSource,
+                        initialInventory is null ? "filesystem" : "mft");
+                    _db.SetMetadata(IndexMetadata.Keys.LastBootstrapLinkScopes,
+                        initialInventory is null ? "0" : _initialLinkScopes.Count.ToString());
+                    ReportProgress("Kayıt tamamlanıyor...", 0, prepared.Count,
+                        started.ElapsedMilliseconds, isIndeterminate: true, phase: "commit");
                     transaction.Commit();
                 }
                 catch
@@ -272,22 +320,36 @@ public partial class IndexManager
     private int ApplyCompactReconciliationSnapshot(
         IReadOnlyList<string> rootPaths,
         ReconciliationSnapshot suppliedSnapshot,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool useSuppliedSnapshot = false)
     {
         _ = suppliedSnapshot;
         lock (_lock)
         {
-            var snapshot = CaptureDiskSnapshot(rootPaths, ct);
+            var snapshot = useSuppliedSnapshot ? suppliedSnapshot : CaptureDiskSnapshot(rootPaths, ct);
             MergeCompactSnapshotStatus(snapshot, suppliedSnapshot);
             var current = CurrentCompactSnapshot;
-            var directories = _db.GetAllDirectories().ToArray();
-            var files = _db.GetAllFiles().ToArray();
-            var directoriesByPath = directories.ToDictionary(
+            var databaseRoots = rootPaths.Select(path => current.TryGetItem(path, out var item) ? item.FullPath : path).ToArray();
+            var directoriesByPath = databaseRoots.SelectMany(_db.GetDirectoriesInScope).DistinctBy(directory => directory.Id).ToDictionary(
                 directory => directory.FullPath,
                 StringComparer.OrdinalIgnoreCase);
-            var filesByPath = files.ToDictionary(
+            var filesByPath = databaseRoots.SelectMany(_db.GetFilesInScope).DistinctBy(file => file.Id).ToDictionary(
                 file => file.FullPath,
                 StringComparer.OrdinalIgnoreCase);
+            foreach (var root in rootPaths)
+            {
+                for (var parent = Path.GetDirectoryName(root); parent is not null &&
+                    _activeRootPaths.Any(active => IsSameOrDescendantPath(parent, active)); parent = Path.GetDirectoryName(parent))
+                {
+                    if (current.TryGetItem(parent, out var parentItem)) parent = parentItem.FullPath;
+                    var row = _db.GetDirectoryByPath(parent);
+                    if (row is not null) { directoriesByPath[row.FullPath] = row; break; }
+                    var info = new DirectoryInfo(parent);
+                    if (!info.Exists) break;
+                    snapshot.Entries[parent] = new ReconciliationEntry(parent, true,
+                        info.LastWriteTimeUtc.Ticks, 0, info.Attributes);
+                }
+            }
 
             var removed = FindCompactReconciliationRemovals(
                 current,
@@ -372,7 +434,7 @@ public partial class IndexManager
             try
             {
                 DeleteCompactPaths(removed, current);
-                PersistCompactEntries(persistedUpserts, ct, filesByPath);
+                PersistCompactEntries(persistedUpserts, ct, filesByPath, existingDirectories: directoriesByPath);
                 transaction.Commit();
             }
             catch
@@ -393,9 +455,7 @@ public partial class IndexManager
         CancellationToken ct)
     {
         var candidates = new List<string>();
-        foreach (var item in current.GetAllItems()
-                     .Where(item => rootPaths.Any(root =>
-                         IsSameOrDescendantPath(item.FullPath, root)))
+        foreach (var item in EnumerateCompactScopes(current, rootPaths, ct)
                      .OrderBy(item => item.FullPath.Length))
         {
             ct.ThrowIfCancellationRequested();
@@ -426,11 +486,26 @@ public partial class IndexManager
         return candidates;
     }
 
+    private static IEnumerable<SearchItem> EnumerateCompactScopes(IIndexCatalogSnapshot current,
+        IReadOnlyList<string> roots, CancellationToken ct)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var pending = new Stack<string>(roots);
+        while (pending.TryPop(out var path))
+        {
+            ct.ThrowIfCancellationRequested();
+            if (!seen.Add(path)) continue;
+            if (current.TryGetItem(path, out var item)) yield return item;
+            foreach (var child in current.GetChildren(path, ct)) pending.Push(child.FullPath);
+        }
+    }
+
     private List<CompactPreparedEntry> PrepareCompactEntries(
         ReconciliationSnapshot snapshot,
         IReadOnlyList<string> rootPaths,
         CancellationToken ct,
-        IReadOnlyDictionary<string, IndexedFile>? existingFiles = null)
+        IReadOnlyDictionary<string, IndexedFile>? existingFiles = null,
+        Action<int>? progress = null)
     {
         var roots = rootPaths.ToHashSet(StringComparer.OrdinalIgnoreCase);
         var prepared = new List<CompactPreparedEntry>(snapshot.Entries.Count);
@@ -444,7 +519,7 @@ public partial class IndexManager
                 : Path.GetDirectoryName(entry.Path) is { } parent
                     ? NormalizeIndexedPath(parent)
                     : null;
-            var attributes = File.GetAttributes(entry.Path);
+            var attributes = entry.Attributes;
             if (entry.IsDirectory)
             {
                 prepared.Add(new CompactPreparedEntry(
@@ -453,18 +528,23 @@ public partial class IndexManager
                     CreatedTimeUtc: 0,
                     IsHidden: (attributes & FileAttributes.Hidden) != 0,
                     IsSystem: (attributes & FileAttributes.System) != 0));
+                ReportPrepared();
                 continue;
             }
 
-            var fileInfo = new FileInfo(entry.Path);
             IndexedFile? persisted = null;
             if (existingFiles is not null)
                 existingFiles.TryGetValue(entry.Path, out persisted);
-            var createdTimeUtc = persisted?.CreatedTimeUtc ?? fileInfo.CreationTimeUtc.Ticks;
+            var createdTimeUtc = persisted?.CreatedTimeUtc ?? entry.CreatedTimeUtc;
             var openCount = persisted?.OpenCount ?? 0;
+            if (existingFiles is not null && persisted is null && CurrentCompactSnapshot.TryGetItem(entry.Path, out var cached) && !cached.IsDirectory)
+            {
+                createdTimeUtc = cached.CreatedTime?.ToUniversalTime().Ticks ?? createdTimeUtc;
+                openCount = cached.OpenCount;
+            }
             prepared.Add(new CompactPreparedEntry(
                 new SearchItem(
-                    fileInfo.Name,
+                    PathName(entry.Path),
                     entry.Path,
                     IsDirectory: false,
                     entry.SizeBytes,
@@ -476,8 +556,14 @@ public partial class IndexManager
                 createdTimeUtc,
                 IsHidden: (attributes & FileAttributes.Hidden) != 0,
                 IsSystem: (attributes & FileAttributes.System) != 0));
+            ReportPrepared();
         }
 
+        void ReportPrepared()
+        {
+            if (progress is not null && (prepared.Count % 1000 == 0 || prepared.Count == snapshot.Entries.Count))
+                progress(prepared.Count);
+        }
         return prepared;
     }
 
@@ -498,13 +584,24 @@ public partial class IndexManager
     private void PersistCompactEntries(
         IReadOnlyCollection<CompactPreparedEntry> entries,
         CancellationToken ct,
-        IReadOnlyDictionary<string, IndexedFile>? existingFiles = null)
+        IReadOnlyDictionary<string, IndexedFile>? existingFiles = null,
+        Action<int>? progress = null,
+        IReadOnlyDictionary<string, IndexedDirectory>? existingDirectories = null)
     {
+        var processed = 0;
+        void ReportPersisted(int count = 1)
+        {
+            var previous = processed;
+            processed += count;
+            if (progress is not null && (previous / 1000 != processed / 1000 || processed == entries.Count))
+                progress(processed);
+        }
         var now = DateTime.UtcNow.Ticks;
-        var directoryIds = _db.GetAllDirectories().ToDictionary(
+        var directoryIds = (existingDirectories?.Values ?? _db.GetAllDirectories()).ToDictionary(
             directory => directory.FullPath,
             directory => (directory.Id, directory.Depth),
             StringComparer.OrdinalIgnoreCase);
+        using var writer = _db.CreatePreparedWriteBatch();
 
         foreach (var entry in entries
                      .Where(entry => entry.Item.IsDirectory)
@@ -525,7 +622,7 @@ public partial class IndexManager
 
             if (directoryIds.TryGetValue(entry.Item.FullPath, out var existingDirectory))
                 _db.UpdateDirectoryIdentity(existingDirectory.Id, entry.Item.FullPath, entry.Item.Name);
-            var id = _db.InsertDirectory(new IndexedDirectory
+            var id = writer.InsertDirectory(new IndexedDirectory
             {
                 FullPath = entry.Item.FullPath,
                 Name = entry.Item.Name,
@@ -536,8 +633,10 @@ public partial class IndexManager
                 IsHidden = entry.IsHidden
             });
             directoryIds[entry.Item.FullPath] = (id, depth);
+            ReportPersisted();
         }
 
+        var files = new List<IndexedFile>(IndexDatabase.PreparedWriteBatch.FileBatchSize);
         foreach (var entry in entries.Where(entry => !entry.Item.IsDirectory))
         {
             ct.ThrowIfCancellationRequested();
@@ -551,7 +650,7 @@ public partial class IndexManager
             if (existingFiles is not null && existingFiles.TryGetValue(entry.Item.FullPath, out var existingFile))
                 _db.UpdateFileIdentity(existingFile.Id, entry.Item.FullPath, entry.Item.Name,
                     Path.GetExtension(entry.Item.FullPath).ToLowerInvariant());
-            _db.InsertFile(new IndexedFile
+            files.Add(new IndexedFile
             {
                 FullPath = entry.Item.FullPath,
                 FileName = entry.Item.Name,
@@ -565,6 +664,17 @@ public partial class IndexManager
                 IsHidden = entry.IsHidden,
                 IsSystem = entry.IsSystem
             });
+            if (files.Count == IndexDatabase.PreparedWriteBatch.FileBatchSize)
+                FlushFiles();
+        }
+        if (files.Count != 0)
+            FlushFiles();
+
+        void FlushFiles()
+        {
+            writer.InsertFiles(files, ct);
+            ReportPersisted(files.Count);
+            files.Clear();
         }
     }
 

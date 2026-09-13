@@ -33,6 +33,12 @@ public sealed class IndexManagerChangeFeedTarget : IChangeFeedIndexTarget
     public bool Apply(IReadOnlyList<FileChangeEvent> changes) =>
         _manager.ApplyExternalChanges(changes);
 
+    public Task<IReadOnlyList<string>> ApplyOrRepairAsync(IReadOnlyList<FileChangeEvent> changes, bool withinLifecycle,
+        CancellationToken cancellationToken) =>
+        _manager.ApplyExternalChangesWithRecoveryAsync(changes, withinLifecycle, cancellationToken);
+
+    public bool DeferRepairs(IReadOnlyList<string> scopes) => _manager.QueueKnownRepairs(scopes);
+
     public Task<bool> ResynchronizeAsync(
         string rootPath,
         bool withinLifecycle,

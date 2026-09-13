@@ -2,6 +2,8 @@ using SmartFileLauncher.Core.ChangeFeed;
 using SmartFileLauncher.Core.ChangeFeed.Ipc;
 using SmartFileLauncher.Core.ChangeFeed.Store;
 using SmartFileLauncher.Core.Tests.TestInfrastructure;
+using SmartFileLauncher.Core.Application.Indexing;
+using SmartFileLauncher.Core.Models;
 using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.ChangeFeed;
@@ -259,16 +261,16 @@ public sealed class ChangeFeedPullSessionTests
     }
 
     [Fact]
-    public void AReceiptFromBeforeAnOverflow_IsRefusedAndDeletesNothing()
+    public void AReceiptStillAcknowledgesOnlyItsPrefixAfterMoreThan512Appends()
     {
-        using var world = new World(maximumEntryCount: 1);
+        using var world = new World();
         world.Enqueue(1);
 
         var receipt = world.Pull().Receipt!;
-        world.Enqueue(1, toUsn: 20);
+        for (var index = 0; index < 513; index++) world.Enqueue(1, toUsn: 20 + index);
 
-        Assert.Equal(ChangeFeedDeliveryStatus.StaleChain, world.Acknowledge(receipt));
-        Assert.Single(world.QueueFiles());
+        Assert.Equal(ChangeFeedDeliveryStatus.Ok, world.Acknowledge(receipt));
+        Assert.Equal(513, world.QueueFiles().Length);
     }
 
     [Fact]
@@ -405,6 +407,51 @@ public sealed class ChangeFeedPullSessionTests
 
     private static string Parent(int index) => @"C:\Kok\alt" + index;
 
+    [Fact]
+    public async Task BridgeDrainsAllRealStorePrefixesAndAcknowledgesEachBeforeMovingOn()
+    {
+        using var world = new World();
+        for (var index = 0; index < 600; index++) world.Enqueue(1, toUsn: index + 1);
+        var channel = new StoreChannel(world);
+        var target = new CountTarget();
+        var result = await new ChangeFeedIndexBridge(channel, target).AdoptAsync([Root], default);
+        Assert.Equal(ChangeFeedAdoptionStatus.Adopted, result.Status);
+        Assert.Equal(600, result.EventsApplied);
+        Assert.Equal(600, target.Events);
+        Assert.True(channel.Acknowledgements > 1);
+        Assert.Empty(world.QueueFiles());
+        Assert.Equal(0, result.RootsResynchronized);
+    }
+
+    private sealed class CountTarget : IChangeFeedIndexTarget
+    {
+        public int Events { get; private set; }
+        public bool Apply(IReadOnlyList<FileChangeEvent> changes) { Events += changes.Count; return true; }
+        public Task<bool> ResynchronizeAsync(string rootPath, bool withinLifecycle, CancellationToken cancellationToken) =>
+            throw new InvalidOperationException("Sağlıklı kuyruk tam taramaya dönüşmemeli.");
+    }
+
+    private sealed class StoreChannel(World world) : IChangeFeedRequestChannel
+    {
+        public int Acknowledgements { get; private set; }
+        public Task<ChangeFeedResponse> SendAsync(ChangeFeedRequest request, CancellationToken cancellationToken)
+        {
+            if (request.Kind == ChangeFeedRequestKind.Pull)
+            {
+                var response = world.Pull(request.Token, cancellationToken);
+                Assert.Equal(ChangeFeedDeliveryStatus.Ok, response.Status);
+                return Task.FromResult(ChangeFeedResponse.Delivered(ChangeFeedDeliveryContract.ToWire(
+                    response.Page!, response.Continuation, response.Receipt)));
+            }
+            if (request.Kind == ChangeFeedRequestKind.Acknowledge)
+            {
+                Assert.Equal(ChangeFeedDeliveryStatus.Ok, world.Acknowledge(request.Token!));
+                Acknowledgements++;
+            }
+            return Task.FromResult(ChangeFeedResponse.Ok());
+        }
+    }
+
     private sealed class World : IDisposable
     {
         private readonly TemporaryDirectory _directory = new();
@@ -414,12 +461,11 @@ public sealed class ChangeFeedPullSessionTests
 
         public World(
             bool subscribe = true,
-            long pageBudget = 4096,
-            int maximumEntryCount = FileSystemChangeFeedStore.DefaultMaximumEntryCount)
+            long pageBudget = 4096)
         {
             _pageBudget = pageBudget;
             Layout = ChangeFeedStoreLayout.ForOwner(_directory.Path, OwnerSid);
-            Store = new FileSystemChangeFeedStore(Layout, maximumEntryCount: maximumEntryCount);
+            Store = new FileSystemChangeFeedStore(Layout);
 
             if (subscribe)
             {

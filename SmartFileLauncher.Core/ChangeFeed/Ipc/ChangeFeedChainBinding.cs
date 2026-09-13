@@ -67,14 +67,19 @@ public sealed class ChangeFeedChainBinding
 
     public IReadOnlyList<ChangeFeedSubscribedRoot> Roots => _roots;
 
-    public bool Matches(ChangeFeedChainBinding other)
+    public bool Matches(ChangeFeedChainBinding other) => Matches(other, true, true);
+
+    internal bool MatchesInventory(ChangeFeedChainBinding other, bool independentSecurity) =>
+        Matches(other, false, !independentSecurity);
+
+    private bool Matches(ChangeFeedChainBinding other, bool includeEpoch, bool includeSecurity)
     {
         ArgumentNullException.ThrowIfNull(other);
 
         if (!string.Equals(OwnerSid, other.OwnerSid, StringComparison.Ordinal) ||
             ProtocolVersion != other.ProtocolVersion ||
-            !Epoch.Matches(other.Epoch) ||
-            !Security.Matches(other.Security) ||
+            (includeEpoch && !Epoch.Matches(other.Epoch)) ||
+            (includeSecurity && !Security.Matches(other.Security)) ||
             _roots.Length != other._roots.Length)
         {
             return false;

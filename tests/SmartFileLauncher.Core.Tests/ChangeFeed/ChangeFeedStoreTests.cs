@@ -71,17 +71,18 @@ public sealed class ChangeFeedStoreTests
     }
 
     [Fact]
-    public void Enqueue_WritesTheOverflowGapWithNoJournalPositionSoRecoveryKeepsIt()
+    public void LegacyOverflowGapSurvivesAppendingAndDiscardingUncommittedEvents()
     {
         using var directory = new TemporaryDirectory();
-        var store = CreateStore(directory, maximumEntryCount: 1);
+        var store = CreateStore(directory);
         store.WriteSubscription(CreateSubscription());
 
-        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        var overflow = store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
+        var overflow = store.EnqueueOne(VolumeId, JournalId, 0, 0,
+            [new(FirstRoot, ChangeFeedBatch.Gap(ChangeFeedGapReason.DeliveryQueueOverflow), Generation)]);
+        store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
 
         Assert.False(overflow.IsPositional);
-        Assert.Equal(0, store.DiscardUncommitted(VolumeId, JournalId, 100));
+        Assert.Equal(1, store.DiscardUncommitted(VolumeId, JournalId, 100));
         Assert.Equal(overflow.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
     }
 
@@ -103,11 +104,11 @@ public sealed class ChangeFeedStoreTests
     }
 
     [Fact]
-    public void Enqueue_KeepsTheBacklogWhenTheOverflowEntryCannotBeWritten()
+    public void Enqueue_KeepsTheBacklogWhenTheNextEntryCannotBeWritten()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
-        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 1);
+        var store = new FileSystemChangeFeedStore(layout);
         store.WriteSubscription(CreateSubscription());
 
         var backlog = store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
@@ -269,53 +270,77 @@ public sealed class ChangeFeedStoreTests
     }
 
     [Fact]
-    public void Enqueue_ReplacesTheBacklogWithAnExplicitGapWhenTheEntryLimitIsReached()
+    public void MoreThan512PacketsSurviveRestartUntilAcknowledged()
     {
         using var directory = new TemporaryDirectory();
-        var store = CreateStore(directory, maximumEntryCount: 2);
+        var store = CreateStore(directory);
         store.WriteSubscription(CreateSubscription());
 
-        store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        store.EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
-        var overflow = store.EnqueueOne(VolumeId, JournalId, 300, 400, Deliveries(FirstRoot));
-
-        Assert.Equal(overflow.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
-        Assert.False(overflow.IsPositional);
-        Assert.Equal(
-            new[] { FirstRoot, SecondRoot }.Order(),
-            overflow.Roots.Select(root => root.RootPath).Order());
-        Assert.All(
-            overflow.Roots,
-            root => Assert.Equal(
-                ChangeFeedGapReason.DeliveryQueueOverflow,
-                root.Batch.GapReason));
+        var sequences = new List<long>();
+        for (var index = 0; index < 600; index++)
+            sequences.Add(store.EnqueueOne(VolumeId, JournalId, index, index + 1,
+                Deliveries(index % 2 == 0 ? FirstRoot : SecondRoot)).Sequence);
+        var restarted = CreateStore(directory);
+        var actual = new List<long>();
+        while (true)
+        {
+            var slice = restarted.ReadPending();
+            Assert.InRange(slice.Entries.Count, 1, ChangeFeedReadBudget.DefaultMaximumEntries);
+            Assert.All(slice.Entries, entry => Assert.False(entry.HasAnyGap));
+            actual.AddRange(slice.Entries.Select(entry => entry.Sequence));
+            restarted.Acknowledge(slice.Entries[^1].Sequence);
+            if (!slice.HasMore) break;
+        }
+        Assert.Equal(sequences, actual);
+        Assert.Empty(restarted.ReadPending().Entries);
     }
 
     [Fact]
-    public void Enqueue_ReplacesTheBacklogWhenTheByteLimitIsReached()
+    public void MoreThan64MiBRemainsReadableInBoundedPagesUntilAcknowledged()
     {
         using var directory = new TemporaryDirectory();
-        var seed = CreateStore(directory);
-        seed.WriteSubscription(CreateSubscription());
-        seed.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-
-        var overflow = CreateStore(directory, maximumTotalBytes: 16)
-            .EnqueueOne(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
-
-        Assert.All(
-            overflow.Roots,
-            root => Assert.Equal(
-                ChangeFeedGapReason.DeliveryQueueOverflow,
-                root.Batch.GapReason));
-        Assert.Equal(overflow.Sequence, Assert.Single(CreateStore(directory).ReadPending().Entries).Sequence);
+        var store = CreateStore(directory);
+        var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
+        var prefix = FirstRoot + "\\" + string.Join("\\", Enumerable.Repeat(new string('d', 200), 100));
+        var events = Enumerable.Range(0, 8).Select(index =>
+            new ChangeFeedEvent(ChangeFeedEventKind.Created, prefix + "\\" + index + ".txt", false)).ToArray();
+        long bytes = 0;
+        var packets = 0;
+        while (bytes <= 64L * 1024 * 1024)
+        {
+            var entry = store.EnqueueOne(VolumeId, JournalId, packets, packets + 1,
+                [new(FirstRoot, ChangeFeedBatch.Ok(events), Generation)]);
+            bytes += new FileInfo(Path.Combine(layout.QueueDirectory, entry.Sequence.ToString("D19") + ".json")).Length;
+            packets++;
+        }
+        Assert.True(packets < 512);
+        var restarted = CreateStore(directory);
+        var consumed = 0;
+        while (true)
+        {
+            var slice = restarted.ReadPending();
+            Assert.NotEmpty(slice.Entries);
+            Assert.True(slice.Entries.Sum(entry => new FileInfo(Path.Combine(layout.QueueDirectory,
+                entry.Sequence.ToString("D19") + ".json")).Length) <= ChangeFeedReadBudget.DefaultMaximumBytes);
+            foreach (var entry in slice.Entries)
+            {
+                Assert.False(entry.HasAnyGap);
+                Assert.Equal(events.Select(change => change.FullPath), Assert.Single(entry.Roots).Batch.Events.Select(change => change.FullPath));
+                consumed++;
+            }
+            restarted.Acknowledge(slice.Entries[^1].Sequence);
+            if (!slice.HasMore) break;
+        }
+        Assert.Equal(packets, consumed);
+        Assert.Empty(Directory.GetFiles(layout.QueueDirectory, "*.json"));
     }
 
     [Fact]
-    public void AnOverflowWithoutASubscription_WritesNoRecoveryAtAll()
+    public void AppendingWithoutASubscriptionDoesNotEraseStoredEvents()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
-        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 1);
+        var store = new FileSystemChangeFeedStore(layout);
 
         var history = Enumerable
             .Range(0, ChangeFeedSubscription.MaximumRoots + 44)
@@ -326,16 +351,18 @@ public sealed class ChangeFeedStoreTests
 
         var overflow = store.Enqueue(VolumeId, JournalId, 10, 20, Deliveries(FirstRoot));
 
-        Assert.Empty(overflow);
-        Assert.Empty(store.ReadPending().Entries);
+        Assert.Single(overflow);
+        Assert.Equal(2, store.ReadPending().Entries.Count);
+        Assert.Equal(history.Length, store.ReadPending().Entries[0].Roots.Count);
+        Assert.False(store.ReadPending().Entries[1].HasAnyGap);
     }
 
     [Fact]
-    public void AnOverflowRecovery_CoversOnlyTheRootsTheSubscriptionStillCarries()
+    public void AppendingKeepsTheSuppliedRootGenerationWithoutRewritingHistory()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
-        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 3);
+        var store = new FileSystemChangeFeedStore(layout);
 
         store.WriteSubscription(new ChangeFeedSubscription(
             OwnerSid,
@@ -352,11 +379,11 @@ public sealed class ChangeFeedStoreTests
     }
 
     [Fact]
-    public void AnOverflowRecovery_StaysWithinTheSubscriptionRootCount()
+    public void AppendingDoesNotPromoteHistoricalRootsIntoRecoveryScopes()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
-        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 40);
+        var store = new FileSystemChangeFeedStore(layout);
 
         store.WriteSubscription(new ChangeFeedSubscription(
             OwnerSid,
@@ -391,8 +418,6 @@ public sealed class ChangeFeedStoreTests
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
         var store = new FileSystemChangeFeedStore(
             layout,
-            maximumEntryCount: FileSystemChangeFeedStore.DefaultMaximumEntryCount,
-            maximumTotalBytes: FileSystemChangeFeedStore.DefaultMaximumTotalBytes,
             maximumEntryBytes: 2048);
 
         var roots = Enumerable
@@ -497,10 +522,13 @@ public sealed class ChangeFeedStoreTests
     public void DiscardUncommitted_KeepsGapEntriesThatCarryNoJournalPosition()
     {
         using var directory = new TemporaryDirectory();
-        var store = CreateStore(directory, maximumEntryCount: 1);
+        var store = CreateStore(directory);
         store.WriteSubscription(CreateSubscription());
         store.EnqueueOne(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
-        store.EnqueueOne(VolumeId, JournalId, 0, 0, Deliveries(FirstRoot));
+        store.EnqueueOne(VolumeId, JournalId, 0, 0,
+            [new(FirstRoot, ChangeFeedBatch.Gap(ChangeFeedGapReason.DeliveryQueueOverflow), Generation)]);
+
+        Assert.Equal(1, store.DiscardUncommitted(VolumeId, JournalId, 100));
 
         var survivor = Assert.Single(store.ReadPending().Entries);
         Assert.False(survivor.IsPositional);
@@ -540,13 +568,8 @@ public sealed class ChangeFeedStoreTests
     }
 
     private static FileSystemChangeFeedStore CreateStore(
-        TemporaryDirectory directory,
-        int maximumEntryCount = FileSystemChangeFeedStore.DefaultMaximumEntryCount,
-        long maximumTotalBytes = FileSystemChangeFeedStore.DefaultMaximumTotalBytes) =>
-        new(
-            ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid),
-            maximumEntryCount,
-            maximumTotalBytes);
+        TemporaryDirectory directory) =>
+        new(ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid));
 
     private static ChangeFeedSubscription CreateSubscription() =>
         new(

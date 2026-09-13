@@ -9,7 +9,7 @@ using SmartFileLauncher.Core.Models;
 
 namespace SmartFileLauncher.Core.Services;
 
-public class IndexDatabase : IDisposable
+public partial class IndexDatabase : IDisposable
 {
     private const int CurrentSchemaVersion = 1;
     private readonly string _dbPath;
@@ -548,27 +548,8 @@ public class IndexDatabase : IDisposable
 
     public long InsertDirectory(IndexedDirectory dir)
     {
-        using var cmd = CreateCommand(@"
-            INSERT INTO Directories (FullPath, Name, ParentId, Depth, LastWriteTimeUtc, LastIndexedTimeUtc, IsHidden)
-            VALUES (@path, @name, @parentId, @depth, @lastWrite, @lastIndexed, @hidden)
-            ON CONFLICT(FullPath) DO UPDATE SET
-                Name = excluded.Name,
-                ParentId = excluded.ParentId,
-                Depth = excluded.Depth,
-                LastWriteTimeUtc = excluded.LastWriteTimeUtc,
-                LastIndexedTimeUtc = excluded.LastIndexedTimeUtc,
-                IsHidden = excluded.IsHidden
-            RETURNING Id;");
-        
-        cmd.Parameters.AddWithValue("@path", dir.FullPath);
-        cmd.Parameters.AddWithValue("@name", dir.Name);
-        cmd.Parameters.AddWithValue("@parentId", dir.ParentId.HasValue ? dir.ParentId.Value : DBNull.Value);
-        cmd.Parameters.AddWithValue("@depth", dir.Depth);
-        cmd.Parameters.AddWithValue("@lastWrite", dir.LastWriteTimeUtc);
-        cmd.Parameters.AddWithValue("@lastIndexed", dir.LastIndexedTimeUtc);
-        cmd.Parameters.AddWithValue("@hidden", dir.IsHidden ? 1 : 0);
-        
-        return Convert.ToInt64(cmd.ExecuteScalar());
+        using var command = CreateDirectoryInsertCommand();
+        return ExecuteDirectoryInsert(command, dir);
     }
 
     public IndexedDirectory? GetDirectoryByPath(string path)
@@ -631,33 +612,8 @@ public class IndexDatabase : IDisposable
 
     public long InsertFile(IndexedFile file)
     {
-        using var cmd = CreateCommand(@"
-            INSERT INTO Files (FullPath, FileName, Extension, DirectoryId, SizeBytes, CreatedTimeUtc, LastWriteTimeUtc, LastIndexedTimeUtc, OpenCount, IsHidden, IsSystem)
-            VALUES (@path, @name, @ext, @dirId, @size, @created, @lastWrite, @lastIndexed, @openCount, @hidden, @system)
-            ON CONFLICT(FullPath) DO UPDATE SET
-                FileName = excluded.FileName,
-                Extension = excluded.Extension,
-                DirectoryId = excluded.DirectoryId,
-                SizeBytes = excluded.SizeBytes,
-                LastWriteTimeUtc = excluded.LastWriteTimeUtc,
-                LastIndexedTimeUtc = excluded.LastIndexedTimeUtc,
-                IsHidden = excluded.IsHidden,
-                IsSystem = excluded.IsSystem
-            RETURNING Id;");
-        
-        cmd.Parameters.AddWithValue("@path", file.FullPath);
-        cmd.Parameters.AddWithValue("@name", file.FileName);
-        cmd.Parameters.AddWithValue("@ext", file.Extension);
-        cmd.Parameters.AddWithValue("@dirId", file.DirectoryId);
-        cmd.Parameters.AddWithValue("@size", file.SizeBytes);
-        cmd.Parameters.AddWithValue("@created", file.CreatedTimeUtc);
-        cmd.Parameters.AddWithValue("@lastWrite", file.LastWriteTimeUtc);
-        cmd.Parameters.AddWithValue("@lastIndexed", file.LastIndexedTimeUtc);
-        cmd.Parameters.AddWithValue("@openCount", file.OpenCount);
-        cmd.Parameters.AddWithValue("@hidden", file.IsHidden ? 1 : 0);
-        cmd.Parameters.AddWithValue("@system", file.IsSystem ? 1 : 0);
-        
-        return Convert.ToInt64(cmd.ExecuteScalar());
+        using var command = CreateFileInsertCommand();
+        return ExecuteFileInsert(command, file);
     }
 
     public IndexedFile? GetFileByPath(string path)

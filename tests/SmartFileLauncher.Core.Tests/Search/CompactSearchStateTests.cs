@@ -7,6 +7,114 @@ namespace SmartFileLauncher.Core.Tests.Search;
 
 public sealed class CompactSearchStateTests
 {
+    [Fact]
+    public void DefaultCatalogUsesTheExistingVarintCodec()
+    {
+        using var workspace = new TemporaryDirectory();
+        var nodes = Enumerable.Range(0, 256).Select(index => Node("shared-" + index)).ToArray();
+        var tokenizer = new BasicTokenizer();
+        var defaultState = CompactSearchState.Create(nodes, tokenizer);
+        var compressed = CompactSearchState.Create(nodes, tokenizer, varint: true);
+        var fixedWidth = CompactSearchState.Create(nodes, tokenizer, varint: false);
+        var defaultPath = Path.Combine(workspace.Path, "default.catalog");
+        var compressedPath = Path.Combine(workspace.Path, "compressed.catalog");
+        defaultState.WriteNewBase(defaultPath);
+        compressed.WriteNewBase(compressedPath);
+        Assert.Equal(File.ReadAllBytes(compressedPath), File.ReadAllBytes(defaultPath));
+        Assert.True(defaultState.PayloadBytes < fixedWidth.PayloadBytes);
+        Assert.Equal(Ordered(fixedWidth), Ordered(defaultState));
+        Assert.Equal(fixedWidth.Get("shared"), defaultState.Get("shared"));
+    }
+
+    [Fact]
+    public void HistoricalVersionTwoRemainsReadableAndCompactsToTheNewFormat()
+    {
+        using var workspace = new TemporaryDirectory();
+        var oldPath = Path.Combine(workspace.Path, "version-two.catalog");
+        File.WriteAllBytes(oldPath, Convert.FromBase64String(
+            "SUNTTwIAAAACAAAAAwAAADgAAADYAAAACAEAAAwBAAAYAQAAJAEAAG4BAAAAAAAAAAAAAAAAAAAqAQAABwAAACQBAAAKAAAA//////////84AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAACAEAAAEAAAAMAQAAAQAAADoBAAAKAAAAOAEAAAsAAAAAAAAAAAAAAP////8AAAAAKgAAAAAAAAABALOmnqHaCAIAs6aeodoIBwAAAJ4AAAAMAQAAAAAAABABAAACAAAATgEAAAcAAAAYAQAAAQAAAFwBAAAGAAAAHAEAAAEAAABoAQAAAwAAACABAAABAAAAAQAAAAAAAAABAAAAAgAAAAAAAAABAAAAAQAAAEMAOgBcAGYAaQB4AHQAdQByAGUAXABsAGUAZwBhAGMAeQAuAHQAeAB0AGYAaQB4AHQAdQByAGUAbABlAGcAYQBjAHkAdAB4AHQAQmBzgtQsOaVCNOwoq5dvEPyPE3WMwau1FNg7Cxhlu7s="));
+        var old = CompactSearchState.OpenMapped(oldPath);
+        var file = Assert.Single(old.Get("legacy"));
+        Assert.Equal(@"C:\fixture\legacy.txt", file.FullPath);
+        Assert.Equal(42, file.SizeBytes);
+        Assert.Equal(7, file.OpenCount);
+        Assert.Equal(new DateTime(638000000000000001L, DateTimeKind.Utc), file.CreatedTime);
+        Assert.Equal(DateTimeKind.Utc, file.CreatedTime!.Value.Kind);
+        Assert.Equal(new DateTime(638000000000000002L, DateTimeKind.Local), file.LastWriteTime);
+        Assert.Equal(DateTimeKind.Local, file.LastWriteTime!.Value.Kind);
+        Assert.Equal(file, Assert.Single(old.GetChildren(@"C:\fixture")));
+        var filtered = ((IQueryCatalogSnapshot)old).GetItems(new QueryCatalogFilter(
+            true, false, false, true, null, null, null, null, 0, 1), default);
+        Assert.Equal(file, Assert.Single(filtered));
+
+        var rewritten = old.Compact();
+        var newPath = Path.Combine(workspace.Path, "rewritten.catalog");
+        rewritten.WriteNewBase(newPath);
+        Assert.Equal(3, BitConverter.ToInt32(File.ReadAllBytes(newPath), 4));
+        Assert.Equal(Ordered(old), Ordered(rewritten));
+        Assert.Equal(Ordered(old), Ordered(CompactSearchState.OpenMapped(newPath)));
+        Assert.Equal(file, Assert.Single(old.Get("legacy")));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SparseChildrenAndEmptyLastTokenRangeSurviveCompaction(bool varint)
+    {
+        using var workspace = new TemporaryDirectory();
+        var root = new SearchItem("root", @"C:\root", true, 9,
+            new DateTime(638000000000000003L, DateTimeKind.Unspecified), null, 2, "");
+        var leaf = new SearchItem("leaf", @"C:\root\leaf", false, long.MaxValue, null, null, 0, root.FullPath);
+        var blank = new SearchItem("", @"C:\root\blank", false, null, null, null, 0, root.FullPath);
+        var tokenizer = new BasicTokenizer();
+        var state = CompactSearchState.Create(new[] { root, leaf, blank }, tokenizer, varint: varint);
+        var path = Path.Combine(workspace.Path, "sparse.catalog");
+        state.WriteNewBase(path);
+        var mapped = CompactSearchState.OpenMapped(path);
+        Assert.Equal(Ordered(state), Ordered(mapped));
+        Assert.Equal(2, mapped.GetChildren(root.FullPath).Count);
+        Assert.Empty(mapped.GetChildren(leaf.FullPath));
+        var updated = mapped.WithRecordUpserts([blank with { Name = "fresh" }], tokenizer).Compact();
+        Assert.Single(updated.Get("fresh"));
+        Assert.Equal(2, updated.GetChildren(root.FullPath).Count);
+        Assert.Empty(mapped.Get("fresh"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InitialCatalogPreservesFirstPathOrderAndLastDuplicateValue(bool varint)
+    {
+        using var workspace = new TemporaryDirectory();
+        var parent = new SearchItem("Root", @"C:\Root", true, null, null, null, 0, "");
+        var old = new SearchItem("old.txt", @"C:\Root\file.txt", false, 1, null, null, 0, parent.FullPath);
+        var sibling = new SearchItem("sibling.txt", @"C:\Root\sibling.txt", false, 2, null, null, 0, parent.FullPath);
+        var replacement = old with { Name = "updated.txt", FullPath = @"c:\ROOT\FILE.txt", SizeBytes = 7, OpenCount = 3 };
+        SearchItem[] input = [old, parent, sibling, replacement];
+        var tokenizer = new BasicTokenizer();
+        var expected = CompactSearchState.Create(new[] { replacement, parent, sibling }, tokenizer, varint: varint);
+        var actual = CompactSearchState.Create(input.Select(item => item), tokenizer, varint: varint);
+        var expectedPath = Path.Combine(workspace.Path, "expected.catalog");
+        var actualPath = Path.Combine(workspace.Path, "actual.catalog");
+        expected.WriteNewBase(expectedPath);
+        actual.WriteNewBase(actualPath);
+
+        Assert.Equal(File.ReadAllBytes(expectedPath), File.ReadAllBytes(actualPath));
+        Assert.Equal(new[] { replacement, parent, sibling }, actual.GetAllItems());
+        Assert.Empty(actual.Get("old"));
+        Assert.Equal(replacement, Assert.Single(actual.Get("updated")));
+        var mapped = CompactSearchState.OpenMapped(actualPath);
+        foreach (var item in new[] { replacement, parent, sibling })
+        {
+            Assert.True(actual.TryGetItem(item.FullPath, out var builtItem));
+            Assert.True(mapped.TryGetItem(item.FullPath, out var mappedItem));
+            Assert.Equal(item, builtItem);
+            Assert.Equal(item, mappedItem);
+            Assert.Equal(mapped.Identity(item.FullPath), actual.Identity(item.FullPath));
+        }
+        Assert.Equal(actual.GetChildren(parent.FullPath), mapped.GetChildren(parent.FullPath));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

@@ -7,8 +7,6 @@ namespace SmartFileLauncher.Core.ChangeFeed.Store;
 
 public sealed class FileSystemChangeFeedStore : IChangeFeedStore
 {
-    public const int DefaultMaximumEntryCount = 512;
-    public const long DefaultMaximumTotalBytes = 64L * 1024 * 1024;
     public const long DefaultMaximumEntryBytes = ChangeFeedReadBudget.DefaultMaximumBytes;
 
     private const string EntrySearchPattern = "*.json";
@@ -24,23 +22,15 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
     };
 
     private readonly ChangeFeedStoreLayout _layout;
-    private readonly int _maximumEntryCount;
-    private readonly long _maximumTotalBytes;
     private readonly long _maximumEntryBytes;
 
     public FileSystemChangeFeedStore(
         ChangeFeedStoreLayout layout,
-        int maximumEntryCount = DefaultMaximumEntryCount,
-        long maximumTotalBytes = DefaultMaximumTotalBytes,
         long maximumEntryBytes = DefaultMaximumEntryBytes)
     {
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumEntryCount);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumTotalBytes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumEntryBytes);
 
-        _maximumEntryCount = maximumEntryCount;
-        _maximumTotalBytes = maximumTotalBytes;
         _maximumEntryBytes = maximumEntryBytes;
         _layout.EnsureCreated();
     }
@@ -290,12 +280,13 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         using var scope = EnterOwnerScope();
 
 
-        var written = new List<ChangeFeedQueueEntry>();
+        var groups = Partition(volumeId, journalId, fromUsn, toUsn, roots);
+        var written = new List<ChangeFeedQueueEntry>(groups.Count);
+        var sequence = AllocateSequence(QueueFiles());
+        ReserveSequences(sequence, groups.Count);
 
-        foreach (var group in Partition(volumeId, journalId, fromUsn, toUsn, roots))
+        foreach (var group in groups)
         {
-            var files = QueueFiles();
-            var sequence = AllocateSequence(files);
             var candidate = new ChangeFeedQueueEntry(
                 sequence,
                 volumeId,
@@ -305,14 +296,9 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
                 group);
             var payload = JsonSerializer.SerializeToUtf8Bytes(ToDocument(candidate), SerializerOptions);
 
-            if (files.Length >= _maximumEntryCount ||
-                TotalBytes(files) + payload.Length > _maximumTotalBytes)
-            {
-                return Overflow(files, sequence, volumeId, journalId, roots);
-            }
-
             WriteEntry(candidate.Sequence, payload);
             written.Add(candidate);
+            sequence++;
         }
 
         return written;
@@ -501,73 +487,6 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
                 .ToArray());
     }
 
-    private IReadOnlyList<ChangeFeedQueueEntry> Overflow(
-        string[] files,
-        long sequence,
-        string volumeId,
-        ulong journalId,
-        IReadOnlyList<ChangeFeedRootDelivery> roots)
-    {
-        return ReplaceQueue(
-            sequence,
-            volumeId,
-            journalId,
-            0,
-            0,
-            OverflowRoots(files, roots));
-    }
-
-    private IReadOnlyList<ChangeFeedRootDelivery> OverflowRoots(
-        string[] files,
-        IReadOnlyList<ChangeFeedRootDelivery> roots)
-    {
-        var seen = new Dictionary<string, ChangeFeedRootGeneration>(
-            StringComparer.OrdinalIgnoreCase);
-        var unreadable = false;
-
-        foreach (var file in files)
-        {
-            ChangeFeedQueueEntry pending;
-            try
-            {
-                pending = ReadEntry(file);
-            }
-            catch (Exception failure) when (IsUnreadable(failure))
-            {
-                unreadable = true;
-                continue;
-            }
-
-            foreach (var root in pending.Roots)
-            {
-                seen[root.RootPath] = root.Generation;
-            }
-        }
-
-        foreach (var root in roots)
-        {
-            seen[root.RootPath] = root.Generation;
-        }
-
-        if (ReadSubscription() is not { } subscription)
-        {
-            return Array.Empty<ChangeFeedRootDelivery>();
-        }
-
-        return subscription.Roots
-            .Where(root => unreadable || seen.ContainsKey(root.RootPath))
-            .Select(root => OverflowGap(root.RootPath, root.Generation))
-            .ToArray();
-    }
-
-    private static ChangeFeedRootDelivery OverflowGap(
-        string rootPath,
-        ChangeFeedRootGeneration generation) =>
-        new(
-            rootPath,
-            ChangeFeedBatch.Gap(ChangeFeedGapReason.DeliveryQueueOverflow),
-            generation);
-
     private IReadOnlyList<ChangeFeedQueueEntry> ReplaceQueue(
         long firstSequence,
         string volumeId,
@@ -648,9 +567,6 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         Array.Sort(files, StringComparer.Ordinal);
         return files;
     }
-
-    private long TotalBytes(string[] files) =>
-        files.Sum(file => new FileInfo(file).Length);
 
     private void ReserveSequences(long firstSequence, int count)
     {

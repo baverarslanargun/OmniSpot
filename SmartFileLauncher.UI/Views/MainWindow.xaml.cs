@@ -74,6 +74,11 @@ public partial class MainWindow : Window {
     private ThumbnailViewportScheduler? _thumbnailViewport;
     private readonly System.Windows.Threading.DispatcherTimer _viewportDebounce = new();
     private readonly System.Windows.Threading.DispatcherTimer _thumbnailIdleRelease = new();
+    private readonly DispatcherTimer _indexProgressTimer = new() { Interval = TimeSpan.FromSeconds(1) };
+    private readonly Stopwatch _indexProgressClock = new();
+    private long _indexProgressStartedTimestamp;
+    private IndexProgress? _latestIndexProgress;
+    private string? _lastIndexPhase;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private long _searchVersion;
     private volatile bool _isPreparedForShutdown;
@@ -150,6 +155,7 @@ public partial class MainWindow : Window {
         DesktopIcons.ItemsSource = _desktopRows;
         _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
         _folderLoadingDelay.Tick += (_, _) => ShowFolderLoadingBarNow();
+        _indexProgressTimer.Tick += (_, _) => UpdateIndexProgressText();
 
         _indexLifecycle.ProgressChanged += HandleIndexProgress;
         _indexLifecycle.Error += HandleIndexError;
@@ -333,6 +339,8 @@ public partial class MainWindow : Window {
     internal void PrepareForShutdown() {
         if (_isPreparedForShutdown) return;
         _isPreparedForShutdown = true;
+        _indexProgressTimer.Stop();
+        _indexProgressClock.Stop();
 
         RecordMeasurementEvent("kapanış başladı");
 
@@ -419,12 +427,20 @@ public partial class MainWindow : Window {
         if (_isPreparedForShutdown) return;
 
         Dispatcher.BeginInvoke(new Action(() => {
+            if (_isPreparedForShutdown) return;
+            _latestIndexProgress = progress;
+            if (progress.Phase is { } phase && phase != _lastIndexPhase) {
+                _lastIndexPhase = phase;
+                var elapsed = Stopwatch.GetElapsedTime(_indexProgressStartedTimestamp, progress.ReportedTimestamp);
+                var deliveryDelay = Stopwatch.GetElapsedTime(progress.ReportedTimestamp);
+                Log($"⏱️ İndeks aşaması: {phase} | {elapsed.TotalSeconds:F3} sn | UI gecikmesi {deliveryDelay.TotalMilliseconds:F0} ms");
+            }
+            UpdateIndexProgressText();
             if (progress.IsCatalogBuild) {
                 EnterCatalogBuildStage();
                 return;
             }
 
-            SetLoadingStatus(progress.Status);
             if (progress.IsIndeterminate) {
                 SetLoadingIndeterminate(true);
                 return;
@@ -435,6 +451,13 @@ public partial class MainWindow : Window {
                 SetLoadingPercentage(progress.Percentage);
             }
         }));
+    }
+
+    private void UpdateIndexProgressText() {
+        if (_isPreparedForShutdown || _latestIndexProgress is not { } progress) return;
+        var text = IndexProgressPresentation.Format(progress, _indexProgressClock.ElapsedMilliseconds);
+        SetLoadingStatus(text);
+        CatalogBuildStatus.Text = text;
     }
 
     private const double LoadingTrackWidth = 240;
@@ -752,7 +775,10 @@ public partial class MainWindow : Window {
             Log("=== İndeksleme Başlıyor ===");
             Log($"📦 Database: {_indexLifecycle.DatabasePath}");
 
-            var stopwatch = Stopwatch.StartNew();
+            _indexProgressStartedTimestamp = Stopwatch.GetTimestamp();
+            _indexProgressClock.Restart();
+            _indexProgressTimer.Start();
+            var stopwatch = _indexProgressClock;
             var startup = await _indexLifecycle.InitializeAsync(
                 _lifetimeCancellation.Token);
             stopwatch.Stop();
@@ -773,6 +799,8 @@ public partial class MainWindow : Window {
                 stopwatch.ElapsedMilliseconds);
         } catch (OperationCanceledException) when (_isPreparedForShutdown) {
         } catch (Exception ex) {
+            _indexProgressTimer.Stop();
+            _indexProgressClock.Stop();
             RecordMeasurementEvent(
                 "indeks başlatma başarısız",
                 ex.GetType().Name);
@@ -784,6 +812,9 @@ public partial class MainWindow : Window {
                 ModernDialog.Show(this, "İndeksleme başarısız",
                     $"{ex.Message}{Environment.NewLine}{Environment.NewLine}Ayrıntılar için konsolu kontrol edin.", DialogKind.Danger);
             });
+        } finally {
+            _indexProgressTimer.Stop();
+            _indexProgressClock.Stop();
         }
     }
 
@@ -830,7 +861,7 @@ public partial class MainWindow : Window {
 
     private void HandleFileSystemChange(FileChangeEvent evt)
     {
-        if (_isPreparedForShutdown ||
+        if (!_isIndexed || _isPreparedForShutdown ||
             Dispatcher.HasShutdownStarted ||
             Dispatcher.HasShutdownFinished) return;
 

@@ -145,28 +145,7 @@ public sealed class ChangeFeedDeliveryProjector
                 root = opened;
             }
 
-            if (projection.Withheld)
-            {
-                root.Note(ChangeFeedGapReason.None, ChangeFeedFaultReason.None, withheld: true);
-            }
-
-            if (projection.Published is not { } change)
-            {
-                continue;
-            }
-
-            var cost = _measure.Event(change);
-
-            if (cost > root.Capacity)
-            {
-                root.NotePayloadTooLarge();
-                continue;
-            }
-
-            if (!builder.TryAdd(root, change, cost))
-            {
-                return index;
-            }
+            if (!builder.TryAddProjection(root, projection)) return index;
         }
 
         return null;
@@ -220,15 +199,34 @@ public sealed class ChangeFeedDeliveryProjector
             return true;
         }
 
-        public bool TryAdd(RootBuilder root, ChangeFeedEvent change, long cost)
+        public bool TryAddProjection(RootBuilder root, ChangeFeedEventProjection projection)
         {
+            var fallback = root.ScopeFallback || projection.Withheld && projection.AuthorizationScopes is not { Count: > 0 };
+            var published = projection.Published;
+            var eventCost = published is { } change ? _measure.Event(change) : 0;
+            var oversized = eventCost > root.Capacity;
+            var repairPaths = oversized && published is not null
+                ? published.OldPath is null ? new[] { published.FullPath } : new[] { published.FullPath, published.OldPath }
+                : Array.Empty<string>();
+            var scopes = fallback ? [] : root.Scopes.Concat(projection.AuthorizationScopes ?? []).Concat(repairPaths)
+                .Distinct(StringComparer.Ordinal).ToArray();
+            if (scopes.Length > 32) return false;
+            var scopeCost = scopes.Length > 0 ? _measure.AuthorizationScopes(scopes) : 0;
+            if (oversized) eventCost = 0;
+            var cost = scopeCost - root.ScopeCost + eventCost;
             if (cost > _remaining)
             {
+                if (!_order.Any(candidate => candidate.HasContent))
+                    throw new InvalidDataException("Tek değişiklik sayfa bütçesine sığmıyor; aktarım ertelendi.");
                 return false;
             }
-
             _remaining -= cost;
-            root.Add(change);
+            root.SetScopes(scopes, scopeCost);
+            if (fallback) root.FallbackScopes();
+            if (projection.Withheld)
+                root.Note(ChangeFeedGapReason.None, ChangeFeedFaultReason.None, withheld: true);
+            if (oversized) root.NotePayloadTooLarge();
+            else if (published is not null) root.Add(published);
             return true;
         }
 
@@ -246,6 +244,13 @@ public sealed class ChangeFeedDeliveryProjector
         private ChangeFeedFaultReason _fault = ChangeFeedFaultReason.None;
         private bool _withheld;
         private bool _oversized;
+
+        public IReadOnlyList<string> Scopes { get; private set; } = [];
+        public bool ScopeFallback { get; private set; }
+        public long ScopeCost { get; private set; }
+
+        public void FallbackScopes() { ScopeFallback = true; Scopes = []; }
+        public void SetScopes(IReadOnlyList<string> scopes, long cost) { Scopes = scopes; ScopeCost = cost; }
 
         public RootBuilder(string rootPath, long capacity)
         {
@@ -287,6 +292,7 @@ public sealed class ChangeFeedDeliveryProjector
         public void Add(ChangeFeedEvent change) => _events.Add(change);
 
         public ChangeFeedRootPage Build() =>
-            new(RootPath, _events, _gap, _fault, _withheld, _oversized);
+            new(RootPath, _events, _gap, _fault, _withheld, _oversized,
+                !ScopeFallback && Scopes.Count > 0 ? Scopes : null);
     }
 }

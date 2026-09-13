@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Indexing;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 
@@ -9,6 +10,8 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     private readonly IndexManager _indexManager;
     private readonly IIndexedLocationProvider _locationProvider;
     private readonly ChangeFeedIndexBridge? _changeFeed;
+    private readonly IIndexInventorySource? _inventorySource;
+    private readonly bool _preferDirectoryEnumeration;
     private readonly TimeSpan _renewInterval;
     private readonly CancellationTokenSource _leaseCancellation = new();
     private readonly SemaphoreSlim _leaseGate = new(1, 1);
@@ -23,12 +26,16 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         IndexManager indexManager,
         IIndexedLocationProvider locationProvider,
         ChangeFeedIndexBridge? changeFeed = null,
-        TimeSpan? renewInterval = null)
+        TimeSpan? renewInterval = null,
+        IIndexInventorySource? inventorySource = null,
+        bool preferDirectoryEnumeration = false)
     {
         _indexManager = indexManager ?? throw new ArgumentNullException(nameof(indexManager));
         _locationProvider = locationProvider ??
             throw new ArgumentNullException(nameof(locationProvider));
         _changeFeed = changeFeed;
+        _inventorySource = inventorySource;
+        _preferDirectoryEnumeration = preferDirectoryEnumeration;
         _renewInterval = renewInterval ?? ChangeFeedIndexBridge.DefaultRenewInterval;
 
         if (_changeFeed is not null)
@@ -96,10 +103,13 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var locations = _locationProvider.Resolve();
+        var inventorySource = _preferDirectoryEnumeration &&
+            ShouldUseDirectoryEnumeration(locations.RootPaths) ? null : _inventorySource;
         await _indexManager.InitializeWithWatcherFenceAsync(
                 locations.RootPaths,
                 cancellationToken,
-                AdoptChangeFeedAsync)
+                AdoptChangeFeedAsync,
+                inventorySource)
             .ConfigureAwait(false);
 
         return new IndexStartupResult(
@@ -107,6 +117,16 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
             locations.RootPaths,
             _indexManager.GetStats());
     }
+
+    internal static bool ShouldUseDirectoryEnumeration(IReadOnlyList<string> roots) =>
+        roots.Any(root =>
+        {
+            var fullPath = Path.GetFullPath(root);
+            var volume = Path.GetPathRoot(fullPath);
+            return volume is not { Length: 3 } || volume[1] != ':' ||
+                !string.Equals(Path.TrimEndingDirectorySeparator(fullPath),
+                    Path.TrimEndingDirectorySeparator(volume), StringComparison.OrdinalIgnoreCase);
+        });
 
     internal static bool CoversDowntime(ChangeFeedAdoptionResult? adoption, int rootCount) =>
         adoption is { LeaseHeld: true } &&
@@ -136,10 +156,17 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     {
         var coversDowntime = CoversDowntime(LastAdoption, rootCount);
         _indexManager.NoteChangeFeedCoverage(coversDowntime);
+        var pending = LastAdoption?.PendingRepairScopes;
+        if (pending is { Count: > 0 } && LastAdoption is { OnlyKnownRepairs: true } && LastAdoption.RootsSubscribed == rootCount)
+            _indexManager.NoteKnownRecovery(pending);
+
+        var pendingCount = Math.Max(pending?.Count ?? 0, _indexManager.PendingRepairCount);
 
         Notice?.Invoke(
             DescribeAdoption(LastAdoption) +
-            (coversDowntime
+            (pendingCount > 0 && (coversDowntime || LastAdoption is { OnlyKnownRepairs: true })
+                ? $" | {pendingCount} yerel onarım bekliyor; tam tarama yapılmayacak"
+                : coversDowntime
                 ? " | açılış taraması atlandı"
                 : " | açılış taraması yapılacak"));
     }
@@ -159,7 +186,8 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         {
             watcherPrepared = _indexManager.BeginWatcherCaptureWithinLifecycle(roots);
             LastAdoption = await _changeFeed
-                .AdoptAsync(roots, cancellationToken, withinLifecycle: true)
+                .AdoptAsync(roots, cancellationToken, withinLifecycle: true,
+                    validateInitialInventory: _indexManager.ValidateInitialInventoryAsync)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

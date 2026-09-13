@@ -2,7 +2,7 @@ namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public static class ChangeFeedProtocol
 {
-    public const int Version = 4;
+    public const int Version = 5;
 
     public const string PipeName = "OmniSpot.ChangeFeed";
 
@@ -34,7 +34,10 @@ public enum ChangeFeedRequestKind
     Acknowledge,
     HoldLease,
     DrainAndHoldLease,
-    ReleaseLease
+    ReleaseLease,
+    Inventory,
+    ValidateInventory,
+    CancelInventory
 }
 
 public enum ChangeFeedResponseStatus
@@ -54,14 +57,18 @@ public sealed record ChangeFeedRequest(
     ChangeFeedRequestKind Kind,
     string? RootPath = null,
     string? Token = null,
-    int LeaseSeconds = 0);
+    int LeaseSeconds = 0,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? InventoryRoots = null);
 
 public sealed record ChangeFeedResponse(
     int Version,
     ChangeFeedResponseStatus Status,
     string? Message = null,
     IReadOnlyList<string>? Roots = null,
-    ChangeFeedDeliveryDto? Delivery = null)
+    ChangeFeedDeliveryDto? Delivery = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    ChangeFeedInventoryPageDto? Inventory = null)
 {
     public static ChangeFeedResponse Ok(IReadOnlyList<string>? roots = null) =>
         new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, null, roots);
