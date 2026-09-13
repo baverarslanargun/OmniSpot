@@ -5,7 +5,8 @@ namespace SmartFileLauncher.Core.Services;
 
 public partial class IndexManager
 {
-    private bool TryHandleCompactFileChange(FileChangeEvent evt)
+    private bool TryHandleCompactFileChange(FileChangeEvent evt, Func<string, bool>? deletedLater = null,
+        bool deferFailures = true)
     {
         string? error = null;
         var applied = false;
@@ -19,21 +20,47 @@ public partial class IndexManager
                 state.TryGetItem(path, out var existing);
                 if (evt.ChangeType == FileChangeType.Deleted)
                     applied = DeleteCompactEventPath(state, existing?.FullPath ?? path, evt.IsDirectory);
-                else if (ShouldSkipReparsePath(path))
+                else if (ShouldSkipReparsePath(path) || IsCompactEventExcluded(path))
                     applied = DeleteCompactSkippedTarget(state, evt, existing);
                 else if (evt.ChangeType == FileChangeType.Modified)
-                    applied = ModifyCompactEventPath(state, existing, path);
+                    applied = ModifyCompactEventPath(state, existing, path, deletedLater?.Invoke(path) == true);
                 else
-                    applied = AddCompactEventPath(state, evt, path, existing);
+                    applied = AddCompactEventPath(state, evt, path, existing, deletedLater?.Invoke(path) == true);
             }
             catch (Exception ex)
             {
                 error = $"Error handling {evt.ChangeType}: {ex.Message}";
             }
         }
-        if (error is not null) NotifyError(error);
+        if (error is not null)
+        {
+            NotifyError(error);
+        }
+        if (!applied && deferFailures)
+        {
+            string[] paths = evt.OldPath is null ? [evt.FullPath] : [evt.FullPath, evt.OldPath];
+            if (!QueueKnownRepairs(paths)) RememberKnownRepairs(paths);
+        }
         else if (applied) QueueNotification(() => OnFileChange?.Invoke(evt));
         return applied;
+    }
+
+    private bool IsCompactEventExcluded(string path)
+    {
+        var root = _activeRootPaths.Where(candidate => IsSameOrDescendantPath(path, candidate))
+            .OrderByDescending(candidate => candidate.Length).FirstOrDefault();
+        if (root is null) return false;
+        for (var current = path; !string.Equals(current, root, StringComparison.OrdinalIgnoreCase);
+             current = Path.GetDirectoryName(current)!)
+        {
+            if (string.IsNullOrEmpty(current)) return false;
+            try
+            {
+                if (IsHiddenOrSystem(File.GetAttributes(current))) return true;
+            }
+            catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException) { }
+        }
+        return false;
     }
 
     private bool DeleteCompactEventPath(IIndexCatalogSnapshot state, string path, bool fallbackDirectory)
@@ -75,14 +102,20 @@ public partial class IndexManager
         return true;
     }
 
-    private bool ModifyCompactEventPath(IIndexCatalogSnapshot state, SearchItem? item, string path)
+    private bool ModifyCompactEventPath(IIndexCatalogSnapshot state, SearchItem? item, string path,
+        bool deletionFollows = false)
     {
         if (item is null) return !File.Exists(path) && !Directory.Exists(path);
         if (item.IsDirectory) return true;
         var persisted = _db.GetFileByPath(item.FullPath);
         if (persisted is null) return false;
         var info = new FileInfo(path);
-        var size = info.Length;
+        long size;
+        try { size = info.Length; }
+        catch (Exception error) when (deletionFollows && (error is FileNotFoundException or DirectoryNotFoundException))
+        {
+            return true;
+        }
         var modified = info.LastWriteTime;
         var next = state.WithRecordUpserts([item with { SizeBytes = size, LastWriteTime = modified }], _tokenizer);
         using var transaction = _db.BeginTransaction();
@@ -97,7 +130,7 @@ public partial class IndexManager
     }
 
     private bool AddCompactEventPath(IIndexCatalogSnapshot state, FileChangeEvent evt,
-        string path, SearchItem? existing)
+        string path, SearchItem? existing, bool deletionFollows = false)
     {
         var renamed = evt.ChangeType == FileChangeType.Renamed && evt.OldPath is not null;
         var oldPath = renamed ? NormalizeIndexedPath(evt.OldPath!) : null;
@@ -124,6 +157,7 @@ public partial class IndexManager
             return !renamed || DeleteCompactEventPath(state, oldPath!, oldItem?.IsDirectory ?? evt.IsDirectory);
         }
 
+        if (deletionFollows && !Directory.Exists(path) && !File.Exists(path)) return true;
         var parentPath = Path.GetDirectoryName(path);
         if (parentPath is null ||
             (!state.TryGetItem(parentPath, out var parent) &&
@@ -132,9 +166,10 @@ public partial class IndexManager
         var persistedParent = _db.GetDirectoryByPath(parent?.FullPath ?? parentPath);
         if (persistedParent is null) return false;
         if (!Directory.Exists(path) && !File.Exists(path)) return true;
-
         var snapshot = CaptureDiskSnapshot([path], CancellationToken.None, followReparsePoints: true);
-        if (snapshot.UnreadableScopes.Count != 0 || !snapshot.Entries.ContainsKey(path)) return false;
+        if (snapshot.UnreadableScopes.Count != 0) return false;
+        if (!snapshot.Entries.ContainsKey(path))
+            return deletionFollows && !renamed && snapshot.ProtectedScopes.Count == 0;
         if (snapshot.ProtectedScopes.Any(scope => !snapshot.Entries.ContainsKey(scope))) return false;
 
         var next = state;

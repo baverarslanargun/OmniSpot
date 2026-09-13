@@ -43,11 +43,11 @@ public sealed class ChangeFeedDeliveryIntegrityTests : IDisposable
     }
 
     [Fact]
-    public void Overflow_KeepsAGapForTheCurrentGenerationEvenWhenStaleBacklogSharesThePath()
+    public void RetainedBacklogKeepsCurrentEventsWhenStaleGenerationSharesThePath()
     {
         var stale = ChangeFeedRootGeneration.New();
         var subscribed = SubscribedRoot();
-        var store = CreateStore(maximumEntryCount: 1);
+        var store = CreateStore();
         store.WriteSubscription(new ChangeFeedSubscription(OwnerSid, new[] { subscribed }));
 
         store.Enqueue(VolumeId, JournalId, 0, 10, new[] { Delivery(stale, 1) });
@@ -59,7 +59,8 @@ public sealed class ChangeFeedDeliveryIntegrityTests : IDisposable
             .ToArray();
 
         var gap = Assert.Single(surviving);
-        Assert.Equal(ChangeFeedGapReason.DeliveryQueueOverflow, gap.Batch.GapReason);
+        Assert.Equal(ChangeFeedGapReason.None, gap.Batch.GapReason);
+        Assert.Single(gap.Batch.Events);
         Assert.Equal(subscribed.Generation, gap.Generation);
     }
 
@@ -139,11 +140,8 @@ public sealed class ChangeFeedDeliveryIntegrityTests : IDisposable
         ChangeFeedStoreLayout.ForOwner(_storeRoot.Path, OwnerSid);
 
     private FileSystemChangeFeedStore CreateStore(
-        int maximumEntryCount = 512,
         long maximumEntryBytes = FileSystemChangeFeedStore.DefaultMaximumEntryBytes) =>
         new(
             Layout(),
-            maximumEntryCount,
-            FileSystemChangeFeedStore.DefaultMaximumTotalBytes,
             maximumEntryBytes);
 }

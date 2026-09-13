@@ -71,7 +71,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             ? settingsStore.LoadStrict()
             : settingsStore.Load();
         var tokenizer = new BasicTokenizer();
-        var searchStateLayout = _settings.CompactSearchStateEnabled
+        var searchStateLayout = _measurementRun == null || _settings.CompactSearchStateEnabled
             ? SearchStateLayout.Compact
             : SearchStateLayout.Legacy;
         var indexManager = _measurementRun == null
@@ -84,8 +84,11 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 skipReparsePoints:
                     _startupOptions.Profile == MeasurementProfile.ProductionCopy,
                 layout: searchStateLayout);
+        if (_measurementRun == null) indexManager.EnableLiveCatalog();
         IIndexedLocationProvider locationProvider = _measurementRun == null
-            ? new IndexedLocationProvider()
+            ? Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") == "1"
+                ? new UserProfileIndexedLocationProvider()
+                : new IndexedLocationProvider()
             : _startupOptions.Profile == MeasurementProfile.EmptyProduction
                 ? new FixedIndexedLocationProvider(_measurementRun.CorpusPath!)
                 : new IndexedLocationProvider();
@@ -96,7 +99,11 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 ? new ChangeFeedIndexBridge(
                     new ChangeFeedClientChannel(),
                     new IndexManagerChangeFeedTarget(indexManager))
-                : null);
+                : null,
+            inventorySource: _measurementRun == null
+                ? new ChangeFeedInventorySource(new ChangeFeedClientChannel(), _log.Write)
+                : null,
+            preferDirectoryEnumeration: true);
         var indexMaintenance = new IndexMaintenanceService(
             _indexLifecycle.DatabasePath);
         _indexMaintenance = _measurementRun == null
@@ -195,6 +202,17 @@ public sealed class ApplicationCompositionRoot : IDisposable
     {
         public void Apply(bool enabled)
         {
+        }
+    }
+
+    private sealed class UserProfileIndexedLocationProvider : IIndexedLocationProvider
+    {
+        public IndexLocations Resolve()
+        {
+            var standard = new IndexedLocationProvider().Resolve();
+            return new IndexLocations(
+                standard.DesktopPath,
+                new[] { Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) });
         }
     }
 

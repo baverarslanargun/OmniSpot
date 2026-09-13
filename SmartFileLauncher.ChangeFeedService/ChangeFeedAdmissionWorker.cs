@@ -29,17 +29,20 @@ internal sealed class ChangeFeedAdmissionWorker : BackgroundService
         _pipeName = pipeName;
     }
 
-    public static ChangeFeedAdmissionService CreateAdmissionService() =>
+    public static ChangeFeedAdmissionService CreateAdmissionService(Action<Exception>? onInventoryFailure = null) =>
         new(
             new ChangeFeedRootAdmission(new UsnFileSystemIdentityProbe()),
             ownerSid => new FileSystemChangeFeedStore(
                 ChangeFeedStoreLayout.ForTrustedOwner(ownerSid)),
-            handoffDrainer: ChangeFeedDrainWorker.DrainToCurrentBoundary);
+            handoffDrainer: ChangeFeedDrainWorker.DrainToCurrentBoundary,
+            inventory: new ChangeFeedInventorySessions(onInventoryFailure));
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        using var admission = CreateAdmissionService(failure => _logger.LogWarning(
+            "MFT kaynak okuması başarısız: {Type}: {Reason}", failure.GetType().Name, failure.Message));
         var server = new ChangeFeedPipeServer(
-            CreateAdmissionService(),
+            admission,
             _pipeName,
             additionalServerPrincipal: null,
             onFault: failure => _logger.LogWarning(

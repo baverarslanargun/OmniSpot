@@ -4,6 +4,13 @@ namespace SmartFileLauncher.Core.ChangeFeed.Usn;
 
 public sealed class UsnChangeFeedState
 {
+    private UsnChangeFeedState(UsnChangeFeedState source, ulong journalId, long nextUsn)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(nextUsn);
+        RootPath = source.RootPath; RootIdentity = source.RootIdentity; Directories = source.Directories;
+        SynchronizedFromUsn = source.SynchronizedFromUsn; JournalId = journalId; NextUsn = nextUsn;
+    }
+    internal UsnChangeFeedState WithPosition(ulong journalId, long nextUsn) => new(this, journalId, nextUsn);
     public UsnChangeFeedState(
         string rootPath,
         UsnNodeIdentity rootIdentity,

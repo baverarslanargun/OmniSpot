@@ -14,11 +14,57 @@ public sealed class UsnChangeFeedStateStoreTests
     private const long NextUsn = 4200;
 
     [Fact]
+    public void IdenticalCursorDoesNotWriteButSecurityOnlyChangesPersistAcrossRestart()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json");
+        var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var root = State(FirstRoot, 1);
+        store.Write(JournalId, NextUsn, [root]);
+        var oldTime = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        File.SetLastWriteTimeUtc(path, oldTime);
+        store.Write(JournalId, NextUsn, [root]);
+        Assert.False(File.Exists(path + ".cursor"));
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(path));
+
+        store.Write(JournalId, NextUsn + 100, [root.WithPosition(JournalId, NextUsn + 100)]);
+        File.SetLastWriteTimeUtc(path + ".cursor", oldTime);
+        store.Write(JournalId, NextUsn + 100, [root.WithPosition(JournalId, NextUsn + 100)]);
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(path + ".cursor"));
+        var reopened = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var state = reopened.Read()!;
+        reopened.Write(state.JournalId, state.NextUsn, state.Roots);
+        Assert.Equal(oldTime, File.GetLastWriteTimeUtc(path + ".cursor"));
+        reopened.Write(state.JournalId, state.NextUsn, state.Roots, pendingSecurityChange: true);
+        Assert.True(new UsnChangeFeedStateStore(path).Read()!.PendingSecurityChange);
+        reopened.Write(state.JournalId, state.NextUsn, state.Roots, pendingSecurityChange: false);
+        Assert.False(new UsnChangeFeedStateStore(path).Read()!.PendingSecurityChange);
+    }
+
+    [Fact]
     public void Read_ReturnsNullBeforeAnythingIsWritten()
     {
         using var directory = new TemporaryDirectory();
 
         Assert.Null(CreateStore(directory).Read());
+    }
+
+    [Fact]
+    public void CursorOverlaySurvivesRestartAndCannotOverrideAnotherMapGeneration()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json"); var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var root = State(FirstRoot, 1, Entry(10, "old", 1));
+        store.Write(JournalId, NextUsn, [root]);
+        store.Write(JournalId, NextUsn + 100, [root.WithPosition(JournalId, NextUsn + 100)], pendingSecurityChange: true);
+        var cursor = File.ReadAllBytes(path + ".cursor");
+        var reopened = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 100, reopened.NextUsn); Assert.True(reopened.PendingSecurityChange);
+        store.Write(JournalId, NextUsn + 200, [State(FirstRoot, 1, Entry(10, "new", 1))]);
+        File.WriteAllBytes(path + ".cursor", cursor);
+        reopened = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 200, reopened.NextUsn); Assert.Equal("new", Assert.Single(Assert.Single(reopened.Roots).Directories).Name);
+        Assert.False(reopened.PendingSecurityChange);
     }
 
     [Fact]

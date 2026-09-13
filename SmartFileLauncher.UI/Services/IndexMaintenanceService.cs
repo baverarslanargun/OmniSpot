@@ -22,10 +22,12 @@ public sealed class IndexMaintenanceService : IIndexMaintenanceService
         {
             if (File.Exists(_indexPath))
             {
+                var bytes = IsLiveCatalog ? Directory.EnumerateFiles(Path.GetDirectoryName(_indexPath)!, "*", SearchOption.AllDirectories)
+                    .Sum(path => new FileInfo(path).Length) : new FileInfo(_indexPath).Length;
                 return new IndexStorageStatus(
                     _indexPath,
                     true,
-                    new FileInfo(_indexPath).Length / 1024);
+                    bytes / 1024);
             }
         }
         catch
@@ -96,6 +98,13 @@ del ""%~f0""
 
     public void ScheduleRebuild()
     {
+        if (IsLiveCatalog)
+        {
+            var directory = Path.GetDirectoryName(_indexPath)!;
+            Directory.CreateDirectory(directory);
+            using (var marker = new FileStream(Path.Combine(directory, "rebuild.request"), FileMode.Create, FileAccess.Write, FileShare.None)) marker.Flush(true);
+            ScheduleRestart(); return;
+        }
         var executablePath = Process.GetCurrentProcess().MainModule?.FileName;
         if (string.IsNullOrEmpty(executablePath))
         {
@@ -151,4 +160,6 @@ del ""%~f0""
             WindowStyle = ProcessWindowStyle.Hidden
         });
     }
+    private bool IsLiveCatalog => Path.GetFileName(_indexPath).Equals("control.bin", StringComparison.OrdinalIgnoreCase) &&
+        Path.GetDirectoryName(_indexPath)!.EndsWith(".live", StringComparison.OrdinalIgnoreCase);
 }

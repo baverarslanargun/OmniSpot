@@ -9,6 +9,7 @@ namespace SmartFileLauncher.UI.Tests.Services;
 internal sealed class FakeIndexLifecycle : IIndexLifecycleService
 {
     public Exception? StatsFailure { get; set; }
+    public int StatsCalls { get; private set; }
 
     public event Action<IndexProgress>? ProgressChanged { add { } remove { } }
     public event Action<FileChangeEvent>? FileChanged { add { } remove { } }
@@ -17,13 +18,14 @@ internal sealed class FakeIndexLifecycle : IIndexLifecycleService
     public event Action<int, int, int>? ReconciliationProgressChanged { add { } remove { } }
     public event Action<bool>? ReconciliationStateChanged { add { } remove { } }
 
-    public bool IsInitialized => true;
+    public bool IsInitialized { get; set; } = true;
     public string DatabasePath => @"C:\test\index.db";
     public IndexReconciliationStatus ReconciliationStatus { get; } =
         new(IsRunning: false, Progress: 0, Processed: 0, Total: 0);
 
     public IndexStats GetStats()
     {
+        StatsCalls++;
         if (StatsFailure is not null) throw StatsFailure;
         return new IndexStats
         {

@@ -25,7 +25,8 @@ public sealed class ChangeFeedRootProjection
 
 public readonly record struct ChangeFeedEventProjection(
     ChangeFeedEvent? Published,
-    bool Withheld);
+    bool Withheld,
+    IReadOnlyList<string>? AuthorizationScopes = null);
 
 public sealed class ChangeFeedPathAuthorizer
 {
@@ -80,7 +81,7 @@ public sealed class ChangeFeedPathAuthorizer
                 ? new ChangeFeedEventProjection(
                     new ChangeFeedEvent(change.Kind, change.FullPath, change.IsDirectory),
                     false)
-                : new ChangeFeedEventProjection(null, true);
+                : change.OldPath is null ? Withheld(null, change.FullPath) : new(null, true);
         }
 
         var oldVisible = change.OldPath is not null && Publishable(change.OldPath);
@@ -98,26 +99,58 @@ public sealed class ChangeFeedPathAuthorizer
 
         if (oldVisible)
         {
-            return new ChangeFeedEventProjection(
+            return Withheld(
                 new ChangeFeedEvent(
                     ChangeFeedEventKind.Deleted,
                     change.OldPath!,
                     change.IsDirectory),
-                true);
+                change.FullPath);
         }
 
         if (next)
         {
-            return new ChangeFeedEventProjection(
+            return Withheld(
                 new ChangeFeedEvent(
                     ChangeFeedEventKind.Created,
                     change.FullPath,
                     change.IsDirectory),
-                true);
+                change.OldPath);
         }
 
-        return new ChangeFeedEventProjection(null, true);
+        return Withheld(null, change.FullPath, change.OldPath);
     }
+
+    private ChangeFeedEventProjection Withheld(ChangeFeedEvent? published, params string?[] paths)
+    {
+        var scopes = new List<string>();
+        foreach (var path in paths)
+        {
+            var scope = FindAuthorizationScope(path);
+            if (scope is null) return new(published, true);
+            if (!scopes.Contains(scope, StringComparer.Ordinal)) scopes.Add(scope);
+        }
+        return new(published, true, scopes);
+    }
+
+    private string? FindAuthorizationScope(string? path)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path)) return null;
+            var candidate = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+            if (!IsUnderRoot(candidate)) return null;
+            for (var parent = Path.GetDirectoryName(candidate);
+                 parent is not null && IsUnderRoot(parent);
+                 parent = Path.GetDirectoryName(parent))
+            {
+                if (Publishable(parent)) return parent;
+            }
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { }
+        return null;
+    }
+
+    internal bool CanReturnExistingPath(string path) => Publishable(path);
 
     private bool Publishable(string path)
     {

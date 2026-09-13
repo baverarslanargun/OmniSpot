@@ -122,5 +122,6 @@ public enum ChangeFeedGapReason
 public enum ChangeFeedFaultReason
 {
     None = 0,
-    NativeProtocolRejected
+    NativeProtocolRejected,
+    JournalTemporarilyUnavailable
 }

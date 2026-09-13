@@ -207,6 +207,146 @@ public sealed class CanonicalCatalogIntegrationTests
         Assert.True(File.Exists(outside));
     }
 
+    [Fact]
+    public async Task ReplayedModificationFollowedByDeletionDoesNotRequestAFullRescan()
+    {
+        using var world = await World.CreateAsync();
+        File.Delete(world.File);
+        var errors = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        world.Manager.OnError += errors.Enqueue;
+        Assert.True(world.Manager.ApplyExternalChanges([
+            new() { ChangeType = FileChangeType.Modified, FullPath = world.File },
+            new() { ChangeType = FileChangeType.Deleted, FullPath = world.File.Replace('\\', '/') }
+        ]));
+        Assert.False(world.Manager.CurrentSearchState.ContainsPath(world.File));
+        Assert.Null(world.Database.GetFileByPath(world.File));
+        Assert.Empty(errors);
+    }
+
+    [Fact]
+    public async Task ATransientCreatedFileWithAnAlreadyRemovedParentDoesNotRequestAFullRescan()
+    {
+        using var world = await World.CreateAsync();
+        var gone = Path.Combine(world.Root, "already-removed", "temporary.txt");
+        var previous = world.Manager.CurrentSearchState;
+        Assert.True(world.Manager.ApplyExternalChanges([
+            new() { ChangeType = FileChangeType.Created, FullPath = gone },
+            new() { ChangeType = FileChangeType.Deleted, FullPath = gone }
+        ]));
+        Assert.Equal(previous.GetAllItems(), world.Manager.CurrentSearchState.GetAllItems());
+        Assert.Null(world.Database.GetFileByPath(gone));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ADeletedDifferentPathDoesNotHideAnUnresolvedModification(bool includeOtherDelete)
+    {
+        using var world = await World.CreateAsync();
+        File.Delete(world.File);
+        var events = new List<FileChangeEvent> {
+            new() { ChangeType = FileChangeType.Modified, FullPath = world.File }
+        };
+        if (includeOtherDelete)
+            events.Add(new() { ChangeType = FileChangeType.Deleted, FullPath = Path.Combine(world.Root, "other.txt") });
+        Assert.False(world.Manager.ApplyExternalChanges(events));
+        Assert.True(world.Manager.CurrentSearchState.ContainsPath(world.File));
+        Assert.NotNull(world.Database.GetFileByPath(world.File));
+    }
+
+    [Theory]
+    [InlineData(FileChangeType.Created, FileAttributes.Hidden)]
+    [InlineData(FileChangeType.Created, FileAttributes.System)]
+    [InlineData(FileChangeType.Modified, FileAttributes.Hidden)]
+    [InlineData(FileChangeType.Modified, FileAttributes.System)]
+    public async Task ExcludedFilesDoNotRequestAFullRescan(FileChangeType type, FileAttributes attribute)
+    {
+        using var world = await World.CreateAsync();
+        var excluded = Path.Combine(world.Root, "excluded.log");
+        File.WriteAllText(excluded, "temporary");
+        File.SetAttributes(excluded, attribute);
+        try
+        {
+            Assert.True(world.Apply(type, excluded));
+            Assert.False(world.Manager.CurrentSearchState.ContainsPath(excluded));
+            Assert.Null(world.Database.GetFileByPath(excluded));
+            Assert.True(world.Manager.CurrentSearchState.ContainsPath(world.File));
+        }
+        finally { File.SetAttributes(excluded, FileAttributes.Normal); }
+    }
+
+    [Fact]
+    public async Task AnEventBelowAnExcludedDirectoryDoesNotIntroduceItsChild()
+    {
+        using var world = await World.CreateAsync();
+        var excluded = Directory.CreateDirectory(Path.Combine(world.Root, "excluded")).FullName;
+        var child = Path.Combine(excluded, "child.txt");
+        File.WriteAllText(child, "child");
+        File.SetAttributes(excluded, FileAttributes.Hidden);
+        try
+        {
+            Assert.True(world.Apply(FileChangeType.Created, child));
+            Assert.True(world.Apply(FileChangeType.Modified, child));
+            Assert.False(world.Manager.CurrentSearchState.ContainsPath(child));
+            Assert.Null(world.Database.GetFileByPath(child));
+        }
+        finally { File.SetAttributes(excluded, FileAttributes.Normal); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AFileBecomingExcludedIsRemovedFromBothCatalogAndDatabase(bool rename)
+    {
+        using var world = await World.CreateAsync();
+        var target = rename ? Path.Combine(world.Root, "hidden.txt") : world.File;
+        if (rename) File.Move(world.File, target);
+        File.SetAttributes(target, FileAttributes.Hidden);
+        try
+        {
+            Assert.True(world.Apply(rename ? FileChangeType.Renamed : FileChangeType.Modified,
+                target, rename ? world.File : null));
+            Assert.False(world.Manager.CurrentSearchState.ContainsPath(world.File));
+            Assert.False(world.Manager.CurrentSearchState.ContainsPath(target));
+            Assert.Null(world.Database.GetFileByPath(world.File));
+            Assert.Null(world.Database.GetFileByPath(target));
+        }
+        finally { File.SetAttributes(target, FileAttributes.Normal); }
+    }
+
+    [Fact]
+    public async Task AnExplicitHiddenRootStillAcceptsVisibleFileChanges()
+    {
+        using var world = await World.CreateAsync();
+        File.SetAttributes(world.Root, FileAttributes.Hidden);
+        try
+        {
+            File.WriteAllText(world.File, "changed content");
+            Assert.True(world.Apply(FileChangeType.Modified, world.File));
+            Assert.Equal(new FileInfo(world.File).Length, world.Database.GetFileByPath(world.File)!.SizeBytes);
+            Assert.True(world.Manager.CurrentSearchState.ContainsPath(world.File));
+        }
+        finally { File.SetAttributes(world.Root, FileAttributes.Normal); }
+    }
+
+    [Fact]
+    public async Task RecoveringAMissingSubtreeRemovesOnlyThatSubtree()
+    {
+        using var world = await World.CreateAsync();
+        var directory = Directory.CreateDirectory(Path.Combine(world.Root, "temporary")).FullName;
+        var child = Path.Combine(directory, "child.txt");
+        File.WriteAllText(child, "child");
+        Assert.True(world.Apply(FileChangeType.Created, directory));
+        Directory.Delete(directory, true);
+        Assert.True(await world.Manager.ReconcileWithinLifecycleAsync(directory));
+        Assert.False(world.Manager.CurrentSearchState.ContainsPath(directory));
+        Assert.False(world.Manager.CurrentSearchState.ContainsPath(child));
+        Assert.Null(world.Database.GetDirectoryByPath(directory));
+        Assert.Null(world.Database.GetFileByPath(child));
+        Assert.True(world.Manager.CurrentSearchState.ContainsPath(world.File));
+        Assert.NotNull(world.Database.GetFileByPath(world.File));
+    }
+
     private sealed class World : IDisposable
     {
         private readonly TemporaryDirectory _directory;

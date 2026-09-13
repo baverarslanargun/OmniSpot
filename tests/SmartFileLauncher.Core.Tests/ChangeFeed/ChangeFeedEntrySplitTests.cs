@@ -256,14 +256,12 @@ public sealed class ChangeFeedEntrySplitTests
     }
 
     [Fact]
-    public void AMultiPartReplacement_NeverReusesASequence()
+    public void AMultiPartAppend_NeverReusesASequence()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
         var store = new FileSystemChangeFeedStore(
             layout,
-            maximumEntryCount: 2,
-            maximumTotalBytes: FileSystemChangeFeedStore.DefaultMaximumTotalBytes,
             maximumEntryBytes: 2048);
 
         var many = Enumerable
@@ -305,14 +303,12 @@ public sealed class ChangeFeedEntrySplitTests
     }
 
     [Fact]
-    public void AnOverflowEntry_IsSplitSoItStaysUnderTheCeiling()
+    public void RetainedPacketsStayUnderThePerEntryCeilingWithoutCreatingGaps()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
         var store = new FileSystemChangeFeedStore(
             layout,
-            maximumEntryCount: 2,
-            maximumTotalBytes: FileSystemChangeFeedStore.DefaultMaximumTotalBytes,
             maximumEntryBytes: 2048);
 
         var many = Enumerable
@@ -352,7 +348,7 @@ public sealed class ChangeFeedEntrySplitTests
             .Distinct()
             .ToArray();
 
-        Assert.Contains(ChangeFeedGapReason.DeliveryQueueOverflow, reasons);
+        Assert.Equal(new[] { ChangeFeedGapReason.None }, reasons);
     }
 
     [Fact]
@@ -397,7 +393,5 @@ public sealed class ChangeFeedEntrySplitTests
         long maximumEntryBytes) =>
         new(
             ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid),
-            FileSystemChangeFeedStore.DefaultMaximumEntryCount,
-            FileSystemChangeFeedStore.DefaultMaximumTotalBytes,
             maximumEntryBytes);
 }

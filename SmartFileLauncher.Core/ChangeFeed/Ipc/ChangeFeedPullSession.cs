@@ -129,6 +129,10 @@ public sealed class ChangeFeedPullSession
         }
 
         var walk = _walker(subscription, slice, start, cancellationToken);
+        if (walk.NextPosition is null && walk.Page.CompletedThroughSequence > 0)
+            walk.Page.StableBatchId = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+                System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { binding.OwnerSid, binding.Epoch, binding.Security,
+                    binding.Roots, walk.Page.CompletedThroughSequence })));
 
         cancellationToken.ThrowIfCancellationRequested();
 

@@ -90,6 +90,7 @@ public sealed class ChangeFeedDeliveryProjectorTests
         Assert.Empty(root.Events);
         Assert.True(root.PayloadTooLarge);
         Assert.False(root.AuthorizationGap);
+        Assert.Equal(@"C:\Kok\Acik\cok-uzun-bir-belge-adi.txt", Assert.Single(root.AuthorizationScopes!));
     }
 
     [Fact]
@@ -239,6 +240,61 @@ public sealed class ChangeFeedDeliveryProjectorTests
             new ChangeFeedDeliveryProjector(Authorizer, new Measure(), 1));
     }
 
+    [Fact]
+    public void BoundaryMetadataFitsTheWireBudgetAndNeverContainsTheWithheldName()
+    {
+        var measure = new ChangeFeedWireMeasure();
+        var boundary = Root + "\\Türkçe-\"kapalı\"";
+        var projector = new ChangeFeedDeliveryProjector(
+            root => new ChangeFeedPathAuthorizer(root, path => path != boundary), measure, 4096);
+        var page = projector.Project(Subscription(), Slice(Entry(1,
+            Delivery(Created(boundary + @"\secret.txt")))));
+        var rootPage = Assert.Single(page.Roots);
+        Assert.Equal(boundary, Assert.Single(rootPage.AuthorizationScopes!));
+        var response = ChangeFeedResponse.Delivered(ChangeFeedDeliveryContract.ToWire(page, null, "receipt"));
+        Assert.True(ChangeFeedMessageChannel.MeasureResponse(response) <= 4096);
+        Assert.DoesNotContain("secret.txt", System.Text.Json.JsonSerializer.Serialize(response));
+    }
+
+    [Theory]
+    [InlineData(65536)]
+    [InlineData(1024)]
+    public void KnownBoundariesArePaginatedWithoutPromotingToTheWholeRoot(int budget)
+    {
+        var expected = Enumerable.Range(0, 73).Select(index => Root + @"\Closed" + index).ToArray();
+        var events = expected.Select(path => Created(path + @"\secret.txt")).ToArray();
+        var projector = new ChangeFeedDeliveryProjector(root =>
+            new ChangeFeedPathAuthorizer(root, path => path == root), new ChangeFeedWireMeasure(), budget);
+        var position = ChangeFeedDeliveryPosition.Start;
+        var actual = new List<string>();
+        for (var pageNumber = 0; ; pageNumber++)
+        {
+            Assert.True(pageNumber < 73);
+            var walk = projector.Walk(Subscription(), Slice(Entry(1, Delivery(events))), position);
+            var rootPage = Assert.Single(walk.Page.Roots);
+            Assert.True(rootPage.AuthorizationGap);
+            Assert.NotNull(rootPage.AuthorizationScopes);
+            Assert.InRange(rootPage.AuthorizationScopes.Count, 1, 32);
+            actual.AddRange(rootPage.AuthorizationScopes);
+            var response = ChangeFeedResponse.Delivered(ChangeFeedDeliveryContract.ToWire(walk.Page, null, "receipt"));
+            Assert.True(ChangeFeedMessageChannel.MeasureResponse(response) <= budget);
+            Assert.Empty(rootPage.Events);
+            if (walk.NextPosition is null) break;
+            Assert.NotEqual(position, walk.NextPosition);
+            position = walk.NextPosition;
+        }
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void AnUnprovableLaterEventCannotLeaveAnIncompleteBoundaryList()
+    {
+        var rootPage = Assert.Single(Project(Entry(1, Delivery(
+            Created(Closed + @"\secret.txt"), Created(@"C:\Outside\secret.txt")))).Roots);
+        Assert.True(rootPage.AuthorizationGap);
+        Assert.Null(rootPage.AuthorizationScopes);
+    }
+
     private static string Render(ChangeFeedDeliveryPage page) =>
         string.Join(
             ";",
@@ -277,6 +333,8 @@ public sealed class ChangeFeedDeliveryProjectorTests
         public long Envelope => 2;
 
         public long Root(string rootPath) => rootPath.Length;
+
+        public long AuthorizationScopes(IReadOnlyList<string> scopes) => scopes.Count;
 
         public long Event(ChangeFeedEvent change) =>
             change.FullPath.Length + (change.OldPath?.Length ?? 0);

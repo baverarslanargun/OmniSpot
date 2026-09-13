@@ -43,18 +43,19 @@ public sealed class ChangeFeedQueueEpochTests
     }
 
     [Fact]
-    public void AnOverflow_ChangesTheEpoch()
+    public void CrossingTheFormerPacketLimitPreservesTheEpoch()
     {
         using var directory = new TemporaryDirectory();
-        var store = CreateStore(directory, maximumEntryCount: 1);
+        var store = CreateStore(directory);
         store.WriteSubscription(Subscription());
 
-        store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot));
+        for (var index = 0; index < 512; index++)
+            store.Enqueue(VolumeId, JournalId, index, index + 1, Deliveries(FirstRoot));
         var before = store.ReadEpoch();
 
         store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot));
 
-        Assert.False(before.Matches(store.ReadEpoch()));
+        Assert.True(before.Matches(store.ReadEpoch()));
     }
 
     [Fact]
@@ -144,21 +145,20 @@ public sealed class ChangeFeedQueueEpochTests
     }
 
     [Fact]
-    public void AFailedEpochWrite_StopsAnOverflowBeforeItReplacesTheQueue()
+    public void AppendingDoesNotNeedToReplaceTheEpochOrOldPackets()
     {
         using var directory = new TemporaryDirectory();
         var layout = ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid);
-        var store = new FileSystemChangeFeedStore(layout, maximumEntryCount: 1);
+        var store = new FileSystemChangeFeedStore(layout);
         store.WriteSubscription(Subscription());
         var kept = Assert.Single(store.Enqueue(VolumeId, JournalId, 100, 200, Deliveries(FirstRoot)));
 
         var before = store.ReadEpoch();
         BlockEpochWrites(layout);
 
-        Assert.NotNull(Record.Exception(
-            () => store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot))));
+        var added = Assert.Single(store.Enqueue(VolumeId, JournalId, 200, 300, Deliveries(SecondRoot)));
         Assert.True(before.Matches(store.ReadEpoch()));
-        Assert.Equal(kept.Sequence, Assert.Single(store.ReadPending().Entries).Sequence);
+        Assert.Equal(new[] { kept.Sequence, added.Sequence }, store.ReadPending().Entries.Select(entry => entry.Sequence));
     }
 
     private static void BlockEpochWrites(ChangeFeedStoreLayout layout) =>
@@ -166,11 +166,8 @@ public sealed class ChangeFeedQueueEpochTests
             layout.EpochPath + "." + Environment.ProcessId.ToString() + ".tmp");
 
     private static FileSystemChangeFeedStore CreateStore(
-        TemporaryDirectory directory,
-        int maximumEntryCount = FileSystemChangeFeedStore.DefaultMaximumEntryCount) =>
-        new(
-            ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid),
-            maximumEntryCount: maximumEntryCount);
+        TemporaryDirectory directory) =>
+        new(ChangeFeedStoreLayout.ForOwner(directory.Path, OwnerSid));
 
     private static ChangeFeedSubscription Subscription() =>
         new(

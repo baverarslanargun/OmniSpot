@@ -43,6 +43,7 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
     public UsnFileReference RootReference { get; }
 
     public int Count => _entries.Count;
+    internal long Version { get; private set; }
 
     public IReadOnlyCollection<UsnDirectoryEntry> Entries => _entries.Values;
 
@@ -60,10 +61,12 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
             return;
         }
 
-        _entries[reference] = new UsnDirectoryEntry(reference, name, parentReference);
+        var next = new UsnDirectoryEntry(reference, name, parentReference);
+        if (_entries.TryGetValue(reference, out var previous) && previous == next) return;
+        _entries[reference] = next; Version++;
     }
 
-    public bool Remove(UsnFileReference reference) => _entries.Remove(reference);
+    public bool Remove(UsnFileReference reference) { if (!_entries.Remove(reference)) return false; Version++; return true; }
 
     public int RemoveSubtrees(IReadOnlyCollection<UsnFileReference> references)
     {
@@ -98,6 +101,7 @@ public sealed class UsnDirectoryMap : IUsnDirectoryLookup
 
             if (_entries.Remove(current))
             {
+                Version++;
                 removed++;
             }
 

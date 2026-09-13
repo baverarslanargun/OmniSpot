@@ -6,6 +6,8 @@ public sealed class UsnRootProjection
     private readonly IUsnSubtreeReader _subtreeReader;
     private readonly UsnDirectoryMap _directories;
     private UsnProjectionScope? _pendingScope;
+    private UsnChangeFeedState _snapshot;
+    private long _snapshotVersion;
 
     public UsnRootProjection(
         UsnChangeFeedState state,
@@ -26,6 +28,7 @@ public sealed class UsnRootProjection
         {
             _directories.Set(entry.Reference, entry.Name, entry.ParentReference);
         }
+        _snapshot = state; _snapshotVersion = _directories.Version;
     }
 
     public string RootPath { get; }
@@ -100,12 +103,19 @@ public sealed class UsnRootProjection
         _pendingScope = null;
     }
 
-    public UsnChangeFeedState CaptureState(ulong journalId, long nextUsn) =>
-        new(
+    internal bool MatchesState(UsnChangeFeedState state) => state.RootPath == _snapshot.RootPath && state.RootIdentity == _snapshot.RootIdentity &&
+        state.SynchronizedFromUsn == _snapshot.SynchronizedFromUsn && ReferenceEquals(state.Directories, _snapshot.Directories);
+
+    public UsnChangeFeedState CaptureState(ulong journalId, long nextUsn)
+    {
+        if (_snapshotVersion == _directories.Version) return _snapshot.WithPosition(journalId, nextUsn);
+        _snapshot = new(
             RootPath,
             new UsnNodeIdentity(VolumeSerialNumber, _directories.RootReference),
             journalId,
             nextUsn,
             _directories.Entries.ToArray(),
             SynchronizedFromUsn);
+        _snapshotVersion = _directories.Version; return _snapshot;
+    }
 }

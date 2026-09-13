@@ -29,7 +29,7 @@ public sealed class ChangeFeedWireMeasure : IChangeFeedPageMeasure
                     Array.Empty<ChangeFeedRootPageDto>(),
                     true,
                     TokenPlaceholder,
-                    TokenPlaceholder)));
+                    TokenPlaceholder, new string('0', 64), long.MaxValue)));
     }
 
     public long Envelope { get; }
@@ -54,5 +54,16 @@ public sealed class ChangeFeedWireMeasure : IChangeFeedPageMeasure
 
         return ChangeFeedMessageChannel.MeasureResponse(
             ChangeFeedDeliveryContract.ToWire(change)) + SeparatorBytes;
+    }
+
+    public long AuthorizationScopes(IReadOnlyList<string> scopes) => MeasureAuthorizationScopes(scopes);
+
+    internal static long MeasureAuthorizationScopes(IReadOnlyList<string> scopes)
+    {
+        var root = new ChangeFeedRootPageDto("", [], ChangeFeedGapReason.None,
+            ChangeFeedFaultReason.None, true, false);
+        return ChangeFeedMessageChannel.MeasureResponse(root with {
+            AuthorizationScopesUtf16 = scopes.Select(ChangeFeedDeliveryContract.EncodeScope).ToArray()
+        }) - ChangeFeedMessageChannel.MeasureResponse(root);
     }
 }

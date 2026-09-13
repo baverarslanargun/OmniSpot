@@ -13,7 +13,15 @@ public interface IChangeFeedRequestChannel
 
 public interface IChangeFeedIndexTarget
 {
+    Task CommitContinuousAsync(IReadOnlyList<ChangeFeedRootPageDto> roots, string deliveryId,
+        CancellationToken cancellationToken) => throw new NotSupportedException("Kalıcı teslim hedefi yok.");
     bool Apply(IReadOnlyList<FileChangeEvent> changes);
+
+    Task<IReadOnlyList<string>> ApplyOrRepairAsync(IReadOnlyList<FileChangeEvent> changes, bool withinLifecycle,
+        CancellationToken cancellationToken) => Task.FromResult<IReadOnlyList<string>>(Apply(changes) ? [] :
+            changes.SelectMany(change => change.OldPath is null ? new[] { change.FullPath } : new[] { change.FullPath, change.OldPath }).Distinct(StringComparer.OrdinalIgnoreCase).ToArray());
+
+    bool DeferRepairs(IReadOnlyList<string> scopes) => false;
 
     Task<bool> ResynchronizeAsync(
         string rootPath,
@@ -37,9 +45,11 @@ public sealed record ChangeFeedAdoptionResult(
     int EventsApplied,
     int RootsResynchronized,
     bool LeaseHeld,
-    string? Diagnostics = null);
+    string? Diagnostics = null,
+    IReadOnlyList<string>? PendingRepairScopes = null,
+    bool OnlyKnownRepairs = false);
 
-public sealed class ChangeFeedIndexBridge
+public sealed partial class ChangeFeedIndexBridge
 {
     public const int MaximumPagesPerAdoption = 512;
 
@@ -70,12 +80,14 @@ public sealed class ChangeFeedIndexBridge
     public async Task<ChangeFeedAdoptionResult> AdoptAsync(
         IReadOnlyList<string> roots,
         CancellationToken cancellationToken,
-        bool withinLifecycle = false)
+        bool withinLifecycle = false,
+        Func<CancellationToken, Task<bool>>? validateInitialInventory = null)
     {
         ArgumentNullException.ThrowIfNull(roots);
 
         var subscribed = 0;
         string? diagnostics = null;
+        IReadOnlyList<string>? subscriptions = null;
 
         foreach (var root in roots)
         {
@@ -96,6 +108,7 @@ public sealed class ChangeFeedIndexBridge
             if (response.Status == ChangeFeedResponseStatus.Ok)
             {
                 subscribed++;
+                subscriptions = response.Roots ?? subscriptions;
                 continue;
             }
 
@@ -112,6 +125,19 @@ public sealed class ChangeFeedIndexBridge
                 0,
                 false,
                 diagnostics ?? "Hiçbir kök abone edilemedi.");
+        }
+
+        if (subscribed == roots.Count && subscriptions is not null)
+        {
+            var desired = roots.Select(CanonicalRoot).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var obsolete in subscriptions.Where(root => !desired.Contains(CanonicalRoot(root))))
+            {
+                var removed = await SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version,
+                    ChangeFeedRequestKind.RemoveRoot, obsolete), cancellationToken).ConfigureAwait(false);
+                if (removed?.Status != ChangeFeedResponseStatus.Ok)
+                    return new ChangeFeedAdoptionResult(ChangeFeedAdoptionStatus.Incomplete,
+                        subscribed, 0, 0, 0, false, "Önceki indeks kapsamının aboneliği kaldırılamadı.");
+            }
         }
 
         var lease = await SendAsync(
@@ -147,7 +173,8 @@ public sealed class ChangeFeedIndexBridge
         Consumption? consumed;
         try
         {
-            consumed = await ConsumeAsync(withinLifecycle, cancellationToken).ConfigureAwait(false);
+            consumed = await ConsumeWithLeaseAsync(roots, withinLifecycle, cancellationToken,
+                validateInitialInventory).ConfigureAwait(false);
         }
         catch
         {
@@ -174,7 +201,8 @@ public sealed class ChangeFeedIndexBridge
                 false,
                 Reason(
                     "Kuyruk boşaltılamadı; kira geri verildi.",
-                    consumed.Diagnostics ?? diagnostics));
+                    consumed.Diagnostics ?? diagnostics), consumed.PendingRepairScopes,
+                !partialHandOver && consumed.OnlyKnownRepairs);
         }
 
         return new ChangeFeedAdoptionResult(
@@ -188,7 +216,8 @@ public sealed class ChangeFeedIndexBridge
             consumed.Events,
             consumed.Resynchronized,
             true,
-            diagnostics ?? consumed.Diagnostics);
+            diagnostics ?? consumed.Diagnostics, consumed.PendingRepairScopes,
+            !partialHandOver && consumed.PendingRepairScopes is { Count: > 0 });
     }
 
     public async Task<bool> RenewLeaseAsync(CancellationToken cancellationToken)
@@ -214,9 +243,53 @@ public sealed class ChangeFeedIndexBridge
         return response is not null && response.Status == ChangeFeedResponseStatus.Ok;
     }
 
+    private async Task<Consumption?> ConsumeWithLeaseAsync(IReadOnlyList<string> roots, bool withinLifecycle,
+        CancellationToken ct, Func<CancellationToken, Task<bool>>? validateInitialInventory)
+    {
+        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var renewalFailed = 0;
+        var renewal = KeepLeaseAsync();
+        Consumption? consumed = null;
+        try
+        {
+            var baseline = validateInitialInventory is not null &&
+                await validateInitialInventory(lifetime.Token).ConfigureAwait(false)
+                    ? roots.ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+            consumed = await ConsumeAsync(withinLifecycle, lifetime.Token, baseline,
+                validateInitialInventory).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && Volatile.Read(ref renewalFailed) != 0) { }
+        finally
+        {
+            lifetime.Cancel();
+            await renewal.ConfigureAwait(false);
+        }
+        return Volatile.Read(ref renewalFailed) == 0 ? consumed : Incomplete(
+            consumed?.Pages ?? 0, consumed?.Events ?? 0, consumed?.Resynchronized ?? 0,
+            "Devir sırasında takip kirası yenilenemedi; tüketim durduruldu.");
+
+        async Task KeepLeaseAsync()
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromTicks(Math.Max(1, _leaseDuration.Ticks / 3)));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(lifetime.Token).ConfigureAwait(false))
+                {
+                    if (await RenewLeaseAsync(lifetime.Token).ConfigureAwait(false)) continue;
+                    Interlocked.Exchange(ref renewalFailed, 1);
+                    lifetime.Cancel();
+                    break;
+                }
+            }
+            catch (OperationCanceledException) when (lifetime.IsCancellationRequested) { }
+        }
+    }
+
     private async Task<Consumption?> ConsumeAsync(
         bool withinLifecycle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<string>? baselineRoots = null,
+        Func<CancellationToken, Task<bool>>? validateInitialInventory = null)
     {
         var pages = 0;
         var fetches = 0;
@@ -226,6 +299,7 @@ public sealed class ChangeFeedIndexBridge
         string? blocker = null;
         string? continuation = null;
         var restarted = false;
+        var deferred = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         while (fetches < MaximumPagesPerAdoption)
         {
@@ -280,9 +354,33 @@ public sealed class ChangeFeedIndexBridge
             }
 
             var landed = true;
+            var knownDelivery = delivery.Roots.All(root => !NeedsResynchronization(root) || TryGetAuthorizationScopes(root, out _));
             foreach (var root in delivery.Roots)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+
+                if (baselineRoots?.Contains(root.RootPath) == true) continue;
+
+                if (TryGetAuthorizationScopes(root, out var scopes))
+                {
+                    var pending = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    var changes = root.Events.Select(ToFileChange).ToArray();
+                    if (changes.Length > 0)
+                        pending.UnionWith(await ApplyKnownChangesAsync(changes, withinLifecycle, cancellationToken).ConfigureAwait(false));
+                    foreach (var scope in scopes)
+                    {
+                        if (await RepairKnownScopeAsync(scope, withinLifecycle, cancellationToken).ConfigureAwait(false))
+                            resynchronized++;
+                        else pending.Add(scope);
+                    }
+                    if (pending.Count > 0 && !DeferKnownRepairs(pending.ToArray()))
+                        return Incomplete(pages, events, resynchronized,
+                            $"{root.RootPath}: yerel onarımlar kaydedilemedi; sayfa onaylanmadı.", pending.ToArray(), onlyKnownRepairs: landed && knownDelivery);
+                    deferred.UnionWith(pending);
+                    events += changes.Length;
+                    diagnostics ??= $"{root.RootPath}: {scopes.Count} alt kapsam denetlendi.";
+                    continue;
+                }
 
                 if (NeedsResynchronization(root))
                 {
@@ -309,25 +407,21 @@ public sealed class ChangeFeedIndexBridge
                     continue;
                 }
 
-                if (_target.Apply(root.Events.Select(ToFileChange).ToArray()))
+                var visibleChanges = root.Events.Select(ToFileChange).ToArray();
+                var failedScopes = await ApplyKnownChangesAsync(visibleChanges, withinLifecycle, cancellationToken).ConfigureAwait(false);
+                if (failedScopes.Count == 0)
                 {
                     events += root.Events.Count;
                 }
                 else
                 {
-                    diagnostics ??= $"{root.RootPath}: olaylar tam uygulanamadı; kök uzlaştırıldı.";
-                    if (await _target
-                            .ResynchronizeAsync(root.RootPath, withinLifecycle, cancellationToken)
-                            .ConfigureAwait(false))
-                    {
-                        resynchronized++;
-                    }
-                    else
-                    {
-                        landed = false;
-                        blocker ??= $"{root.RootPath}: olaylar uygulanamadı ve " +
-                            "uzlaştırma da başarısız oldu.";
-                    }
+                    var pending = new HashSet<string>(failedScopes, StringComparer.OrdinalIgnoreCase);
+                    if (!DeferKnownRepairs(pending.ToArray()))
+                        return Incomplete(pages, events, resynchronized,
+                            $"{root.RootPath}: yerel onarımlar kaydedilemedi; sayfa onaylanmadı.", pending.ToArray(), onlyKnownRepairs: landed && knownDelivery);
+                    deferred.UnionWith(pending);
+                    events += visibleChanges.Length;
+                    diagnostics ??= $"{root.RootPath}: yerel onarımlar kaydedildi.";
                 }
             }
 
@@ -346,6 +440,11 @@ public sealed class ChangeFeedIndexBridge
                         blocker ?? "Sayfa tam uygulanamadı; onay gönderilmedi.",
                         diagnostics));
             }
+
+            if (baselineRoots is not null &&
+                !await validateInitialInventory!(cancellationToken).ConfigureAwait(false))
+                return Incomplete(pages, events, resynchronized,
+                    "İlk envanter veya watcher yakalaması geçerliliğini kaybetti; kuyruk onaylanmadı.");
 
             if (delivery.Receipt is { } receipt)
             {
@@ -369,12 +468,20 @@ public sealed class ChangeFeedIndexBridge
                         resynchronized,
                         Reason($"Onay reddedildi: {acknowledged.Status}", diagnostics));
                 }
+                fetches = 0;
+                restarted = false;
             }
 
             continuation = delivery.Continuation;
             if (continuation is null)
             {
-                return new Consumption(pages, events, resynchronized, true, diagnostics);
+                if (delivery.HasMore)
+                {
+                    if (delivery.Receipt is null)
+                        return Incomplete(pages, events, resynchronized, "Devamı olan sayfa ne devam anahtarı ne onay makbuzu içeriyor.");
+                    continue;
+                }
+                return new Consumption(pages, events, resynchronized, true, diagnostics, deferred.ToArray());
             }
         }
 
@@ -389,8 +496,44 @@ public sealed class ChangeFeedIndexBridge
         int pages,
         int events,
         int resynchronized,
-        string diagnostics) =>
-        new(pages, events, resynchronized, false, diagnostics);
+        string diagnostics,
+        IReadOnlyList<string>? pendingRepairScopes = null, bool onlyKnownRepairs = false) =>
+        new(pages, events, resynchronized, false, diagnostics, pendingRepairScopes, onlyKnownRepairs);
+
+    private static void AddChangedPaths(IEnumerable<FileChangeEvent> changes, HashSet<string> paths)
+    {
+        foreach (var change in changes)
+        {
+            paths.Add(change.FullPath);
+            if (change.OldPath is not null) paths.Add(change.OldPath);
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> ApplyKnownChangesAsync(IReadOnlyList<FileChangeEvent> changes,
+        bool withinLifecycle, CancellationToken ct)
+    {
+        try { return await _target.ApplyOrRepairAsync(changes, withinLifecycle, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AddChangedPaths(changes, paths);
+            return paths.ToArray();
+        }
+    }
+
+    private async Task<bool> RepairKnownScopeAsync(string scope, bool withinLifecycle, CancellationToken ct)
+    {
+        try { return await _target.ResynchronizeAsync(scope, withinLifecycle, ct).ConfigureAwait(false); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception) { return false; }
+    }
+
+    private bool DeferKnownRepairs(IReadOnlyList<string> scopes)
+    {
+        try { return _target.DeferRepairs(scopes); }
+        catch (Exception) { return false; }
+    }
 
     private async Task<ChangeFeedResponse?> SendAsync(
         ChangeFeedRequest request,
@@ -412,6 +555,37 @@ public sealed class ChangeFeedIndexBridge
 
     private static string Reason(string primary, string? context) =>
         string.IsNullOrWhiteSpace(context) ? primary : $"{primary} | {context}";
+
+    private static string CanonicalRoot(string path) => Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+
+    private static bool TryGetAuthorizationScopes(ChangeFeedRootPageDto root, out IReadOnlyList<string> scopes)
+    {
+        scopes = [];
+        if ((!root.AuthorizationGap && !root.PayloadTooLarge) || root.ProducerGap != ChangeFeedGapReason.None ||
+            root.ProducerFault != ChangeFeedFaultReason.None ||
+            root.AuthorizationScopesUtf16 is not { Count: > 0 and <= 32 } encoded) return false;
+        try
+        {
+            var rootPath = CanonicalRoot(root.RootPath);
+            var prefix = Path.EndsInDirectorySeparator(rootPath) ? rootPath : rootPath + Path.DirectorySeparatorChar;
+            var decoded = new List<string>();
+            foreach (var value in encoded)
+            {
+                var path = ChangeFeedDeliveryContract.DecodeScope(value);
+                if (!Path.IsPathFullyQualified(path)) return false;
+                path = CanonicalRoot(path);
+                if (!string.Equals(path, rootPath, StringComparison.OrdinalIgnoreCase) &&
+                    !path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return false;
+                if (!decoded.Contains(path, StringComparer.OrdinalIgnoreCase)) decoded.Add(path);
+            }
+            scopes = decoded.Where(path => !decoded.Any(parent => parent.Length < path.Length &&
+                path.StartsWith(Path.EndsInDirectorySeparator(parent) ? parent : parent + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase))).ToArray();
+            return scopes.Count > 0;
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or
+            PathTooLongException or FormatException or InvalidDataException) { return false; }
+    }
 
     private static bool NeedsResynchronization(ChangeFeedRootPageDto root) =>
         root.ProducerGap != ChangeFeedGapReason.None ||
@@ -454,5 +628,7 @@ public sealed class ChangeFeedIndexBridge
         int Events,
         int Resynchronized,
         bool Complete,
-        string? Diagnostics);
+        string? Diagnostics,
+        IReadOnlyList<string>? PendingRepairScopes = null,
+        bool OnlyKnownRepairs = false);
 }

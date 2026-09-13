@@ -14,7 +14,7 @@ public sealed class ChangeFeedDeliveryContractTests
     public void TheDeliveryShape_PublishesOnlyItsAllowlistedFields()
     {
         Assert.Equal(
-            new[] { "Roots", "HasMore", "Continuation", "Receipt" },
+            new[] { "Roots", "HasMore", "Continuation", "Receipt", "StableBatchId", "CompletedThroughSequence" },
             Members(typeof(ChangeFeedDeliveryDto)));
 
         Assert.Equal(
@@ -25,13 +25,33 @@ public sealed class ChangeFeedDeliveryContractTests
                 "ProducerGap",
                 "ProducerFault",
                 "AuthorizationGap",
-                "PayloadTooLarge"
+                "PayloadTooLarge",
+                "AuthorizationScopesUtf16"
             },
             Members(typeof(ChangeFeedRootPageDto)));
 
         Assert.Equal(
             new[] { "Kind", "Path", "IsDirectory", "OldPath" },
             Members(typeof(ChangeFeedEventDto)));
+    }
+
+    [Fact]
+    public void OldPayloadsStillMeanRootRecoveryAndScopesPreserveUtf16()
+    {
+        var old = JsonSerializer.Serialize(new ChangeFeedRootPageDto(Root, [], ChangeFeedGapReason.None,
+            ChangeFeedFaultReason.None, true, false));
+        Assert.DoesNotContain("AuthorizationScopesUtf16", old);
+        Assert.Null(JsonSerializer.Deserialize<ChangeFeedRootPageDto>(old)!.AuthorizationScopesUtf16);
+        var scope = Root + "\\Türkçe-\ud800";
+        var page = new ChangeFeedRootPage(Root, [], ChangeFeedGapReason.None, ChangeFeedFaultReason.None,
+            true, false, [scope]);
+        var wire = JsonSerializer.Deserialize<ChangeFeedRootPageDto>(JsonSerializer.Serialize(ChangeFeedDeliveryContract.ToWire(page)))!;
+        Assert.Equal(scope, ChangeFeedDeliveryContract.DecodeScope(Assert.Single(wire.AuthorizationScopesUtf16!)));
+        var measure = new ChangeFeedWireMeasure();
+        var total = measure.Envelope + measure.Root(Root) + measure.AuthorizationScopes([scope]);
+        var actual = ChangeFeedMessageChannel.MeasureResponse(ChangeFeedResponse.Delivered(
+            ChangeFeedDeliveryContract.ToWire(new ChangeFeedDeliveryPage([page], 1, false), null, null)));
+        Assert.True(total >= actual);
     }
 
     [Fact]
@@ -74,16 +94,14 @@ public sealed class ChangeFeedDeliveryContractTests
                      "EventCount",
                      "FromUsn",
                      "ToUsn",
-                     "Sequence",
-                     "CompletedThrough",
                      "FullPath"
                  })
         {
             Assert.DoesNotContain(forbidden, payload, StringComparison.OrdinalIgnoreCase);
         }
 
-        Assert.Contains("41", "41");
-        Assert.DoesNotContain("41", payload, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"Sequence\":", payload, StringComparison.Ordinal);
+        Assert.Contains("\"CompletedThroughSequence\":41", payload, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -160,7 +178,7 @@ public sealed class ChangeFeedDeliveryContractTests
             "DeliveryQueueOverflow",
             Enum.GetNames<ChangeFeedGapReason>().OrderByDescending(name => name.Length).First());
         Assert.Equal(
-            "NativeProtocolRejected",
+            "JournalTemporarilyUnavailable",
             Enum.GetNames<ChangeFeedFaultReason>().OrderByDescending(name => name.Length).First());
 
         var pages = Enumerable
@@ -169,7 +187,7 @@ public sealed class ChangeFeedDeliveryContractTests
                 @"C:\Kok" + new string('k', 40) + index,
                 Array.Empty<ChangeFeedEvent>(),
                 ChangeFeedGapReason.DeliveryQueueOverflow,
-                ChangeFeedFaultReason.NativeProtocolRejected,
+                ChangeFeedFaultReason.JournalTemporarilyUnavailable,
                 false,
                 false))
             .ToArray();

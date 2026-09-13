@@ -32,6 +32,9 @@ public sealed class UsnDrainRunner
     private readonly IUsnIdentityProbe _identityProbe;
     private readonly IUsnSubtreeReader? _subtreeReader;
     private readonly Func<DateTime> _utcNow;
+    private readonly bool _cacheState;
+    private readonly Dictionary<string, UsnChangeFeedStateStore> _stateStores = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, UsnRootProjection> _projections = new(StringComparer.OrdinalIgnoreCase);
 
     public UsnDrainRunner(
         ChangeFeedStoreLayout layout,
@@ -39,7 +42,8 @@ public sealed class UsnDrainRunner
         IUsnJournalReaderFactory readerFactory,
         IUsnIdentityProbe identityProbe,
         IUsnSubtreeReader? subtreeReader = null,
-        Func<DateTime>? utcNow = null)
+        Func<DateTime>? utcNow = null,
+        bool cacheState = false)
     {
         _layout = layout ?? throw new ArgumentNullException(nameof(layout));
         _store = store ?? throw new ArgumentNullException(nameof(store));
@@ -47,15 +51,18 @@ public sealed class UsnDrainRunner
         _identityProbe = identityProbe ?? throw new ArgumentNullException(nameof(identityProbe));
         _subtreeReader = subtreeReader;
         _utcNow = utcNow ?? (() => DateTime.UtcNow);
+        _cacheState = cacheState;
     }
 
     public UsnDrainResult Run(CancellationToken cancellationToken = default)
     {
+        using var ownerScope = _cacheState ? _store.EnterOwnerScope(cancellationToken) : null;
         var following = _store.ReadLease().IsHeld(_utcNow());
 
         var subscription = _store.ReadSubscription();
         if (subscription is null)
         {
+            _stateStores.Clear(); _projections.Clear();
             return new UsnDrainResult(UsnDrainOutcome.NoSubscription, 0, 0, 0, 0, 0);
         }
 
@@ -75,6 +82,8 @@ public sealed class UsnDrainRunner
         }
 
         var partition = PartitionByVolume(subscription.Roots);
+        foreach (var path in _projections.Keys.Where(path => !subscription.Roots.Any(root => root.RootPath.Equals(path, StringComparison.OrdinalIgnoreCase))).ToArray()) _projections.Remove(path);
+        foreach (var volume in _stateStores.Keys.Where(volume => !partition.Groups.Any(group => group.VolumeRoot.Equals(volume, StringComparison.OrdinalIgnoreCase))).ToArray()) _stateStores.Remove(volume);
 
         var drained = 0;
         var faulted = 0;
@@ -117,7 +126,6 @@ public sealed class UsnDrainRunner
             catch (Exception failure) when (IsVolumeFailure(failure))
             {
                 faulted++;
-                gapped += group.Roots.Count;
                 diagnostics ??= $"{group.VolumeRoot}: {failure.Message}";
 
                 if (following)
@@ -125,9 +133,9 @@ public sealed class UsnDrainRunner
                     continue;
                 }
 
-                var announced = AnnounceGap(
+                var announced = AnnounceBatch(
                     group.Roots,
-                    ChangeFeedGapReason.JournalUnavailable,
+                    ChangeFeedBatch.Faulted(ChangeFeedFaultReason.JournalTemporarilyUnavailable, failure.Message),
                     cancellationToken);
 
                 if (announced is null)
@@ -175,7 +183,8 @@ public sealed class UsnDrainRunner
         bool following,
         CancellationToken cancellationToken)
     {
-        var stateStore = new UsnChangeFeedStateStore(StatePath(volumeRoot));
+        if (!_stateStores.TryGetValue(volumeRoot, out var stateStore))
+            _stateStores[volumeRoot] = stateStore = new UsnChangeFeedStateStore(StatePath(volumeRoot), _cacheState);
 
         UsnVolumeFeedState? state;
         try
@@ -207,7 +216,7 @@ public sealed class UsnDrainRunner
         var cursor = admission.States.Min(item => item.NextUsn);
 
         var projections = admission.States
-            .Select(item => new UsnRootProjection(item, _identityProbe, _subtreeReader))
+            .Select(item => ProjectionFor(item))
             .ToArray();
 
         using var feed = new UsnVolumeChangeFeed(reader, journalId, cursor, projections);
@@ -479,10 +488,21 @@ public sealed class UsnDrainRunner
             DescribeGaps(admission.Deliveries));
     }
 
+    private UsnRootProjection ProjectionFor(UsnChangeFeedState state)
+    {
+        if (_cacheState && _projections.TryGetValue(state.RootPath, out var previous) && previous.MatchesState(state)) return previous;
+        var projection = new UsnRootProjection(state, _identityProbe, _subtreeReader);
+        if (_cacheState) _projections[state.RootPath] = projection;
+        return projection;
+    }
+
     private int? AnnounceGap(
         IReadOnlyList<ChangeFeedSubscribedRoot> roots,
         ChangeFeedGapReason reason,
         CancellationToken cancellationToken)
+        => AnnounceBatch(roots, ChangeFeedBatch.Gap(reason), cancellationToken);
+
+    private int? AnnounceBatch(IReadOnlyList<ChangeFeedSubscribedRoot> roots, ChangeFeedBatch batch, CancellationToken cancellationToken)
     {
         using var commitScope = _store.EnterOwnerScope(cancellationToken);
 
@@ -499,7 +519,7 @@ public sealed class UsnDrainRunner
             roots
                 .Select(root => new ChangeFeedRootDelivery(
                     root.RootPath,
-                    ChangeFeedBatch.Gap(reason),
+                    batch,
                     root.Generation))
                 .ToArray()).Count;
     }

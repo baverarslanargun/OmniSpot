@@ -5,11 +5,11 @@ using System.Security.Cryptography;
 
 namespace SmartFileLauncher.Core.Search;
 
-internal sealed class CompactCatalog
+internal sealed class CompactCatalog : CatalogReader
 {
     private const int Magic = 0x4F534349;
     private const int HeaderSize = 56;
-    private const int RowSize = 80;
+    private const int RowSize = 64;
     private readonly CatalogBuffer _buffer;
     private readonly Dictionary<string, int> _terms = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<int>> _orphanChildren = new(StringComparer.OrdinalIgnoreCase);
@@ -19,21 +19,28 @@ internal sealed class CompactCatalog
     private readonly int _termRows;
     private readonly int _children;
     private readonly int _itemTokens;
+    private readonly int _rowSize;
+    private readonly int _flagsOffset;
+    private readonly int _parentGroupCount;
     private readonly bool _varint;
 
-    internal int ItemCount { get; }
-    internal int TokenCount => _terms.Count;
-    internal int MissingParentCount { get; }
-    internal int PayloadBytes { get; }
-    internal bool UsesVarint => _varint;
-    internal long Generation { get; }
-    internal IEnumerable<string> Tokens => _terms.Keys;
+    internal override int ItemCount { get; }
+    internal override int TokenCount => _terms.Count;
+    internal override int MissingParentCount { get; }
+    internal override int PayloadBytes { get; }
+    internal override bool UsesVarint => _varint;
+    internal override long Generation { get; }
+    internal override IEnumerable<string> Tokens => _terms.Keys;
+    internal override bool ContainsToken(string token) => _terms.ContainsKey(token);
 
-    private CompactCatalog(CatalogBuffer buffer)
+    private CompactCatalog(CatalogBuffer buffer, IReadOnlyList<SearchItem>? sourceItems = null)
     {
         _buffer = buffer;
-        if (buffer.ReadInt32(0) != Magic || buffer.ReadInt32(4) != 2)
+        var version = buffer.ReadInt32(4);
+        if (buffer.ReadInt32(0) != Magic || version is not (2 or 3))
             throw new InvalidDataException("Kompakt katalog sürümü geçersiz.");
+        _rowSize = version == 2 ? 80 : RowSize;
+        _flagsOffset = version == 2 ? 60 : 28;
         ItemCount = buffer.ReadInt32(8);
         var tokenCount = buffer.ReadInt32(12);
         _rows = buffer.ReadInt32(16);
@@ -44,21 +51,31 @@ internal sealed class CompactCatalog
         _varint = buffer.ReadInt32(44) == 1;
         Generation = buffer.ReadInt64(48);
         if (ItemCount < 0 || tokenCount < 0 || PayloadBytes != buffer.Length || _rows != HeaderSize ||
-            (long)_rows + (long)ItemCount * RowSize != _termRows ||
+            (long)_rows + (long)ItemCount * _rowSize != _termRows ||
             (long)_termRows + (long)tokenCount * 16 != _children ||
             _children > _itemTokens || _itemTokens > buffer.ReadInt32(32) ||
             buffer.ReadInt32(32) > buffer.ReadInt32(36) || buffer.ReadInt32(36) > PayloadBytes ||
             buffer.ReadInt32(44) is < 0 or > 1)
             throw new InvalidDataException("Kompakt katalog bölüm sınırları geçersiz.");
+        if (version == 3)
+        {
+            if ((long)_children + 4 > _itemTokens)
+                throw new InvalidDataException("Kompakt alt öğe tablosu geçersiz.");
+            _parentGroupCount = buffer.ReadInt32(_children);
+            if (_parentGroupCount < 0 || _parentGroupCount > ItemCount ||
+                (long)_children + 4 + (long)_parentGroupCount * 12 > _itemTokens)
+                throw new InvalidDataException("Kompakt alt öğe tablosu geçersiz.");
+        }
         _pathKeys = new long[ItemCount];
         var roots = new List<int>();
+        var pathBuffer = sourceItems is null ? new char[256] : Array.Empty<char>();
         for (var id = 0; id < ItemCount; id++)
         {
-            _pathKeys[id] = PathKey(GetPath(id), id);
+            _pathKeys[id] = sourceItems is null ? ReadPathKey(id, ref pathBuffer) : PathKey(sourceItems[id].FullPath, id);
             var row = Row(id);
             if (buffer.ReadInt32(row + 20) < 0 && buffer.ReadInt32(row + 24) >= 0)
             {
-                var parent = buffer.ReadString(buffer.ReadInt32(row + 24), buffer.ReadInt32(row + 28));
+                var parent = ReadExternalParent(row);
                 if (parent.Length == 0) roots.Add(id);
                 else MissingParentCount++;
                 if (!_orphanChildren.TryGetValue(parent, out var children))
@@ -84,7 +101,7 @@ internal sealed class CompactCatalog
     {
         using var payload = new MemoryStream();
         Serialize(payload, items, tokenize, varint, generation);
-        return new CompactCatalog(new ArrayBuffer(payload.ToArray()));
+        return new CompactCatalog(new ArrayBuffer(payload.ToArray()), items);
     }
 
     internal static CompactCatalog CreateMapped(string path, IReadOnlyList<SearchItem> items,
@@ -111,7 +128,7 @@ internal sealed class CompactCatalog
     private static void Serialize(Stream stream, IReadOnlyList<SearchItem> items,
         Func<SearchItem, IEnumerable<string>> tokenize, bool varint, long generation)
     {
-        var paths = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        var paths = new Dictionary<string, int>(items.Count, StringComparer.OrdinalIgnoreCase);
         for (var id = 0; id < items.Count; id++) paths.Add(items[id].FullPath, id);
         var tokens = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         var tokenNames = new List<string>();
@@ -119,6 +136,7 @@ internal sealed class CompactCatalog
         var itemTokens = new List<int>[items.Count];
         var children = new List<int>[items.Count];
         var parents = new int[items.Count];
+        long textBytes = 0, postingBytes = 0, tokenLinks = 0, childLinks = 0;
         Array.Fill(parents, -1);
         for (var id = 0; id < items.Count; id++) children[id] = [];
         for (var id = 0; id < items.Count; id++)
@@ -131,22 +149,42 @@ internal sealed class CompactCatalog
                     term = tokens.Count;
                     tokens.Add(token, term);
                     tokenNames.Add(token);
+                    textBytes += (long)token.Length * 2;
                     postings.Add([]);
                 }
                 itemTokens[id].Add(term);
+                var previous = postings[term].Count == 0 ? 0 : postings[term][^1];
+                postingBytes += varint
+                    ? System.Numerics.BitOperations.Log2((uint)(id - previous)) / 7 + 1
+                    : 4;
+                tokenLinks++;
                 postings[term].Add(id);
             }
             if (items[id].ParentPath is { } parent && paths.TryGetValue(parent, out var parentId))
             {
                 parents[id] = parentId;
                 children[parentId].Add(id);
+                childLinks++;
             }
+            var item = items[id];
+            var prefixId = FindPrefix(item.FullPath, parents[id]);
+            var fragment = item.FullPath.AsSpan(prefixId < 0 ? 0 : items[prefixId].FullPath.Length);
+            textBytes += (long)fragment.Length * 2;
+            if (!fragment.EndsWith(item.Name.AsSpan(), StringComparison.Ordinal))
+                textBytes += (long)item.Name.Length * 2;
+            if ((parents[id] < 0 || !string.Equals(item.ParentPath, items[parents[id]].FullPath, StringComparison.Ordinal)) &&
+                item.ParentPath is { } externalParent)
+                textBytes += 4 + (long)externalParent.Length * 2;
         }
         using var writer = new BinaryWriter(stream, System.Text.Encoding.Unicode, leaveOpen: true);
         var termOffset = checked(HeaderSize + items.Count * RowSize);
         var childOffset = checked(termOffset + tokens.Count * 16);
-        stream.SetLength(childOffset);
-        stream.Position = childOffset;
+        var parentGroups = Enumerable.Range(0, items.Count).Where(id => children[id].Count != 0).ToArray();
+        var childDataOffset = checked(childOffset + 4 + parentGroups.Length * 12);
+        if (stream is MemoryStream memory)
+            memory.Capacity = checked((int)(childDataOffset + childLinks * 4 + tokenLinks * 4 + postingBytes + textBytes));
+        stream.SetLength(childDataOffset);
+        stream.Position = childDataOffset;
         var childStarts = new int[items.Count];
         var tokenStarts = new int[items.Count];
         for (var id = 0; id < items.Count; id++)
@@ -186,32 +224,35 @@ internal sealed class CompactCatalog
         for (var id = 0; id < items.Count; id++)
         {
             var item = items[id];
-            var prefixId = parents[id];
-            if (prefixId < 0 || !item.FullPath.StartsWith(items[prefixId].FullPath + "\\", StringComparison.Ordinal))
-                prefixId = -1;
-            var fragment = prefixId < 0 ? item.FullPath : item.FullPath[items[prefixId].FullPath.Length..];
+            var prefixId = FindPrefix(item.FullPath, parents[id]);
+            var fragment = item.FullPath.AsSpan(prefixId < 0 ? 0 : items[prefixId].FullPath.Length);
             var fragmentOffset = AppendString(fragment);
-            var nameOffset = fragment.EndsWith(item.Name, StringComparison.Ordinal)
+            var nameOffset = fragment.EndsWith(item.Name.AsSpan(), StringComparison.Ordinal)
                 ? fragmentOffset + (fragment.Length - item.Name.Length) * 2 : AppendString(item.Name);
             var externalParent = parents[id] < 0 || !string.Equals(item.ParentPath, items[parents[id]].FullPath, StringComparison.Ordinal)
                 ? item.ParentPath : null;
-            var parentOffset = externalParent == null ? -1 : AppendString(externalParent);
+            var parentOffset = -1;
+            if (externalParent is not null)
+            {
+                parentOffset = checked((int)stream.Position);
+                writer.Write(externalParent.Length);
+                AppendString(externalParent);
+            }
             var end = stream.Position;
             stream.Position = HeaderSize + id * RowSize;
             writer.Write(nameOffset); writer.Write(item.Name.Length);
             writer.Write(fragmentOffset); writer.Write(fragment.Length);
             writer.Write(prefixId); writer.Write(parents[id]);
-            writer.Write(parentOffset); writer.Write(externalParent?.Length ?? 0);
-            writer.Write(item.SizeBytes ?? 0);
-            writer.Write(item.CreatedTime?.Ticks ?? 0);
-            writer.Write(item.LastWriteTime?.Ticks ?? 0);
-            writer.Write(item.OpenCount);
+            writer.Write(parentOffset);
             var flags = (item.IsDirectory ? 1 : 0) | (item.SizeBytes.HasValue ? 2 : 0) |
                 (item.CreatedTime.HasValue ? 4 | ((int)item.CreatedTime.Value.Kind << 4) : 0) |
                 (item.LastWriteTime.HasValue ? 8 | ((int)item.LastWriteTime.Value.Kind << 6) : 0);
             writer.Write(flags);
-            writer.Write(childStarts[id]); writer.Write(children[id].Count);
-            writer.Write(tokenStarts[id]); writer.Write(itemTokens[id].Count);
+            writer.Write(item.SizeBytes ?? 0);
+            writer.Write(item.CreatedTime?.Ticks ?? 0);
+            writer.Write(item.LastWriteTime?.Ticks ?? 0);
+            writer.Write(item.OpenCount);
+            writer.Write(tokenStarts[id]);
             stream.Position = end;
         }
         for (var term = 0; term < tokens.Count; term++)
@@ -224,14 +265,30 @@ internal sealed class CompactCatalog
             stream.Position = end;
         }
         var length = checked((int)stream.Length);
+        stream.Position = childOffset;
+        writer.Write(parentGroups.Length);
+        foreach (var id in parentGroups)
+        {
+            writer.Write(id);
+            writer.Write(childStarts[id]);
+            writer.Write(children[id].Count);
+        }
         stream.Position = 0;
-        foreach (var value in new[] { Magic, 2, items.Count, tokens.Count, HeaderSize, termOffset,
+        foreach (var value in new[] { Magic, 3, items.Count, tokens.Count, HeaderSize, termOffset,
                      childOffset, itemTokenOffset, postingOffset, arenaOffset, length, varint ? 1 : 0 })
             writer.Write(value);
         writer.Write(generation);
         writer.Flush();
 
-        int AppendString(string value)
+        int FindPrefix(string path, int parentId)
+        {
+            if (parentId < 0) return -1;
+            var prefix = items[parentId].FullPath;
+            return path.Length > prefix.Length && path[prefix.Length] == '\\' &&
+                path.AsSpan().StartsWith(prefix.AsSpan(), StringComparison.Ordinal) ? parentId : -1;
+        }
+
+        int AppendString(ReadOnlySpan<char> value)
         {
             var offset = checked((int)stream.Position);
             foreach (var character in value) writer.Write((ushort)character);
@@ -239,10 +296,10 @@ internal sealed class CompactCatalog
         }
     }
 
-    internal SearchItem GetItem(int id, Dictionary<int, string>? pathCache = null)
+    internal override SearchItem GetItem(int id, Dictionary<int, string>? pathCache = null)
     {
         var row = Row(id);
-        var flags = _buffer.ReadInt32(row + 60);
+        var flags = _buffer.ReadInt32(row + _flagsOffset);
         var parentId = _buffer.ReadInt32(row + 20);
         var externalParent = _buffer.ReadInt32(row + 24);
         return new(_buffer.ReadString(_buffer.ReadInt32(row), _buffer.ReadInt32(row + 4)), GetPath(id, pathCache),
@@ -250,13 +307,13 @@ internal sealed class CompactCatalog
             (flags & 4) != 0 ? new DateTime(_buffer.ReadInt64(row + 40), (DateTimeKind)((flags >> 4) & 3)) : null,
             (flags & 8) != 0 ? new DateTime(_buffer.ReadInt64(row + 48), (DateTimeKind)((flags >> 6) & 3)) : null,
             _buffer.ReadInt32(row + 56), externalParent >= 0 ?
-                _buffer.ReadString(externalParent, _buffer.ReadInt32(row + 28)) : parentId >= 0 ? GetPath(parentId, pathCache) : null);
+                ReadExternalParent(row) : parentId >= 0 ? GetPath(parentId, pathCache) : null);
     }
 
-    internal SearchItem GetTransientItem(int id, Dictionary<int, string> sharedPrefixPaths)
+    internal override SearchItem GetTransientItem(int id, Dictionary<int, string> sharedPrefixPaths)
     {
         var row = Row(id);
-        var flags = _buffer.ReadInt32(row + 60);
+        var flags = _buffer.ReadInt32(row + _flagsOffset);
         var prefixId = _buffer.ReadInt32(row + 16);
         var parentId = _buffer.ReadInt32(row + 20);
         var externalParent = _buffer.ReadInt32(row + 24);
@@ -275,14 +332,14 @@ internal sealed class CompactCatalog
                 : null,
             _buffer.ReadInt32(row + 56),
             externalParent >= 0
-                ? _buffer.ReadString(externalParent, _buffer.ReadInt32(row + 28))
+                ? ReadExternalParent(row)
                 : parentId >= 0 ? GetPath(parentId, sharedPrefixPaths) : null);
     }
 
-    internal bool Matches(int id, QueryCatalogFilter filter)
+    internal override bool Matches(int id, QueryCatalogFilter filter)
     {
         var row = Row(id);
-        var flags = _buffer.ReadInt32(row + 60);
+        var flags = _buffer.ReadInt32(row + _flagsOffset);
         return filter.Matches(
             isDirectory: (flags & 1) != 0,
             sizeBytes: (flags & 2) != 0 ? _buffer.ReadInt64(row + 32) : null,
@@ -294,7 +351,7 @@ internal sealed class CompactCatalog
                 : null);
     }
 
-    internal int Find(string path, Dictionary<int, string>? pathCache = null)
+    internal override int Find(string path, Dictionary<int, string>? pathCache = null)
     {
         var key = PathKey(path, 0);
         var low = 0;
@@ -313,9 +370,9 @@ internal sealed class CompactCatalog
         return -1;
     }
 
-    internal IEnumerable<int> Roots() => _roots;
+    internal override IEnumerable<int> Roots() => _roots;
 
-    internal IEnumerable<int> Posting(string token)
+    internal override IEnumerable<int> Posting(string token)
     {
         if (!_terms.TryGetValue(token, out var term)) yield break;
         var position = _buffer.ReadInt32(_termRows + term * 16 + 8);
@@ -347,7 +404,7 @@ internal sealed class CompactCatalog
         }
     }
 
-    internal IEnumerable<int> Children(string path, Dictionary<int, string>? pathCache = null)
+    internal override IEnumerable<int> Children(string path, Dictionary<int, string>? pathCache = null)
     {
         var id = Find(path, pathCache);
         if (id < 0)
@@ -356,17 +413,40 @@ internal sealed class CompactCatalog
                 foreach (var child in children) yield return child;
             yield break;
         }
-        var row = Row(id);
-        var start = _buffer.ReadInt32(row + 64);
-        var count = _buffer.ReadInt32(row + 68);
+        int start, count;
+        if (_rowSize == 80)
+        {
+            var row = Row(id);
+            start = _buffer.ReadInt32(row + 64);
+            count = _buffer.ReadInt32(row + 68);
+        }
+        else
+        {
+            var low = 0;
+            var high = _parentGroupCount;
+            while (low < high)
+            {
+                var middle = low + (high - low) / 2;
+                if (_buffer.ReadInt32(_children + 4 + middle * 12) < id) low = middle + 1;
+                else high = middle;
+            }
+            if (low == _parentGroupCount) yield break;
+            var group = _children + 4 + low * 12;
+            if (_buffer.ReadInt32(group) != id) yield break;
+            start = _buffer.ReadInt32(group + 4);
+            count = _buffer.ReadInt32(group + 8);
+        }
         for (var index = 0; index < count; index++) yield return _buffer.ReadInt32(start + index * 4);
     }
 
-    internal string[] ItemTokens(int id)
+    internal override string[] ItemTokens(int id)
     {
         var row = Row(id);
-        var start = _buffer.ReadInt32(row + 72);
-        var result = new string[_buffer.ReadInt32(row + 76)];
+        var start = _buffer.ReadInt32(row + (_rowSize == 80 ? 72 : 60));
+        var count = _rowSize == 80
+            ? _buffer.ReadInt32(row + 76)
+            : ((id + 1 < ItemCount ? _buffer.ReadInt32(Row(id + 1) + 60) : _buffer.ReadInt32(32)) - start) / 4;
+        var result = new string[count];
         for (var index = 0; index < result.Length; index++) result[index] = ReadTerm(_buffer.ReadInt32(start + index * 4));
         return result;
     }
@@ -380,7 +460,15 @@ internal sealed class CompactCatalog
     private int Row(int id)
     {
         if ((uint)id >= (uint)ItemCount) throw new InvalidDataException("Kompakt öğe kimliği geçersiz.");
-        return checked(_rows + id * RowSize);
+        return checked(_rows + id * _rowSize);
+    }
+
+    private string ReadExternalParent(int row)
+    {
+        var offset = _buffer.ReadInt32(row + 24);
+        return _rowSize == 80
+            ? _buffer.ReadString(offset, _buffer.ReadInt32(row + 28))
+            : _buffer.ReadString(checked(offset + 4), _buffer.ReadInt32(offset));
     }
 
     private string GetPath(int id, Dictionary<int, string>? cache = null)
@@ -420,7 +508,30 @@ internal sealed class CompactCatalog
     private static long PathKey(string path, int id) =>
         ((long)StringComparer.OrdinalIgnoreCase.GetHashCode(path) << 32) | (uint)id;
 
-    internal void WriteNew(string path)
+    private long ReadPathKey(int id, ref char[] buffer)
+    {
+        var length = 0;
+        var links = 0;
+        for (var prefix = id; prefix >= 0; prefix = _buffer.ReadInt32(Row(prefix) + 16))
+        {
+            if (++links > ItemCount) throw new InvalidDataException("Kompakt yol döngüsü.");
+            var fragmentLength = _buffer.ReadInt32(Row(prefix) + 12);
+            if (fragmentLength < 0) throw new InvalidDataException("Kompakt yol uzunluğu geçersiz.");
+            length = checked(length + fragmentLength);
+        }
+        if (length > buffer.Length) buffer = new char[length];
+        var offset = length;
+        for (var prefix = id; prefix >= 0; prefix = _buffer.ReadInt32(Row(prefix) + 16))
+        {
+            var row = Row(prefix);
+            var count = _buffer.ReadInt32(row + 12);
+            offset -= count;
+            _buffer.CopyChars(_buffer.ReadInt32(row + 8), buffer, offset, count);
+        }
+        return ((long)string.GetHashCode(buffer.AsSpan(0, length), StringComparison.OrdinalIgnoreCase) << 32) | (uint)id;
+    }
+
+    internal override void WriteNew(string path)
     {
         using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
@@ -490,6 +601,7 @@ internal sealed class CompactCatalog
         internal abstract long ReadInt64(int offset);
         internal abstract byte ReadByte(int offset);
         internal abstract string ReadString(int offset, int length);
+        internal abstract void CopyChars(int offset, char[] target, int targetOffset, int count);
         internal abstract void CopyTo(int offset, byte[] target, int count);
     }
 
@@ -501,6 +613,8 @@ internal sealed class CompactCatalog
         internal override byte ReadByte(int offset) => data[offset];
         internal override string ReadString(int offset, int length) =>
             new(MemoryMarshal.Cast<byte, char>(data.AsSpan(offset, checked(length * 2))));
+        internal override void CopyChars(int offset, char[] target, int targetOffset, int count) =>
+            MemoryMarshal.Cast<byte, char>(data.AsSpan(offset, checked(count * 2))).CopyTo(target.AsSpan(targetOffset, count));
         internal override void CopyTo(int offset, byte[] target, int count) => data.AsSpan(offset, count).CopyTo(target);
     }
 
@@ -510,6 +624,12 @@ internal sealed class CompactCatalog
         internal override int ReadInt32(int offset) => view.ReadInt32(offset);
         internal override long ReadInt64(int offset) => view.ReadInt64(offset);
         internal override byte ReadByte(int offset) => view.ReadByte(offset);
+        internal override void CopyChars(int offset, char[] target, int targetOffset, int count)
+        {
+            if (offset < 0 || count < 0 || (long)offset + (long)count * 2 > length)
+                throw new InvalidDataException("Kompakt metin sınırı geçersiz.");
+            view.ReadArray(offset, target, targetOffset, count);
+        }
         internal override string ReadString(int offset, int count)
         {
             if (offset < 0 || count < 0 || (long)offset + (long)count * 2 > length)

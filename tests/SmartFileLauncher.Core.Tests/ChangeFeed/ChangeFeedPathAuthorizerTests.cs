@@ -233,6 +233,45 @@ public sealed class ChangeFeedPathAuthorizerTests
         Assert.False(projection.Withheld);
     }
 
+    [Fact]
+    public void AWithheldDeepNameOnlyRevealsItsAlreadyPublishableBoundary()
+    {
+        var authorizer = new ChangeFeedPathAuthorizer(Root, CanList);
+        var projection = authorizer.Project(Created(Closed + @"\Secret\child.txt"));
+        Assert.True(projection.Withheld);
+        Assert.Null(projection.Published);
+        Assert.Equal(Closed, Assert.Single(projection.AuthorizationScopes!));
+    }
+
+    [Fact]
+    public void AHiddenToHiddenRenameCoversBothBoundaries()
+    {
+        var second = Root + @"\SecondClosed";
+        var authorizer = new ChangeFeedPathAuthorizer(Root, path => path != Closed && path != second);
+        var projection = authorizer.Project(Renamed(Closed + @"\new.txt", second + @"\old.txt"));
+        Assert.Equal(new[] { Closed, second }, projection.AuthorizationScopes);
+        Assert.Null(projection.Published);
+    }
+
+    [Fact]
+    public void OneUnprovableRenameSideForcesRootRecovery()
+    {
+        var projection = new ChangeFeedPathAuthorizer(Root, CanList)
+            .Project(Renamed(Closed + @"\new.txt", @"C:\Outside\old.txt"));
+        Assert.True(projection.Withheld);
+        Assert.Null(projection.AuthorizationScopes);
+    }
+
+    [Fact]
+    public void AnUnlistableRootNeverRevealsABoundaryName()
+    {
+        var projection = new ChangeFeedPathAuthorizer(Root, _ => false)
+            .Project(Created(Closed + @"\secret.txt"));
+        Assert.Null(projection.AuthorizationScopes);
+        Assert.Null(projection.Published);
+        Assert.True(projection.Withheld);
+    }
+
     private static ChangeFeedRootProjection Project(params ChangeFeedEvent[] events) =>
         new ChangeFeedPathAuthorizer(Root, CanList).Project(events);
 

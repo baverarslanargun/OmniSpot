@@ -4,11 +4,11 @@ using SmartFileLauncher.Core.Utilities;
 
 namespace SmartFileLauncher.Core.Search;
 
-internal sealed class CompactSearchState : IIndexCatalogSnapshot
+internal sealed partial class CompactSearchState : IIndexCatalogSnapshot
 {
     private static readonly StringComparer Comparer = StringComparer.OrdinalIgnoreCase;
     private sealed record Entry(SearchItem? Item, string[] Tokens, int Id);
-    private readonly CompactCatalog _catalog;
+    private readonly CatalogReader _catalog;
     private readonly ImmutableDictionary<string, Entry> _delta;
     private readonly ImmutableHashSet<int> _suppressed;
     private readonly ImmutableDictionary<string, ImmutableHashSet<string>> _postings;
@@ -21,6 +21,7 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
 
     public int ItemCount { get; }
     public int TokenCount { get; }
+    internal IEnumerable<string> BaseTokens => _catalog.Tokens;
     internal int QueryItemCacheCount => _queryItems?.Count ?? 0;
     internal int QueryPathCacheCount => _queryPaths?.Count ?? 0;
     internal static CompactSearchState Empty { get; } =
@@ -91,14 +92,14 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
     internal long Generation { get; }
     internal int PayloadBytes => _catalog.PayloadBytes;
 
-    private CompactSearchState(CompactCatalog catalog, int capacity, bool varint, long? generation = null)
+    private CompactSearchState(CatalogReader catalog, int capacity, bool varint, long? generation = null)
         : this(catalog, ImmutableDictionary.Create<string, Entry>(Comparer), ImmutableHashSet<int>.Empty,
             ImmutableDictionary.Create<string, ImmutableHashSet<string>>(Comparer),
             ImmutableDictionary.Create<string, ImmutableHashSet<string>>(Comparer),
-            catalog.ItemCount, catalog.TokenCount, catalog.MissingParentCount, catalog.ItemCount,
+            catalog.ItemCount, catalog.TokenCount, catalog.MissingParentCount, catalog.IdCapacity,
             capacity, varint, generation ?? catalog.Generation) { }
 
-    private CompactSearchState(CompactCatalog catalog, ImmutableDictionary<string, Entry> delta,
+    private CompactSearchState(CatalogReader catalog, ImmutableDictionary<string, Entry> delta,
         ImmutableHashSet<int> suppressed, ImmutableDictionary<string, ImmutableHashSet<string>> postings,
         ImmutableDictionary<string, ImmutableHashSet<string>> children, int itemCount, int tokenCount,
         int missingParents, int nextId, int capacity, bool varint, long generation, bool queryView = false)
@@ -124,20 +125,31 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
         IEnumerable<FileSystemNode> nodes,
         ITokenizer tokenizer,
         int deltaCapacity = 4096,
-        bool varint = false)
+        bool varint = true)
     {
         ArgumentNullException.ThrowIfNull(nodes);
         return Create(nodes.Select(SearchItem.FromNode), tokenizer, deltaCapacity, varint);
     }
 
     internal static CompactSearchState Create(IEnumerable<SearchItem> items, ITokenizer tokenizer,
-        int deltaCapacity = 4096, bool varint = false)
+        int deltaCapacity = 4096, bool varint = true)
     {
         if (deltaCapacity < 1) throw new ArgumentOutOfRangeException(nameof(deltaCapacity));
         ArgumentNullException.ThrowIfNull(items);
         ArgumentNullException.ThrowIfNull(tokenizer);
-        var distinctItems = items.GroupBy(item => item.FullPath, Comparer)
-            .Select(group => group.Last()).ToArray();
+        var capacity = items.TryGetNonEnumeratedCount(out var count) ? count : 0;
+        var positions = new Dictionary<string, int>(capacity, Comparer);
+        var distinctItems = new List<SearchItem>(capacity);
+        foreach (var item in items)
+        {
+            if (positions.TryGetValue(item.FullPath, out var position))
+                distinctItems[position] = item;
+            else
+            {
+                positions.Add(item.FullPath, distinctItems.Count);
+                distinctItems.Add(item);
+            }
+        }
         return new(CompactCatalog.Create(distinctItems, tokenizer, varint), deltaCapacity, varint);
     }
 
@@ -148,17 +160,25 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
         return new(catalog, deltaCapacity, catalog.UsesVarint);
     }
 
+    internal static CompactSearchState FromCatalog(CatalogReader catalog, int deltaCapacity = int.MaxValue) =>
+        new(catalog, deltaCapacity, catalog.UsesVarint);
+
     internal void WriteNewBase(string path) =>
         (_delta.Count == 0 ? this : Compact())._catalog.WriteNew(path);
 
-    internal CompactSearchState Compact() => new(
-        CompactCatalog.Create(GetAllItems().ToArray(), item => TokensFor(item.FullPath), _varint, Generation + 1),
-        DeltaCapacity, _varint, Generation + 1);
+    internal CompactSearchState Compact()
+    {
+        if (_catalog.RequiresOwnCheckpoint) throw new InvalidOperationException("Bu katalog kendi kalıcı checkpoint yöntemiyle kaydedilmeli.");
+        return new(CompactCatalog.Create(GetAllItems().ToArray(), item => TokensFor(item.FullPath), _varint, Generation + 1),
+            DeltaCapacity, _varint, Generation + 1);
+    }
 
-    internal CompactSearchState CompactToNewMapped(string path) => new(
-        CompactCatalog.CreateMapped(path, GetAllItems().ToArray(), item => TokensFor(item.FullPath),
-            _varint, Generation + 1),
-        DeltaCapacity, _varint, Generation + 1);
+    internal CompactSearchState CompactToNewMapped(string path)
+    {
+        if (_catalog.RequiresOwnCheckpoint) throw new InvalidOperationException("Bu katalog kendi kalıcı checkpoint yöntemiyle kaydedilmeli.");
+        return new(CompactCatalog.CreateMapped(path, GetAllItems().ToArray(), item => TokensFor(item.FullPath),
+            _varint, Generation + 1), DeltaCapacity, _varint, Generation + 1);
+    }
 
     private string[] TokensFor(string path) => _delta.TryGetValue(path, out var entry)
         ? entry.Tokens : _catalog.ItemTokens(_catalog.Find(path));
@@ -201,20 +221,48 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
     }
 
     public IReadOnlyCollection<SearchItem> GetPartial(string token, CancellationToken cancellationToken = default) =>
-        MatchTerms(value => value.Contains(token, StringComparison.OrdinalIgnoreCase), cancellationToken);
+        MatchTerms(token, null, cancellationToken);
 
     public IReadOnlyCollection<SearchItem> GetFuzzy(string token, int maxDistance = 2,
         CancellationToken cancellationToken = default) => HasToken(token)
         ? Get(token, cancellationToken)
-        : MatchTerms(value => FuzzyMatcher.IsFuzzyMatch(token, value, maxDistance), cancellationToken);
+        : MatchTerms(token, maxDistance, cancellationToken);
 
-    private IReadOnlyCollection<SearchItem> MatchTerms(Func<string, bool> predicate, CancellationToken cancellationToken)
+    private IReadOnlyCollection<SearchItem> MatchTerms(string search, int? distance, CancellationToken cancellationToken)
     {
         var result = new Dictionary<string, SearchItem>(Comparer);
-        foreach (var token in _catalog.Tokens.Concat(_postings.Keys).Distinct(Comparer))
+        if (_catalog is IDirectCatalogMatches direct)
+        {
+            var wordCount = checked((int)((_catalog.IdCapacity + 31L) / 32));
+            var seen = System.Buffers.ArrayPool<uint>.Shared.Rent(Math.Max(wordCount, 1));
+            Array.Clear(seen, 0, wordCount);
+            try
+            {
+                foreach (var id in direct.MatchingItems(search, distance, cancellationToken))
+                {
+                    var mask = 1u << (id & 31);
+                    if (_suppressed.Contains(id) || (seen[id >> 5] & mask) != 0) continue;
+                    seen[id >> 5] |= mask;
+                    var item = ReadItem(id); result[item.FullPath] = item;
+                }
+            }
+            finally { System.Buffers.ArrayPool<uint>.Shared.Return(seen); }
+            foreach (var (token, paths) in _postings)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var candidate = direct.CanonicalToken(token);
+                if (!(distance is int maxDistance ? FuzzyMatcher.IsFuzzyMatch(search, candidate, maxDistance)
+                    : candidate.Contains(search, StringComparison.OrdinalIgnoreCase))) continue;
+                foreach (var path in paths) result[path] = _delta[path].Item!;
+            }
+            return result.Values.ToArray();
+        }
+        var extraTokens = _postings.Keys.Where(value => !_catalog.ContainsToken(value) &&
+            (distance is int max ? FuzzyMatcher.IsFuzzyMatch(search, value, max)
+                : value.Contains(search, StringComparison.OrdinalIgnoreCase)));
+        foreach (var token in _catalog.MatchingTokens(search, distance, cancellationToken).Concat(extraTokens))
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!predicate(token)) continue;
             foreach (var item in Get(token, cancellationToken)) result[item.FullPath] = item;
         }
         return result.Values.ToArray();
@@ -223,7 +271,7 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
     public IReadOnlyCollection<SearchItem> GetAllItems(CancellationToken cancellationToken = default)
     {
         var items = new List<SearchItem>(ItemCount);
-        for (var id = 0; id < _catalog.ItemCount; id++)
+        foreach (var id in _catalog.ActiveIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_suppressed.Contains(id)) items.Add(ReadItem(id));
@@ -241,7 +289,7 @@ internal sealed class CompactSearchState : IIndexCatalogSnapshot
         CancellationToken cancellationToken)
     {
         var sharedPrefixPaths = new Dictionary<int, string>();
-        for (var id = 0; id < _catalog.ItemCount; id++)
+        foreach (var id in _catalog.ActiveIds)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (!_suppressed.Contains(id) && _catalog.Matches(id, filter))
