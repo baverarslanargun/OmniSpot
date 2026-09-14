@@ -6,7 +6,7 @@ using SmartFileLauncher.Core.ChangeFeed.Store;
 namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 [SupportedOSPlatform("windows")]
-public sealed class ChangeFeedAdmissionService
+public sealed partial class ChangeFeedAdmissionService : IDisposable
 {
     private readonly ChangeFeedRootAdmission _admission;
     private readonly Func<string, IChangeFeedStore> _storeFactory;
@@ -15,6 +15,7 @@ public sealed class ChangeFeedAdmissionService
     private readonly Func<string, CancellationToken, bool>? _handoffDrainer;
     private readonly TimeSpan _handoffDrainBudget;
     private readonly long _pageBudget;
+    private readonly ChangeFeedInventorySessions? _inventory;
 
     public ChangeFeedAdmissionService(
         ChangeFeedRootAdmission admission,
@@ -23,7 +24,8 @@ public sealed class ChangeFeedAdmissionService
         Func<string, ChangeFeedPathAuthorizer>? authorizerFactory = null,
         long pageBudget = ChangeFeedProtocol.MaximumResponseBytes,
         Func<string, CancellationToken, bool>? handoffDrainer = null,
-        TimeSpan? handoffDrainBudget = null)
+        TimeSpan? handoffDrainBudget = null,
+        ChangeFeedInventorySessions? inventory = null)
     {
         _admission = admission ?? throw new ArgumentNullException(nameof(admission));
         _storeFactory = storeFactory ?? throw new ArgumentNullException(nameof(storeFactory));
@@ -31,6 +33,7 @@ public sealed class ChangeFeedAdmissionService
         _authorizerFactory = authorizerFactory ?? ChangeFeedPathAuthorizer.ForCurrentCaller;
         _pageBudget = pageBudget;
         _handoffDrainer = handoffDrainer;
+        _inventory = inventory;
         _handoffDrainBudget = handoffDrainBudget ?? ChangeFeedProtocol.HandoffDrainBudget;
 
         if (_handoffDrainBudget <= TimeSpan.Zero ||
@@ -73,6 +76,8 @@ public sealed class ChangeFeedAdmissionService
                     DrainAndHoldLease(pipe, request.LeaseSeconds, cancellationToken),
                 ChangeFeedRequestKind.ReleaseLease =>
                     ReleaseLease(pipe, cancellationToken),
+                ChangeFeedRequestKind.Inventory or ChangeFeedRequestKind.ValidateInventory or
+                    ChangeFeedRequestKind.CancelInventory => Inventory(pipe, request, cancellationToken),
                 _ => ChangeFeedResponse.Failed(
                     ChangeFeedResponseStatus.InvalidRequest,
                     "Bilinmeyen istek türü.")
@@ -384,4 +389,6 @@ public sealed class ChangeFeedAdmissionService
             return false;
         }
     }
+
+    public void Dispose() => _inventory?.Dispose();
 }

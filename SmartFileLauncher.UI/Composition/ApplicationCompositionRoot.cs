@@ -96,6 +96,9 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 ? new ChangeFeedIndexBridge(
                     new ChangeFeedClientChannel(),
                     new IndexManagerChangeFeedTarget(indexManager))
+                : null,
+            inventorySource: _measurementRun == null
+                ? new ChangeFeedInventorySource(new ChangeFeedClientChannel(), _log.Write)
                 : null);
         var indexMaintenance = new IndexMaintenanceService(
             _indexLifecycle.DatabasePath);

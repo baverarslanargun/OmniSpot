@@ -31,6 +31,9 @@ public class FileWatcherService : IDisposable
     private bool _disposed;
     private volatile bool _isWatching;
     private volatile bool _dispatchPaused;
+    private volatile bool _captureAllChanges;
+    private TaskCompletionSource<bool>? _drain;
+    private long _drainGeneration;
 
     public event Action<FileChangeEvent>? OnChange;
 
@@ -183,7 +186,7 @@ public class FileWatcherService : IDisposable
         }
     }
 
-    public void Start(bool dispatchPaused = false)
+    public void Start(bool dispatchPaused = false, bool captureAllChanges = false)
     {
         lock (_stateLock)
         {
@@ -198,6 +201,7 @@ public class FileWatcherService : IDisposable
 
             Interlocked.Increment(ref _generation);
             _dispatchPaused = dispatchPaused;
+            _captureAllChanges = captureAllChanges;
             _isWatching = true;
 
             try
@@ -232,6 +236,18 @@ public class FileWatcherService : IDisposable
             {
                 _dispatchPaused = false;
             }
+        }
+    }
+
+    internal Task<bool> DrainAsync(CancellationToken ct)
+    {
+        lock (_stateLock)
+        {
+            if (!_isWatching || _dispatchPaused) return Task.FromResult(false);
+            _drain?.TrySetResult(false);
+            _drainGeneration = Volatile.Read(ref _generation);
+            _drain = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            return _drain.Task.WaitAsync(ct);
         }
     }
 
@@ -317,35 +333,43 @@ public class FileWatcherService : IDisposable
 
     internal void OnFileCreated(object sender, FileSystemEventArgs e)
     {
-        if (ShouldExclude(e.FullPath)) return;
-        if (ShouldSkipReparsePath(e.FullPath)) return;
-        EnqueueEvent(FileChangeType.Created, e.FullPath, null, IsDirectory(e.FullPath));
+        lock (_stateLock)
+        {
+            if (ShouldExclude(e.FullPath)) return;
+            if (ShouldSkipReparsePath(e.FullPath)) return;
+            EnqueueEvent(FileChangeType.Created, e.FullPath, null, IsDirectory(e.FullPath));
+        }
     }
 
     internal void OnFileDeleted(object sender, FileSystemEventArgs e)
     {
-        if (ShouldExclude(e.FullPath)) return;
-        if (ShouldSkipReparsePath(e.FullPath)) return;
-        bool isDir = string.IsNullOrEmpty(Path.GetExtension(e.FullPath));
-        EnqueueEvent(FileChangeType.Deleted, e.FullPath, null, isDir);
+        lock (_stateLock)
+        {
+            if (ShouldExclude(e.FullPath)) return;
+            if (ShouldSkipReparsePath(e.FullPath)) return;
+            bool isDir = string.IsNullOrEmpty(Path.GetExtension(e.FullPath));
+            EnqueueEvent(FileChangeType.Deleted, e.FullPath, null, isDir);
+        }
     }
 
     internal void OnFileRenamed(object sender, RenamedEventArgs e)
     {
-        if (ShouldExclude(e.FullPath) && ShouldExclude(e.OldFullPath)) return;
-        if (ShouldSkipReparsePath(e.FullPath) ||
-            ShouldSkipReparsePath(e.OldFullPath))
-            return;
-        EnqueueEvent(FileChangeType.Renamed, e.FullPath, e.OldFullPath, IsDirectory(e.FullPath));
+        lock (_stateLock)
+        {
+            if (ShouldExclude(e.FullPath) && ShouldExclude(e.OldFullPath)) return;
+            if (ShouldSkipReparsePath(e.FullPath) || ShouldSkipReparsePath(e.OldFullPath)) return;
+            EnqueueEvent(FileChangeType.Renamed, e.FullPath, e.OldFullPath, IsDirectory(e.FullPath));
+        }
     }
 
     internal void OnFileChanged(object sender, FileSystemEventArgs e)
     {
-        if (ShouldExclude(e.FullPath)) return;
-        if (ShouldSkipReparsePath(e.FullPath)) return;
-        if (!IsDirectory(e.FullPath))
+        lock (_stateLock)
         {
-            EnqueueEvent(FileChangeType.Modified, e.FullPath, null, false);
+            if (ShouldExclude(e.FullPath)) return;
+            if (ShouldSkipReparsePath(e.FullPath)) return;
+            if (!IsDirectory(e.FullPath))
+                EnqueueEvent(FileChangeType.Modified, e.FullPath, null, false);
         }
     }
 
@@ -396,12 +420,12 @@ public class FileWatcherService : IDisposable
 
         var generation = Volatile.Read(ref _generation);
         if (!_isWatching) return;
-
         _eventQueue.Enqueue((evt, generation));
     }
 
     private bool ShouldExclude(string path)
     {
+        if (_captureAllChanges) return false;
         foreach (var pattern in _excludedPaths)
         {
             if (path.Contains(pattern, StringComparison.OrdinalIgnoreCase))
@@ -544,6 +568,22 @@ public class FileWatcherService : IDisposable
                     }
                 }
 
+                lock (_stateLock)
+                {
+                    if (_drain is not null && (!_isWatching ||
+                        _drainGeneration != Volatile.Read(ref _generation)))
+                    {
+                        _drain.TrySetResult(false);
+                        _drain = null;
+                    }
+                    else if (_drain is not null && pending.Count == 0 && _eventQueue.IsEmpty)
+                    {
+                        _captureAllChanges = false;
+                        _drain.TrySetResult(true);
+                        _drain = null;
+                    }
+                }
+
                 await Task.Delay(50, ct).ConfigureAwait(false);
             }
         }
@@ -612,10 +652,12 @@ public class FileWatcherService : IDisposable
 
     public void TriggerEvent(FileChangeEvent evt)
     {
-        var generation = Volatile.Read(ref _generation);
-        if (!_isWatching) return;
-
-        _eventQueue.Enqueue((evt, generation));
+        lock (_stateLock)
+        {
+            var generation = Volatile.Read(ref _generation);
+            if (!_isWatching) return;
+            _eventQueue.Enqueue((evt, generation));
+        }
     }
 
     internal void SimulateWatcherError(Exception exception) =>

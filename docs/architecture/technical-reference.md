@@ -21,7 +21,15 @@ Bu sınıf, uygulamanın "Bulanık Arama" (Fuzzy Search) yeteneğini sağlayan k
 ### IndexManager.cs
 *   **İşlev:** Tüm standart köklerde ilk taramayı, kalıcı indeks yüklemeyi, veritabanı/bellek senkronizasyonunu ve canlı dosya izlemeyi yönetir.
 *   **Veri Yapıları:** HashSet (Senkronize dosyalar için $O(1)$), Dictionary.
-*   **Algoritma:** Recursive bootstrap taraması ve Delta Sync - Disk ve DB arasındaki farkı bulur.
+*   **Algoritma:** Normal uygulamada kompakt katalog için ilk kurulumda servisten sayfalı ham NTFS MFT envanteri alınır. Aynı volume kökleri iki sıralı geçişle işlenir: önce dizin ilişkileri, ardından ad/boyut/tarih kayıtları. Görünür reparse point'lerin yalnız kendi alt ağaçları mevcut tarayıcıyla tamamlanır ve USN devrinde yeniden kontrol edilir. Servis yoksa, protokol uyumsuzsa veya envanter tamamlanamazsa mevcut recursive bootstrap kullanılır. Legacy katalog ve ölçüm profilleri mevcut tarayıcıyı kullanır. Delta Sync disk ve DB arasındaki farkları uzlaştırır.
+*   **Devir:** Watcher ilk envanterden önce tüm değişiklikleri duraklatılmış olarak yakalar. Envanter tek SQLite transaction'ında kaydedilir; USN devrinde oturum ve watcher sağlığı doğrulanır. `initial_inventory_pending` işareti watcher kuyruğu uygulanana kadar kalır; yarım kalan başlangıçta cache yerine yeniden edinim yapılır.
+*   **Tanılama:** `Metadata.last_bootstrap_source` ilk edinimin `mft` veya `filesystem` yolunu, `last_bootstrap_link_scopes` ayrıca taranan bağlantı kapsamı sayısını kaydeder. Bağlantı snapshot'ı devirde değişmemişse tekrar DB materializasyonu yapılmaz.
+
+### Ham MFT envanteri ve servis kanalı
+*   **Sözleşme:** ChangeFeed protokolü sürüm 5, `Inventory`, `ValidateInventory` ve `CancelInventory` isteklerini içerir. Envanter sayfaları event delivery/receipt verisinden ayrıdır; dosya yolları UTF-16 kod birimlerini korumak için Base64 taşınır.
+*   **Yetki:** Ham volume okuması servis kimliğiyle; root admission ve sayfa görünürlüğü doğrulanmış çağıran kimliğiyle yürür. Oturum owner, protokol ve abonelik kökleri/kimlikleri/kuşaklarına bağlıdır. Native envanter MFT öncesi USN konumundan itibaren, kapsam içindeki dosya/dizin kimlikleri ile köklerin tüm üst dizin kimliklerini etkileyen güvenlik/reparse değişikliklerini completion ve devir doğrulamalarında denetler; journal değişimi veya kayıp kayıtlar envanteri reddettirir. Hardlink'ler ortak dosya kimliğiyle korunur. Event kuyruğunun epoch ve genel security stamp'i delivery/receipt için geçerlidir; bağımsız native envanteri ilgisiz volume değişiklikleri nedeniyle iptal etmez.
+*   **Bellek sınırı:** Aktarım kuyruğu 512 kayıt, sayfa hedefi 256 KiB, protokol üst sınırı 1 MiB'dır. Dizin ilişkileri ve oturumun güvenlik doğrulaması için dosya kimlikleri bellekte tutulur; toplam servis RAM'i volume dizin ve seçili envanter kayıt sayısına bağlıdır. Bu sabit bellek garantisi değildir. Journal handle ve kimlik kümesi oturum iptali/sonlandırılmasında bırakılır.
+*   **Doğrulama:** `Tools/OmniSpot.Benchmarking` içindeki `mft-probe --volume C:\ --root <test-kökü> --max-entries 0 --verify-metadata` salt okunur exploratory envanter/oracle denemesidir; yönetici yetkisi gerektirir. Metadata karşılaştırması ek dosya okumaları yapar, bu süre uygulama performansı olarak yorumlanmaz.
 
 ### IndexDatabase.cs
 *   **İşlev:** Verilerin kalıcı olarak saklanmasını (Persistence) sağlar.

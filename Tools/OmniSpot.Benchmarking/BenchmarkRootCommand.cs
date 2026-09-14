@@ -2,6 +2,7 @@ using System.CommandLine;
 using OmniSpot.Benchmarking.Diagnostics;
 using OmniSpot.Benchmarking.Measurements;
 using OmniSpot.Benchmarking.Profiling;
+using OmniSpot.Benchmarking.Ntfs;
 
 namespace OmniSpot.Benchmarking;
 
@@ -12,6 +13,7 @@ internal static class BenchmarkRootCommand
         var rootCommand = new RootCommand("OmniSpot yerel benchmark yardımcı araçları.");
         rootCommand.Subcommands.Add(ProfileCommand.CreateCommand());
         rootCommand.Subcommands.Add(DiagnosticsCommand.CreateCommand());
+        rootCommand.Subcommands.Add(MftProbeCommand.CreateCommand());
         MeasurementCommand.AddTo(rootCommand);
         return rootCommand;
     }

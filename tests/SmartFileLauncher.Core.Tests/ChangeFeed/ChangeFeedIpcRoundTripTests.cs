@@ -7,6 +7,7 @@ using SmartFileLauncher.Core.ChangeFeed.Ipc;
 using SmartFileLauncher.Core.ChangeFeed.Store;
 using SmartFileLauncher.Core.ChangeFeed.Usn;
 using SmartFileLauncher.Core.Tests.TestInfrastructure;
+using SmartFileLauncher.Core.Indexing.Ntfs;
 using Xunit;
 
 namespace SmartFileLauncher.Core.Tests.ChangeFeed;
@@ -14,6 +15,62 @@ namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 [SupportedOSPlatform("windows")]
 public sealed class ChangeFeedIpcRoundTripTests
 {
+    [Fact]
+    public async Task InventoryReadsAsServiceAndProjectsAsTheVerifiedCaller()
+    {
+        SecurityIdentifier? producerImpersonation = CurrentSid();
+        using var inventory = new ChangeFeedInventorySessions((roots, _) =>
+        {
+            using var impersonated = WindowsIdentity.GetCurrent(ifImpersonating: true);
+            producerImpersonation = impersonated?.User;
+            return [new IndexInventoryEntry(Path.Combine(roots[0].RootPath, "visible.txt"),
+                false, FileAttributes.Normal, 7, 1, 2)];
+        });
+        using var harness = new Harness(guardImpersonation: true, observeAuthorization: true, inventory: inventory);
+        var root = harness.Workspace.CreateDirectory("inventory");
+        await harness.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
+        string? token = null;
+        var entries = new List<ChangeFeedInventoryEntryDto>();
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        while (true)
+        {
+            var response = await harness.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version,
+                ChangeFeedRequestKind.Inventory, Token: token, InventoryRoots: token is null ? [root] : null), deadline.Token);
+            Assert.Equal(ChangeFeedResponseStatus.Ok, response.Status);
+            var page = Assert.IsType<ChangeFeedInventoryPageDto>(response.Inventory);
+            entries.AddRange(page.Entries);
+            token = page.Token;
+            if (page.Completed) break;
+            await Task.Delay(10, deadline.Token);
+        }
+        Assert.Equal(Path.Combine(root, "visible.txt"), Assert.Single(entries).ToEntry().Path);
+        Assert.Null(producerImpersonation);
+        Assert.NotEmpty(harness.AuthorizationContexts);
+        Assert.All(harness.AuthorizationContexts, sid => Assert.Equal(CurrentSid(), sid));
+        Assert.Empty(harness.ImpersonatedStoreCalls);
+        var valid = await harness.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.ValidateInventory, Token: token));
+        Assert.Equal(ChangeFeedResponseStatus.Ok, valid.Status);
+        harness.OwnerStore().NoteSecurityChange();
+        var invalid = await harness.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.ValidateInventory, Token: token));
+        Assert.NotEqual(ChangeFeedResponseStatus.Ok, invalid.Status);
+    }
+
+    [Fact]
+    public async Task InventoryRefusesAnUnsubscribedRootBeforeStartingAProducer()
+    {
+        var reads = 0;
+        using var inventory = new ChangeFeedInventorySessions((_, _) => { reads++; return []; });
+        using var harness = new Harness(inventory: inventory);
+        var admitted = harness.Workspace.CreateDirectory("admitted");
+        var other = harness.Workspace.CreateDirectory("other");
+        await harness.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, admitted));
+        var response = await harness.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version,
+            ChangeFeedRequestKind.Inventory, InventoryRoots: [other]));
+        Assert.Equal(ChangeFeedResponseStatus.RootUnauthorized, response.Status);
+        Assert.Equal(0, reads);
+    }
     [Fact]
     public async Task AddRoot_AdmitsAListableRootAndStoresItInTheTrustedStore()
     {
@@ -921,7 +978,7 @@ public sealed class ChangeFeedIpcRoundTripTests
             .ToArray();
 
         Assert.Equal(
-            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds" },
+            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds", "InventoryRoots" },
             members);
     }
 
@@ -1797,7 +1854,8 @@ public sealed class ChangeFeedIpcRoundTripTests
             bool guardImpersonation = false,
             bool observeAuthorization = false,
             Func<string, CancellationToken, bool>? handoffDrainer = null,
-            TimeSpan? handoffDrainBudget = null)
+            TimeSpan? handoffDrainBudget = null,
+            ChangeFeedInventorySessions? inventory = null)
         {
             Workspace = new TemporaryDirectory();
             TrustedRoot = Path.Combine(Workspace.Path, "Guvenilir");
@@ -1836,7 +1894,8 @@ public sealed class ChangeFeedIpcRoundTripTests
 
                     return handoffDrainer?.Invoke(ownerSid, cancellationToken) ?? true;
                 },
-                handoffDrainBudget: handoffDrainBudget);
+                handoffDrainBudget: handoffDrainBudget,
+                inventory: inventory);
 
             Server = new ChangeFeedPipeServer(
                 service,

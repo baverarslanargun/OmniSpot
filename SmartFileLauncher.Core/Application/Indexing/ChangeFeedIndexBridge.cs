@@ -70,7 +70,8 @@ public sealed class ChangeFeedIndexBridge
     public async Task<ChangeFeedAdoptionResult> AdoptAsync(
         IReadOnlyList<string> roots,
         CancellationToken cancellationToken,
-        bool withinLifecycle = false)
+        bool withinLifecycle = false,
+        Func<CancellationToken, Task<bool>>? validateInitialInventory = null)
     {
         ArgumentNullException.ThrowIfNull(roots);
 
@@ -147,7 +148,11 @@ public sealed class ChangeFeedIndexBridge
         Consumption? consumed;
         try
         {
-            consumed = await ConsumeAsync(withinLifecycle, cancellationToken).ConfigureAwait(false);
+            var baseline = validateInitialInventory is not null &&
+                await validateInitialInventory(cancellationToken).ConfigureAwait(false)
+                    ? roots.ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+            consumed = await ConsumeAsync(withinLifecycle, cancellationToken, baseline,
+                validateInitialInventory).ConfigureAwait(false);
         }
         catch
         {
@@ -216,7 +221,9 @@ public sealed class ChangeFeedIndexBridge
 
     private async Task<Consumption?> ConsumeAsync(
         bool withinLifecycle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<string>? baselineRoots = null,
+        Func<CancellationToken, Task<bool>>? validateInitialInventory = null)
     {
         var pages = 0;
         var fetches = 0;
@@ -284,6 +291,8 @@ public sealed class ChangeFeedIndexBridge
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
+                if (baselineRoots?.Contains(root.RootPath) == true) continue;
+
                 if (NeedsResynchronization(root))
                 {
                     diagnostics ??= DescribeGap(root);
@@ -346,6 +355,11 @@ public sealed class ChangeFeedIndexBridge
                         blocker ?? "Sayfa tam uygulanamadı; onay gönderilmedi.",
                         diagnostics));
             }
+
+            if (baselineRoots is not null &&
+                !await validateInitialInventory!(cancellationToken).ConfigureAwait(false))
+                return Incomplete(pages, events, resynchronized,
+                    "İlk envanter veya watcher yakalaması geçerliliğini kaybetti; kuyruk onaylanmadı.");
 
             if (delivery.Receipt is { } receipt)
             {

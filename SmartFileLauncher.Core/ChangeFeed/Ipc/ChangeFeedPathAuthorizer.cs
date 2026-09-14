@@ -119,6 +119,8 @@ public sealed class ChangeFeedPathAuthorizer
         return new ChangeFeedEventProjection(null, true);
     }
 
+    internal bool CanReturnExistingPath(string path) => Publishable(path);
+
     private bool Publishable(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Path.IsPathFullyQualified(path))

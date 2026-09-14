@@ -31,7 +31,13 @@ public partial class IndexManager
                 error = $"Error handling {evt.ChangeType}: {ex.Message}";
             }
         }
-        if (error is not null) NotifyError(error);
+        if (error is not null)
+        {
+            Interlocked.Increment(ref _watcherErrorVersion);
+            if (_initialWatcherCapture) NoteChangeFeedCoverage(false);
+            NotifyError(error);
+            RequestReconciliation();
+        }
         else if (applied) QueueNotification(() => OnFileChange?.Invoke(evt));
         return applied;
     }

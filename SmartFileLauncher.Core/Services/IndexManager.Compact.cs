@@ -156,7 +156,8 @@ public partial class IndexManager
     private async Task BootstrapCompactScanCoreAsync(
         List<string> rootPaths,
         string? singleRootPath,
-        CancellationToken ct)
+        CancellationToken ct,
+        ReconciliationSnapshot? initialInventory = null)
     {
         foreach (var rootPath in rootPaths)
             EnsureMeasurementDirectorySafe(rootPath);
@@ -169,7 +170,7 @@ public partial class IndexManager
                 foreach (var rootPath in rootPaths)
                     EnsureMeasurementDirectorySafe(rootPath);
 
-                var snapshot = CaptureDiskSnapshot(
+                var snapshot = initialInventory ?? CaptureDiskSnapshot(
                     rootPaths,
                     ct,
                     followReparsePoints: true);
@@ -195,6 +196,12 @@ public partial class IndexManager
                     _db.SetMetadata(IndexMetadata.Keys.ScanRootPath, rootsKey);
                     _db.SetMetadata(IndexMetadata.Keys.LastFullScanTime, DateTime.UtcNow.Ticks.ToString());
                     _db.SetMetadata(IndexMetadata.Keys.TotalFilesIndexed, prepared.Count.ToString());
+                    _db.SetMetadata(IndexMetadata.Keys.InitialInventoryPending,
+                        initialInventory is null ? "0" : "1");
+                    _db.SetMetadata(IndexMetadata.Keys.LastBootstrapSource,
+                        initialInventory is null ? "filesystem" : "mft");
+                    _db.SetMetadata(IndexMetadata.Keys.LastBootstrapLinkScopes,
+                        initialInventory is null ? "0" : _initialLinkScopes.Count.ToString());
                     transaction.Commit();
                 }
                 catch
@@ -269,12 +276,13 @@ public partial class IndexManager
     private int ApplyCompactReconciliationSnapshot(
         IReadOnlyList<string> rootPaths,
         ReconciliationSnapshot suppliedSnapshot,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool useSuppliedSnapshot = false)
     {
         _ = suppliedSnapshot;
         lock (_lock)
         {
-            var snapshot = CaptureDiskSnapshot(rootPaths, ct);
+            var snapshot = useSuppliedSnapshot ? suppliedSnapshot : CaptureDiskSnapshot(rootPaths, ct);
             MergeCompactSnapshotStatus(snapshot, suppliedSnapshot);
             var current = CurrentCompactSnapshot;
             var directories = _db.GetAllDirectories().ToArray();
@@ -441,7 +449,7 @@ public partial class IndexManager
                 : Path.GetDirectoryName(entry.Path) is { } parent
                     ? NormalizeIndexedPath(parent)
                     : null;
-            var attributes = File.GetAttributes(entry.Path);
+            var attributes = entry.Attributes;
             if (entry.IsDirectory)
             {
                 prepared.Add(new CompactPreparedEntry(
@@ -453,15 +461,14 @@ public partial class IndexManager
                 continue;
             }
 
-            var fileInfo = new FileInfo(entry.Path);
             IndexedFile? persisted = null;
             if (existingFiles is not null)
                 existingFiles.TryGetValue(entry.Path, out persisted);
-            var createdTimeUtc = persisted?.CreatedTimeUtc ?? fileInfo.CreationTimeUtc.Ticks;
+            var createdTimeUtc = persisted?.CreatedTimeUtc ?? entry.CreatedTimeUtc;
             var openCount = persisted?.OpenCount ?? 0;
             prepared.Add(new CompactPreparedEntry(
                 new SearchItem(
-                    fileInfo.Name,
+                    PathName(entry.Path),
                     entry.Path,
                     IsDirectory: false,
                     entry.SizeBytes,

@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Indexing;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 
@@ -9,6 +10,7 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
     private readonly IndexManager _indexManager;
     private readonly IIndexedLocationProvider _locationProvider;
     private readonly ChangeFeedIndexBridge? _changeFeed;
+    private readonly IIndexInventorySource? _inventorySource;
     private readonly TimeSpan _renewInterval;
     private readonly CancellationTokenSource _leaseCancellation = new();
     private readonly SemaphoreSlim _leaseGate = new(1, 1);
@@ -23,12 +25,14 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         IndexManager indexManager,
         IIndexedLocationProvider locationProvider,
         ChangeFeedIndexBridge? changeFeed = null,
-        TimeSpan? renewInterval = null)
+        TimeSpan? renewInterval = null,
+        IIndexInventorySource? inventorySource = null)
     {
         _indexManager = indexManager ?? throw new ArgumentNullException(nameof(indexManager));
         _locationProvider = locationProvider ??
             throw new ArgumentNullException(nameof(locationProvider));
         _changeFeed = changeFeed;
+        _inventorySource = inventorySource;
         _renewInterval = renewInterval ?? ChangeFeedIndexBridge.DefaultRenewInterval;
 
         if (_changeFeed is not null)
@@ -99,7 +103,8 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         await _indexManager.InitializeWithWatcherFenceAsync(
                 locations.RootPaths,
                 cancellationToken,
-                AdoptChangeFeedAsync)
+                AdoptChangeFeedAsync,
+                _inventorySource)
             .ConfigureAwait(false);
 
         return new IndexStartupResult(
@@ -159,7 +164,8 @@ public sealed class IndexLifecycleService : IIndexLifecycleService
         {
             watcherPrepared = _indexManager.BeginWatcherCaptureWithinLifecycle(roots);
             LastAdoption = await _changeFeed
-                .AdoptAsync(roots, cancellationToken, withinLifecycle: true)
+                .AdoptAsync(roots, cancellationToken, withinLifecycle: true,
+                    validateInitialInventory: _indexManager.ValidateInitialInventoryAsync)
                 .ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

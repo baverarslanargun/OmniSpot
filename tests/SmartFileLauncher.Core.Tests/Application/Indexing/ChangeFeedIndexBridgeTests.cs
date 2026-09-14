@@ -11,6 +11,50 @@ public sealed class ChangeFeedIndexBridgeTests
     private const string Root = @"C:\Kok";
 
     [Fact]
+    public async Task AValidatedInitialInventorySupersedesOldEventsAndProducerGaps()
+    {
+        var channel = new ScriptedChannel();
+        channel.Respond(Ok());
+        channel.Respond(Ok());
+        channel.Respond(Delivered(Page(Root, Event(ChangeFeedEventKind.Deleted, @"C:\Kok\a.txt"))
+            with { AuthorizationGap = true }, receipt: "makbuz"));
+        var target = new RecordingTarget();
+        var result = await Bridge(channel, target).AdoptAsync([Root], default, true, _ => Task.FromResult(true));
+        Assert.True(result.LeaseHeld);
+        Assert.Empty(target.Applied);
+        Assert.Empty(target.Resynchronized);
+        Assert.Contains(ChangeFeedRequestKind.Acknowledge, channel.Kinds);
+    }
+
+    [Fact]
+    public async Task AFailedInventoryValidationUsesTheExistingResynchronization()
+    {
+        var channel = new ScriptedChannel();
+        channel.Respond(Ok());
+        channel.Respond(Ok());
+        channel.Respond(Delivered(Page(Root) with { AuthorizationGap = true }, receipt: "makbuz"));
+        var target = new RecordingTarget();
+        await Bridge(channel, target).AdoptAsync([Root], default, true, _ => Task.FromResult(false));
+        Assert.Equal([Root], target.Resynchronized);
+        Assert.Contains(ChangeFeedRequestKind.Acknowledge, channel.Kinds);
+    }
+
+    [Fact]
+    public async Task AWatcherGapBeforeAcknowledgementLeavesTheQueueAndReleasesTheLease()
+    {
+        var channel = new ScriptedChannel();
+        channel.Respond(Ok());
+        channel.Respond(Ok());
+        channel.Respond(Delivered(Page(Root), receipt: "makbuz"));
+        var validations = 0;
+        var result = await Bridge(channel).AdoptAsync([Root], default, true,
+            _ => Task.FromResult(++validations == 1));
+        Assert.False(result.LeaseHeld);
+        Assert.DoesNotContain(ChangeFeedRequestKind.Acknowledge, channel.Kinds);
+        Assert.Contains(ChangeFeedRequestKind.ReleaseLease, channel.Kinds);
+    }
+
+    [Fact]
     public async Task Adoption_SubscribesEveryRootBeforeItPulls()
     {
         var channel = new ScriptedChannel();

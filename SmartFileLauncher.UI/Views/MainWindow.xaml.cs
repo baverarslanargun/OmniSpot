@@ -413,26 +413,35 @@ public partial class MainWindow : Window {
         _applicationLog.Write(message);
     }
 
+    private IndexProgress? _pendingIndexProgress;
+
     private void HandleIndexProgress(IndexProgress progress) {
         if (_isPreparedForShutdown) return;
 
+        if (progress.IsCatalogBuild) {
+            Dispatcher.BeginInvoke(new Action(EnterCatalogBuildStage));
+            return;
+        }
+
+        if (Interlocked.Exchange(ref _pendingIndexProgress, progress) != null) return;
         Dispatcher.BeginInvoke(new Action(() => {
-            if (progress.IsCatalogBuild) {
-                EnterCatalogBuildStage();
-                return;
-            }
-
-            SetLoadingStatus(progress.Status);
-            if (progress.IsIndeterminate) {
-                SetLoadingIndeterminate(true);
-                return;
-            }
-
-            SetLoadingIndeterminate(false);
-            if (progress.Percentage >= 0 && progress.Percentage <= 100) {
-                SetLoadingPercentage(progress.Percentage);
-            }
+            var latest = Interlocked.Exchange(ref _pendingIndexProgress, null);
+            if (latest == null || _isPreparedForShutdown) return;
+            ApplyIndexProgress(latest);
         }));
+    }
+
+    private void ApplyIndexProgress(IndexProgress progress) {
+        SetLoadingStatus(progress.Status);
+        if (progress.IsIndeterminate) {
+            SetLoadingIndeterminate(true);
+            return;
+        }
+
+        SetLoadingIndeterminate(false);
+        if (progress.Percentage >= 0 && progress.Percentage <= 100) {
+            SetLoadingPercentage(progress.Percentage);
+        }
     }
 
     private const double LoadingTrackWidth = 240;
@@ -471,8 +480,8 @@ public partial class MainWindow : Window {
             LoadingProgressFill.Width = width;
             return;
         }
-        LoadingProgressFill.BeginAnimation(WidthProperty, new System.Windows.Media.Animation.DoubleAnimation(width, TimeSpan.FromMilliseconds(220)) {
-            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+        LoadingProgressFill.BeginAnimation(WidthProperty, new System.Windows.Media.Animation.DoubleAnimation(width, TimeSpan.FromMilliseconds(180)) {
+            EasingFunction = new System.Windows.Media.Animation.QuadraticEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
         });
     }
 
