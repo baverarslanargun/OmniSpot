@@ -214,6 +214,7 @@ public sealed class IndexEventCostTests
                 }
             }
 
+            world.Manager.NoteChangeFeedCoverage(true);
             await world.Manager.InitializeAsync(new[] { world.Root });
             world._watcher.Stop();
             return world;

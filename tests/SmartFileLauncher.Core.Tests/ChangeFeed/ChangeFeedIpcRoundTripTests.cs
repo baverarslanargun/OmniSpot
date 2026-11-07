@@ -1553,11 +1553,14 @@ public sealed class ChangeFeedIpcRoundTripTests
         await harness.SendAsync(
             new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, kept));
 
-        var stop = new CancellationTokenSource();
+        using var stop = new CancellationTokenSource();
+        using var ready = new CountdownEvent(4);
+        var readerPasses = new int[3];
         var readerFaults = new List<Exception>();
 
-        var readers = Enumerable.Range(0, 3).Select(_ => Task.Run(() =>
+        var readers = Enumerable.Range(0, 3).Select(lane => Task.Factory.StartNew(() =>
         {
+            ready.Signal();
             while (!stop.IsCancellationRequested)
             {
                 try
@@ -1578,24 +1581,29 @@ public sealed class ChangeFeedIpcRoundTripTests
                         readerFaults.Add(failure);
                     }
                 }
+                readerPasses[lane]++;
+                Thread.Yield();
             }
-        })).ToArray();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
 
+        var drainPasses = 0;
         var drainFaults = new List<Exception>();
-        var draining = Task.Run(() =>
+        var draining = Task.Factory.StartNew(() =>
         {
             var layout = harness.LayoutForCurrentUser();
             var runner = new UsnDrainRunner(
                 layout,
                 new FileSystemChangeFeedStore(layout),
-                new UsnVolumeJournalReaderFactory(),
+                new EmptyJournalReaderFactory(),
                 new UsnFileSystemIdentityProbe());
 
+            ready.Signal();
             while (!stop.IsCancellationRequested)
             {
                 try
                 {
                     runner.Run(stop.Token);
+                    drainPasses++;
                 }
                 catch (OperationCanceledException)
                 {
@@ -1607,53 +1615,61 @@ public sealed class ChangeFeedIpcRoundTripTests
                         drainFaults.Add(failure);
                     }
                 }
+                Thread.Yield();
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         var clientFaults = new List<string>();
 
-        var mutators = Enumerable.Range(0, 3).Select(lane => Task.Run(async () =>
+        try
         {
-            var mine = lane == 0 ? churned : harness.Workspace.CreateDirectory("Degisken" + lane);
-
-            for (var i = 0; i < 20; i++)
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(5)), "Eşzamanlı okuyucular başlayamadı.");
+            var mutators = Enumerable.Range(0, 3).Select(lane => Task.Run(async () =>
             {
-                foreach (var kind in new[]
-                         {
-                             ChangeFeedRequestKind.AddRoot,
-                             ChangeFeedRequestKind.RemoveRoot
-                         })
-                {
-                    try
-                    {
-                        var response = await harness.SendAsync(
-                            new ChangeFeedRequest(ChangeFeedProtocol.Version, kind, mine));
+                var mine = lane == 0 ? churned : harness.Workspace.CreateDirectory("Degisken" + lane);
 
-                        if (response.Status != ChangeFeedResponseStatus.Ok)
+                for (var i = 0; i < 20; i++)
+                {
+                    foreach (var kind in new[]
+                             {
+                                 ChangeFeedRequestKind.AddRoot,
+                                 ChangeFeedRequestKind.RemoveRoot
+                             })
+                    {
+                        try
+                        {
+                            var response = await harness.SendAsync(
+                                new ChangeFeedRequest(ChangeFeedProtocol.Version, kind, mine));
+
+                            if (response.Status != ChangeFeedResponseStatus.Ok)
+                            {
+                                lock (clientFaults)
+                                {
+                                    clientFaults.Add($"{kind} -> {response.Status} {response.Message}");
+                                }
+                            }
+                        }
+                        catch (Exception failure)
                         {
                             lock (clientFaults)
                             {
-                                clientFaults.Add($"{kind} -> {response.Status} {response.Message}");
+                                clientFaults.Add($"{kind} -> {failure.Message}");
                             }
                         }
                     }
-                    catch (Exception failure)
-                    {
-                        lock (clientFaults)
-                        {
-                            clientFaults.Add($"{kind} -> {failure.Message}");
-                        }
-                    }
                 }
-            }
-        })).ToArray();
+            })).ToArray();
 
-        await Task.WhenAll(mutators);
+            await Task.WhenAll(mutators);
+        }
+        finally
+        {
+            stop.Cancel();
+            await Task.WhenAll(readers.Append(draining));
+        }
 
-        stop.Cancel();
-        await Task.WhenAll(readers);
-        await draining;
-
+        Assert.All(readerPasses, count => Assert.True(count > 0));
+        Assert.True(drainPasses > 0);
         Assert.Empty(drainFaults.Select(failure => failure.ToString()).ToArray());
         Assert.Empty(harness.Faults.Select(failure => failure.ToString()).ToArray());
         Assert.Empty(clientFaults);
@@ -1725,6 +1741,14 @@ public sealed class ChangeFeedIpcRoundTripTests
 
         Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
         Assert.Equal("{ bozuk", File.ReadAllText(subscription));
+    }
+
+    private sealed class EmptyJournalReaderFactory : IUsnJournalReaderFactory
+    {
+        public IUsnJournalReader Open(string volumeId) => new FakeUsnJournalReader
+        {
+            Descriptor = new UsnJournalDescriptor(1, 1, 1, 1, long.MaxValue, 0, 0)
+        };
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition, TimeSpan limit)

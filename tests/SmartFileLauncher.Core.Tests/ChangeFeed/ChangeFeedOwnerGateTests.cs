@@ -33,35 +33,41 @@ public sealed class ChangeFeedOwnerGateTests : IDisposable
 
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        var started = new ManualResetEventSlim();
-        var finished = new ManualResetEventSlim();
+        using var started = new ManualResetEventSlim();
+        using var finished = new ManualResetEventSlim();
 
-        var blocker = Task.Run(() =>
+        var blocker = StartDedicated(() =>
         {
             using var scope = holder.EnterOwnerScope();
             entered.Set();
-            release.Wait(Budget);
+            release.Wait();
         });
 
-        Assert.True(entered.Wait(Budget), "Kapı tutulamadı.");
-
-        var worker = Task.Run(() =>
+        var worker = Task.CompletedTask;
+        try
         {
-            started.Set();
-            Run(contender, operation);
-            finished.Set();
-        });
+            Assert.True(entered.Wait(Budget), "Kapı tutulamadı.");
 
-        Assert.True(started.Wait(Budget), "İkinci iş başlamadı.");
-        Assert.False(
-            finished.Wait(TimeSpan.FromMilliseconds(300)),
-            $"{operation} kapı tutulurken tamamlandı.");
+            worker = StartDedicated(() =>
+            {
+                started.Set();
+                Run(contender, operation);
+                finished.Set();
+            });
 
-        release.Set();
+            Assert.True(started.Wait(Budget), "İkinci iş başlamadı.");
+            Assert.False(
+                finished.Wait(TimeSpan.FromMilliseconds(300)),
+                $"{operation} kapı tutulurken tamamlandı.");
 
-        Assert.True(finished.Wait(Budget), $"{operation} kapı bırakılınca tamamlanmadı.");
-        await blocker;
-        await worker;
+            release.Set();
+            Assert.True(finished.Wait(Budget), $"{operation} kapı bırakılınca tamamlanmadı.");
+        }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(blocker, worker);
+        }
     }
 
     [Fact]
@@ -74,30 +80,35 @@ public sealed class ChangeFeedOwnerGateTests : IDisposable
 
         using var release = new ManualResetEventSlim();
         using var entered = new ManualResetEventSlim();
-        var finished = new ManualResetEventSlim();
+        using var finished = new ManualResetEventSlim();
 
-        var blocker = Task.Run(() =>
+        var blocker = StartDedicated(() =>
         {
             using var scope = first.EnterOwnerScope();
             entered.Set();
-            release.Wait(Budget);
+            release.Wait();
         });
 
-        Assert.True(entered.Wait(Budget), "Kapı tutulamadı.");
-
-        var worker = Task.Run(() =>
+        var worker = Task.CompletedTask;
+        try
         {
-            Run(second, "enqueue");
-            finished.Set();
-        });
+            Assert.True(entered.Wait(Budget), "Kapı tutulamadı.");
 
-        Assert.True(
-            finished.Wait(Budget),
-            "Farklı sahip dizini birinci kapıda bekledi.");
+            worker = StartDedicated(() =>
+            {
+                Run(second, "enqueue");
+                finished.Set();
+            });
 
-        release.Set();
-        await blocker;
-        await worker;
+            Assert.True(
+                finished.Wait(Budget),
+                "Farklı sahip dizini birinci kapıda bekledi.");
+        }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(blocker, worker);
+        }
     }
 
     [Fact]
@@ -135,7 +146,7 @@ public sealed class ChangeFeedOwnerGateTests : IDisposable
         using var entered = new ManualResetEventSlim();
         var finished = new ManualResetEventSlim();
 
-        var compound = Task.Run(() =>
+        var compound = StartDedicated(() =>
         {
             using var scope = writer.EnterOwnerScope();
             entered.Set();
@@ -146,7 +157,7 @@ public sealed class ChangeFeedOwnerGateTests : IDisposable
 
         Assert.True(entered.Wait(Budget), "Kapı tutulamadı.");
 
-        var reader = Task.Run(() =>
+        var reader = StartDedicated(() =>
         {
             contender.ReadSubscription();
             observed.Add(2);
@@ -159,6 +170,9 @@ public sealed class ChangeFeedOwnerGateTests : IDisposable
 
         Assert.Equal(new[] { 1, 2 }, observed);
     }
+
+    private static Task StartDedicated(Action action) => Task.Factory.StartNew(
+        action, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
     private void Run(IChangeFeedStore store, string operation)
     {
