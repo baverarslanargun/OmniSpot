@@ -22,6 +22,12 @@
         xmlns:converters="clr-namespace:SmartFileLauncher.UI.Converters">
     
     <Window.Resources>
+        <Style x:Key="IndexWaitGlint" TargetType="TextBlock">
+            <Setter Property="IsHitTestVisible" Value="False"/>
+            <Setter Property="Foreground" Value="#64748B"/>
+        </Style>
+        <Style x:Key="SearchWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}"/>
+        <Style x:Key="AiWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}"/>
         <Style x:Key="ToolbarButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="#F1F5F9"/>
             <Setter Property="BorderBrush" Value="#E2E8F0"/>
@@ -218,16 +224,6 @@
         <Geometry x:Key="WarningTriangleGeometry">M12 2.5 L22.5 20.5 H1.5 Z</Geometry>
         <Geometry x:Key="WarningMarkGeometry">M12 9 V14.2 M12 17.2 V17.3</Geometry>
         <BitmapImage x:Key="OmniSpotLogo" UriSource="/Resources/omnispot-amblem.png"/>
-        <SolidColorBrush x:Key="ShimmerBrush" Color="#E6EBF3"/>
-        <DataTemplate x:Key="SkeletonCardTemplate">
-            <Border Width="132" Height="150" Margin="10,10" Background="White" CornerRadius="16" BorderBrush="#E2E8F0" BorderThickness="1" Padding="16,20,16,16">
-                <StackPanel HorizontalAlignment="Center">
-                    <Border Background="{DynamicResource ShimmerBrush}" Width="72" Height="72" CornerRadius="18" Margin="0,0,0,12"/>
-                    <Border Background="{DynamicResource ShimmerBrush}" Width="84" Height="10" CornerRadius="5" Margin="0,0,0,7"/>
-                    <Border Background="{DynamicResource ShimmerBrush}" Width="56" Height="10" CornerRadius="5"/>
-                </StackPanel>
-            </Border>
-        </DataTemplate>
         <Style x:Key="StateTile" TargetType="Border">
             <Setter Property="Width" Value="104"/>
             <Setter Property="Height" Value="104"/>
@@ -958,6 +954,7 @@
                                 <ColumnDefinition Width="Auto"/> <!-- Search Icon -->
                                 <ColumnDefinition Width="*"/> <!-- Search Input -->
                                 <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             
                             <!-- Modern Search Icon -->
@@ -978,8 +975,12 @@
                                            IsHitTestVisible="False"
                                            FontWeight="Normal"
                                            Visibility="Visible"/>
+                                <TextBlock x:Name="SearchWaitShimmer"
+                                           Text="{Binding Text, ElementName=SearchWatermark}"
+                                           FontSize="16" VerticalAlignment="Center"
+                                           Style="{StaticResource SearchWaitGlint}" Visibility="Collapsed"/>
                                 
-                                <TextBox x:Name="SearchBox" 
+                                <TextBox x:Name="SearchBox" IsEnabled="False"
                                          FontSize="16" 
                                          Background="Transparent" 
                                          Foreground="#1E293B" 
@@ -990,7 +991,11 @@
                                          Padding="0"/>
                             </Grid>
 
-                            <Grid Grid.Column="2">
+                            <TextBlock x:Name="BackgroundIndexStatus" Grid.Column="2" Text="AI hazırlanıyor"
+                                       FontSize="9" Foreground="#64748B" TextAlignment="Right" VerticalAlignment="Center"
+                                       Margin="10,2,0,0" Visibility="Collapsed"
+                                       ToolTip="Dosya araması hazır. AI ve gelişmiş arama indeksi arka planda hazırlanıyor."/>
+                            <Grid Grid.Column="3">
                                 <Border x:Name="FilterBadge"
                                         Visibility="Collapsed"
                                         Background="#E4EDFB"
@@ -1081,75 +1086,80 @@
                     
                     <!-- Natural Language Toggle -->
                     <StackPanel x:Name="AiControls" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
-                    <ToggleButton x:Name="NaturalLanguageToggle"
-                                  FontSize="11" 
-                                  FontWeight="SemiBold"
-                                  Padding="12,0"
-                                  Height="40"
-                                  Margin="0"
-                                  Background="#F1F5F9"
-                                  Foreground="#64748B"
-                                  BorderThickness="0"
-                                  Cursor="Hand"
-                                  VerticalAlignment="Center"
-                                  ToolTipService.ShowOnDisabled="True">
-                        <ToggleButton.Style>
-                            <Style TargetType="ToggleButton">
-                                <Setter Property="ToolTip" Value="AI destekli doğal dil araması"/>
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ToggleButton">
-                                            <Border x:Name="border"
-                                                    Background="{TemplateBinding Background}"
-                                                    CornerRadius="12"
-                                                    Padding="{TemplateBinding Padding}"
-                                                    BorderBrush="#E2E8F0"
-                                                    BorderThickness="1">
-                                                <TextBlock x:Name="content" 
-                                                           Text="🤖 AI" 
-                                                           Foreground="{TemplateBinding Foreground}"
-                                                           FontSize="{TemplateBinding FontSize}"
-                                                           FontWeight="{TemplateBinding FontWeight}"
-                                                           HorizontalAlignment="Center" 
-                                                           VerticalAlignment="Center"/>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsChecked" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#007AFF"/>
-                                                    <Setter TargetName="content" Property="Foreground" Value="White"/>
-                                                </Trigger>
-                                                <MultiTrigger>
-                                                    <MultiTrigger.Conditions>
-                                                        <Condition Property="IsMouseOver" Value="True"/>
-                                                        <Condition Property="IsChecked" Value="False"/>
-                                                    </MultiTrigger.Conditions>
-                                                    <Setter TargetName="border" Property="Background" Value="#E8E8ED"/>
-                                                </MultiTrigger>
-                                                <MultiTrigger>
-                                                    <MultiTrigger.Conditions>
-                                                        <Condition Property="IsMouseOver" Value="True"/>
-                                                        <Condition Property="IsChecked" Value="True"/>
-                                                    </MultiTrigger.Conditions>
-                                                    <Setter TargetName="border" Property="Background" Value="#0066DD"/>
-                                                </MultiTrigger>
-                                                <Trigger Property="IsEnabled" Value="False">
-                                                    <Setter TargetName="border" Property="Background" Value="#E8E8E8"/>
-                                                    <Setter TargetName="content" Property="Foreground" Value="#AAAAAA"/>
-                                                    <Setter Property="Cursor" Value="No"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                                <Style.Triggers>
-                                    <Trigger Property="IsEnabled" Value="False">
-                                        <Setter Property="ToolTip" Value="⚠️ İnternet bağlantısı yok - AI modu kullanılamıyor"/>
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ToggleButton.Style>
-                    </ToggleButton>
-                    <Button x:Name="AiEffortButton" Width="44" Height="40" Margin="4,0,0,0"
+                    <Grid>
+                        <ToggleButton x:Name="NaturalLanguageToggle" IsEnabled="False"
+                                      FontSize="11"
+                                      FontWeight="SemiBold"
+                                      Padding="12,0"
+                                      Height="40"
+                                      Margin="0"
+                                      Background="#F1F5F9"
+                                      Foreground="#64748B"
+                                      BorderThickness="0"
+                                      Cursor="Hand"
+                                      VerticalAlignment="Center"
+                                      ToolTipService.ShowOnDisabled="True">
+                            <ToggleButton.Style>
+                                <Style TargetType="ToggleButton">
+                                    <Setter Property="ToolTip" Value="AI destekli doğal dil araması"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ToggleButton">
+                                                <Border x:Name="border"
+                                                        Background="{TemplateBinding Background}"
+                                                        CornerRadius="12"
+                                                        Padding="{TemplateBinding Padding}"
+                                                        BorderBrush="#E2E8F0"
+                                                        BorderThickness="1">
+                                                    <TextBlock x:Name="content"
+                                                               Text="🤖 AI"
+                                                               Foreground="{TemplateBinding Foreground}"
+                                                               FontSize="{TemplateBinding FontSize}"
+                                                               FontWeight="{TemplateBinding FontWeight}"
+                                                               HorizontalAlignment="Center"
+                                                               VerticalAlignment="Center"/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsChecked" Value="True">
+                                                        <Setter TargetName="border" Property="Background" Value="#007AFF"/>
+                                                        <Setter TargetName="content" Property="Foreground" Value="White"/>
+                                                    </Trigger>
+                                                    <MultiTrigger>
+                                                        <MultiTrigger.Conditions>
+                                                            <Condition Property="IsMouseOver" Value="True"/>
+                                                            <Condition Property="IsChecked" Value="False"/>
+                                                        </MultiTrigger.Conditions>
+                                                        <Setter TargetName="border" Property="Background" Value="#E8E8ED"/>
+                                                    </MultiTrigger>
+                                                    <MultiTrigger>
+                                                        <MultiTrigger.Conditions>
+                                                            <Condition Property="IsMouseOver" Value="True"/>
+                                                            <Condition Property="IsChecked" Value="True"/>
+                                                        </MultiTrigger.Conditions>
+                                                        <Setter TargetName="border" Property="Background" Value="#0066DD"/>
+                                                    </MultiTrigger>
+                                                    <Trigger Property="IsEnabled" Value="False">
+                                                        <Setter TargetName="border" Property="Background" Value="#E8E8E8"/>
+                                                        <Setter TargetName="content" Property="Foreground" Value="#AAAAAA"/>
+                                                        <Setter Property="Cursor" Value="No"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                    <Style.Triggers>
+                                        <Trigger Property="IsEnabled" Value="False">
+                                            <Setter Property="ToolTip" Value="⚠️ İnternet bağlantısı yok - AI modu kullanılamıyor"/>
+                                        </Trigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ToggleButton.Style>
+                        </ToggleButton>
+                        <TextBlock x:Name="AiWaitShimmer" Text="🤖 AI" FontSize="11" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" VerticalAlignment="Center"
+                                   Style="{StaticResource AiWaitGlint}" Visibility="Collapsed"/>
+                    </Grid>
+                    <Button x:Name="AiEffortButton" IsEnabled="False" Width="44" Height="40" Margin="4,0,0,0"
                             Click="AiEffortButton_Click" AutomationProperties.Name="AI eforu: Medium">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
@@ -1385,47 +1395,8 @@
             
             <!-- Results Area -->
             <Grid Grid.Row="1" Margin="0">
-                <!-- Loading Overlay -->
-                <Border x:Name="LoadingOverlay"
-                        Background="#F8FAFF"
-                        CornerRadius="0,0,8,8"
-                        Visibility="Visible"
-                        Panel.ZIndex="10"
-                        Padding="40,36">
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <Grid Width="128" Height="128" HorizontalAlignment="Center" Margin="0,0,0,20">
-                            <Image Source="{StaticResource OmniSpotLogo}" Width="112" Height="112" RenderOptions.BitmapScalingMode="HighQuality"/>
-                        </Grid>
-                        <TextBlock Text="OmniSpot hazırlanıyor" Style="{StaticResource StateTitle}"/>
-                        <TextBlock x:Name="LoadingStatus" Text="Başlatılıyor..." FontSize="13.5" FontWeight="Normal" Foreground="#4A5462"
-                                   HorizontalAlignment="Center" TextAlignment="Center" TextWrapping="Wrap" MaxWidth="380" Margin="0,0,0,18"/>
-                        <Grid x:Name="LoadingProgress" Width="240" Height="4" HorizontalAlignment="Center" ClipToBounds="True">
-                            <Border Background="#E3ECFB" CornerRadius="2"/>
-                            <Border x:Name="LoadingProgressFill" Background="#3F7EE8" CornerRadius="2" HorizontalAlignment="Left" Width="0"/>
-                            <Border x:Name="LoadingProgressPulse" Width="96" CornerRadius="2" HorizontalAlignment="Left" Visibility="Collapsed">
-                                <Border.Background>
-                                    <LinearGradientBrush StartPoint="0,0" EndPoint="1,0">
-                                        <GradientStop Color="#003F7EE8" Offset="0"/>
-                                        <GradientStop Color="#3F7EE8" Offset="0.5"/>
-                                        <GradientStop Color="#003F7EE8" Offset="1"/>
-                                    </LinearGradientBrush>
-                                </Border.Background>
-                                <Border.RenderTransform>
-                                    <TranslateTransform x:Name="LoadingProgressPulseShift" X="-96"/>
-                                </Border.RenderTransform>
-                            </Border>
-                        </Grid>
-                    </StackPanel>
-                </Border>
 
-                <!-- Skeleton placeholder while the search catalog is being built -->
-                <Border x:Name="SkeletonPanel" Visibility="Collapsed" Background="Transparent" Padding="20,12,20,20" IsHitTestVisible="False">
-                    <ItemsControl x:Name="SkeletonCards" ItemTemplate="{StaticResource SkeletonCardTemplate}" HorizontalAlignment="Center" Focusable="False">
-                        <ItemsControl.ItemsPanel>
-                            <ItemsPanelTemplate><WrapPanel Orientation="Horizontal" MaxWidth="608" HorizontalAlignment="Center"/></ItemsPanelTemplate>
-                        </ItemsControl.ItemsPanel>
-                    </ItemsControl>
-                </Border>
+
 
                 <!-- Desktop Icons (Hidden by default in Spotlight style) -->
                 <Border x:Name="DesktopIconsScroll"
