@@ -4,7 +4,7 @@
 
 OmniSpot'un aktif doğal dil akışı Celeris-1 ile intent analizi ve Groq üzerindeki Qwen ile keyword üretimini paralel çalıştırır. Sonuçlar `StructuredQuery` nesnesine dönüştürülür. Metadata-only sorgularda da iki çağrı yapılır; keyword yanıtı yanlış `filter` kararını düzeltebilir. Geçici 429/5xx için her çağrı en fazla bir kez yinelenebildiğinden normalde iki, en kötü durumda dört POST oluşabilir. İstek boyutu veya kalıcı kota kaynaklı 429 aynı payload ile yinelenmez. İnternet yoksa arama standard/local yola düşer. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
 
-Standart arama Groq kullanmaz ve yerel indeks üzerinde çalışır.
+Standart arama dış AI servisi kullanmaz ve yerel indeks üzerinde anlık çalışır. AI modunda metin girişi son tuştan sonra 600 ms sessizlik bekler. Bu sırada yeni tuş, metni temizleme, mod değiştirme veya kapanış önceki beklemeyi iptal eder. AI modu kapatıldığında mevcut metinle standart arama hemen başlar. Otomatik indeks yenilemesi daha önce çözülmüş AI sorgusunu yerel olarak çalıştırır; bu beklemeyi ve sağlayıcı çağrılarını tekrarlamaz.
 
 AI düğmesine fareyle gelindiğinde veya klavyeyle odaklanıldığında yanında efor ibresi görünür. İbreye her tıklama Low → Medium → High → Low döngüsünde ilerler. Varsayılan Orta düzeyidir; seçim kaydedilir ve yalnız Qwen keyword isteğine uygulanır. Celeris doğrudan yanıt verir; düşünme kapalıdır. Efor değiştiğinde mevcut sorgu yeniden aranır. Her istek seçimini ayrı taşır; sonraki seçim devam eden çağrının profilini değiştirmez. Yüksek efor daha uzun sürebilir; daha iyi sonuç veya kota sorunlarının çözülmesini garanti etmez.
 

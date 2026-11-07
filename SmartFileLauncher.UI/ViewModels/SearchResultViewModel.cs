@@ -35,18 +35,22 @@ public class SearchResultViewModel : INotifyPropertyChanged
         set
         {
             if (_thumbnail != value)
-            {
-                _thumbnail = value;
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
-                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ThumbnailHasFrame)));
-            }
+                SetThumbnail(value, Services.ThumbnailFraming.IsOpaque(value));
         }
     }
 
-    public bool ThumbnailHasFrame => Services.ThumbnailFraming.IsOpaque(Thumbnail);
+    public bool ThumbnailHasFrame { get; private set; }
+
+    internal void SetThumbnail(MediaImageSource? thumbnail, bool hasFrame)
+    {
+        if (_thumbnail == thumbnail) return;
+        _thumbnail = thumbnail;
+        ThumbnailHasFrame = hasFrame;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(ThumbnailHasFrame)));
+    }
 
     private bool _isNew;
-
     public bool IsNew
     {
         get => _isNew;

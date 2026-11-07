@@ -93,6 +93,14 @@ $env:OMNISPOT_GROQ_KEYWORD_API_KEY = "gecersiz"
 
 Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam ettiğini, logda keyword uyarısı bulunduğunu ve sorgu metninin basit keyword olarak kullanıldığını doğrulayın. Test bittikten sonra süreç değişkenlerini temizleyin.
 
+## Senaryo 5 — İndeks değişirken açık aramanın korunması
+
+1. Bir doğal dil araması başlatın. Yanıt beklenirken örnek klasörde bir dosya ekleyin veya yeniden adlandırın.
+2. AI isteğinin indeks bildirimiyle iptal edilmediğini ve sonuçların standart dosya adı aramasına dönüşmediğini doğrulayın.
+3. İlk yanıt geldikten sonra aynı örnek klasörde sorguya uyan bir dosya ekleyin. Sonuçlar mevcut intent ve keyword çözümlemesiyle yerel olarak yenilenmeli; yeni sağlayıcı çağrısı yapılmamalıdır.
+4. Standart dosya adı aramasında sorguyla ilgisiz bir dosyayı değiştirin. MFT indeksinin eski/yeni ad özeti sayesinde yerel sorgu da tekrarlanmamalıdır. AI sorguları, klasör yolu değişiklikleri, tarih filtreleri ve kapsamı bilinmeyen bildirimlerde yerel sonuç kontrolü devam eder. Sonuçlar aynı kaldığında liste ve arama logu tekrar sunulmamalıdır.
+5. Otomatik yenilemenin filtreyi, sıralamayı, sonuç limitini ve fallback uyarısını koruduğunu; `aç` içeren önceki bir sorgu nedeniyle dosyayı tekrar açmadığını kontrol edin.
+
 ## Kontrol listesi
 
 - [ ] Standart arama API anahtarı ve ağ olmadan sonuç üretiyor.
@@ -100,6 +108,9 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 - [ ] Intent çağrısı başarısız olduğunda rule-based fallback devreye giriyor.
 - [ ] Keyword çağrısı tek başına başarısız olduğunda intent sonucu korunuyor.
 - [ ] Fallback nedeni kullanıcıya ve loga yansıyor.
+- [ ] İndeks yenilemesi AI sorgusunu koruyor, tekrar API çağrısı veya otomatik dosya açma üretmiyor.
+- [ ] Değişmeyen sonuçlar listeye ve arama loguna tekrar yazılmıyor.
+- [ ] AI modunda hızlı yazılan metin yalnız 600 ms sessizlikten sonra gönderiliyor; standart arama anlık kalıyor.
 - [ ] Kalıcı 429 aynı payload ile tekrarlanmıyor; geçici 429 beklemesi yeni sorguyla sıfırlanmıyor.
 - [ ] Test dosyaları kontrollü biçimde temizlendi.
 
@@ -107,7 +118,9 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 
 Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. `IntentParserTests` mevcut Groq profillerini, rol ve anchor grubu eşlemesini, açık komut korumasını, HTTP retry ve kısmi fallback sözleşmelerini fake HTTP yanıtlarıyla doğrular. `HybridIntentParserTests` ayrı sağlayıcı/anahtar/endpoint, paralel başlangıç, yalnız Qwen eforu, yanlış filter düzeltmesi, eksik/yinelenmiş/yarım intent yanıtı, kısmi hata ve iptali kapsar. UI'daki `AiCredentialsTests` DPAPI okuma ve bozuk yapılandırmanın anahtar içeriğini loglamadan reddini sınar. Gerçek sağlayıcı hesabı, model kalitesi, ağ kabulü ve uçtan uca UI davranışı ayrı manuel doğrulama gerektirir.
 
-`IntentParserRateLimitTests` sentetik HTTP ve denetlenebilir saatle kalıcı/geçici 429 ayrımını, saniye/tarih `Retry-After` süresini, iptal sonrası sağlayıcı beklemesini, uzun beklemede erken retry yapılmamasını ve yarım keyword yanıtının reddini doğrular.
+`SearchRefreshTests` saklanan intent ile API çağrısı ve otomatik dosya açma olmadan yenilemeyi doğrular. `FileIndexChangeNotificationTests` ve `VolumeIndexLifecycleTests` aynı indeks durumunun yeniden bildirilmesini, gerçek değişiklikleri kaybetmeden eler. `MainWindowSearchRefreshTests` gerçek WPF pencere sınıfını sentetik servislerle kullanarak bekleyen AI isteği, yeni kullanıcı sorgusu, kapanış, yenileme hatası ve değişmeyen sonuçların sunumunu sınar.
+
+`IntentParserRateLimitTests` sentetik HTTP ve denetlenebilir saatle kalıcı/geçici 429 ayrımını, saniye/tarih `Retry-After` süresini, iptal sonrası sağlayıcı beklemesini, uzun beklemede erken retry yapılmamasını ve yarım keyword yanıtının reddini doğrular. `MainWindowSearchRefreshTests` ayrıca denetlenebilir zamanlayıcıyla hızlı yazmada tek AI çağrısı, standart aramada bekleme olmaması, silme/mod değiştirme/kapanış iptali ve indeks bildiriminin debounce'u atlayamamasını kapsar.
 
 ## Güncelleme notu — 2026-07-31
 

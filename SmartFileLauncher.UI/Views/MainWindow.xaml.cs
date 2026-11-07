@@ -70,7 +70,15 @@ public partial class MainWindow : Window {
     private readonly object _fileChangeTimerLock = new();
     private readonly RefreshCoalescer _fileChangeRefresh = new();
     private const int FILE_CHANGE_DEBOUNCE_MS = 1000;
-    private CancellationTokenSource? _currentSearchCancellation;
+    private static readonly TimeSpan AiInputDelay = TimeSpan.FromMilliseconds(600);
+    internal TimeProvider SearchTimeProvider { get; set; } = TimeProvider.System;
+    private SearchOperation? _currentSearch;
+    private SearchRequest? _completedSearchRequest;
+    private SearchOutcome? _completedSearchOutcome;
+    private SearchRequest? _refreshSearchRequest;
+    private int _searchRefreshRequested;
+    private readonly SemaphoreSlim _searchWorkGate = new(1, 1);
+    private readonly SemaphoreSlim _searchThumbnailWorkGate = new(2, 2);
     private CancellationTokenSource? _folderLoadCancellation;
     private ThumbnailViewportScheduler? _thumbnailViewport;
     private readonly System.Windows.Threading.DispatcherTimer _viewportDebounce = new();
@@ -111,8 +119,6 @@ public partial class MainWindow : Window {
         get => _viewModel.CutItem;
         set => _viewModel.CutItem = value;
     }
-    private const int DEBOUNCE_DELAY_MS = 1200;
-    private const int LIVE_DEBOUNCE_MS = 120;
     private const int THUMBNAIL_SIZE = 128;
     
     private AppSettings _appSettings;
@@ -238,10 +244,16 @@ public partial class MainWindow : Window {
         DwmSetWindowAttribute(hwnd, 33, ref preference, sizeof(int));
     }
 
-    private void ShowPanel(FrameworkElement panel) {
+    private void ShowPanel(FrameworkElement panel, bool animate = true) {
         if (panel.Visibility == Visibility.Visible) return;
         panel.Visibility = Visibility.Visible;
-        AnimatePanel(panel, 0, 6, 0);
+        if (animate && panel != ResultsContainer) {
+            AnimatePanel(panel, 0, 6, 0);
+        } else {
+            panel.BeginAnimation(OpacityProperty, null);
+            panel.Opacity = 1;
+            panel.RenderTransform = null;
+        }
     }
 
     private void HandleShellToggleRequested() {
@@ -506,6 +518,7 @@ public partial class MainWindow : Window {
         _isNaturalLanguageMode = true;
         SearchWatermark.Text = "🤖 OmniSpot AI - Doğal dil ile ara";
         Log("🤖 Doğal dil modu aktif");
+        RestartSearchAfterModeChange();
     }
 
     private void LoadAiEffortSelection() {
@@ -533,7 +546,7 @@ public partial class MainWindow : Window {
         Log($"🤖 AI eforu: {effort}");
         SearchBox.Focus();
         if (_isNaturalLanguageMode && _isIndexed && !string.IsNullOrWhiteSpace(SearchBox.Text)) {
-            BeginSearch(SearchBox.Text.Trim(), debounce: true);
+            BeginSearch(SearchBox.Text.Trim());
         }
     }
     
@@ -541,6 +554,13 @@ public partial class MainWindow : Window {
         _isNaturalLanguageMode = false;
         SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
         Log("📝 Standart arama modu aktif");
+        RestartSearchAfterModeChange();
+    }
+
+    private void RestartSearchAfterModeChange() {
+        CancelCurrentSearch();
+        if (_isIndexed && !string.IsNullOrWhiteSpace(SearchBox.Text))
+            BeginSearch(SearchBox.Text, debounce: _isNaturalLanguageMode);
     }
     
     private void EnableGridView() {
@@ -744,6 +764,10 @@ public partial class MainWindow : Window {
         } else {
             Log("Dosya değişiklikleri otomatik izleniyor");
         }
+
+        if (!string.IsNullOrWhiteSpace(SearchBox.Text)) {
+            BeginSearch(SearchBox.Text);
+        }
     }
 
     private void HandleFileSystemChange(FileChangeEvent evt)
@@ -754,6 +778,8 @@ public partial class MainWindow : Window {
 
         Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
 
+        if (SearchRefreshPolicy.ShouldRefresh(evt, Volatile.Read(ref _refreshSearchRequest), _measurementRun == null))
+            Interlocked.Exchange(ref _searchRefreshRequested, 1);
         _fileChangeRefresh.Request();
         SchedulePendingFileChange();
     }
@@ -824,7 +850,8 @@ public partial class MainWindow : Window {
                 await RefreshCurrentFolderIconsAsync();
             }
 
-            if (!string.IsNullOrWhiteSpace(SearchBox.Text) &&
+            if (Interlocked.Exchange(ref _searchRefreshRequested, 0) != 0 &&
+                !string.IsNullOrWhiteSpace(SearchBox.Text) &&
                 ResultsContainer.Visibility == Visibility.Visible)
             {
                 await RefreshSearchResultsAsync();
@@ -1010,66 +1037,20 @@ public partial class MainWindow : Window {
     
     private async Task RefreshSearchResultsAsync()
     {
-        if (string.IsNullOrWhiteSpace(_lastSearchQuery)) return;
-        
-        try
+        var query = _lastSearchQuery;
+        if (string.IsNullOrWhiteSpace(query)) return;
+        while (_currentSearch is { } running)
         {
-            var query = _lastSearchQuery;
-            var version = Volatile.Read(ref _searchVersion);
-            var cancellationToken =
-                _currentSearchCancellation?.Token ?? CancellationToken.None;
-            var outcome = await _searchService.SearchAsync(
-                new SearchRequest(
-                    query,
-                    NaturalLanguageMode: false,
-                    HasInternetConnection: _connectivityMonitor.IsConnected,
-                    MaxResults: 50,
-                    Filter: _searchView.Filter,
-                    Sort: _searchView.Sort),
-                cancellationToken);
-            var results = outcome.Results;
+            await running.Completion.Task;
+            if (_isPreparedForShutdown || query != _lastSearchQuery) return;
+        }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!IsCurrentSearch(version)) return;
-            
-            await Dispatcher.InvokeAsync(() =>
-            {
-                if (!IsCurrentSearch(version)) return;
+        if (_isPreparedForShutdown ||
+            _completedSearchRequest is not { } request ||
+            _completedSearchOutcome is not { } outcome ||
+            request.Query != query) return;
 
-                CancelSearchThumbnailRequests();
-        _searchResults.Clear();
-                foreach (var result in results)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var isDirectory = result.IsDirectory;
-                    
-                    var viewModel = new SearchResultViewModel
-                    {
-                        Name = result.Name,
-                        FullPath = result.FullPath,
-                        Score = result.Score,
-                        Icon = isDirectory ? "folder" : GetFileIcon(result.Name),
-                        IsDirectory = isDirectory
-                    };
-                    
-                    if (isDirectory) {
-                        viewModel.SetFolderColors(result.Name);
-                    }
-                    
-                    _searchResults.Add(viewModel);
-                    _ = LoadSearchThumbnailAsync(viewModel);
-                }
-            });
-            
-            Log($"🔄 Arama sonuçları güncellendi");
-        }
-        catch (OperationCanceledException)
-        {
-        }
-        catch (Exception ex)
-        {
-            Log($"⚠️ Arama güncelleme hatası: {ex.Message}");
-        }
+        await StartSearchAsync(query, request, updateLatency: false, previousOutcome: outcome);
     }
     
     private void LoadDesktopIcons() {
@@ -1112,104 +1093,183 @@ public partial class MainWindow : Window {
         if (viewModel.IsDirectory || !ThumbnailKinds.HasPreview(viewModel.Icon)) return;
         if (!_appSettings.ThumbnailPreviewsEnabled || _thumbnailActivity.IsIdle || _isPreparedForShutdown) return;
         var token = _searchThumbnailCancellation?.Token ?? _lifetimeCancellation.Token;
+        var path = viewModel.FullPath;
         try
         {
-            var thumbnail = await _thumbnailService.GetThumbnailAsync(viewModel.FullPath, THUMBNAIL_SIZE, token);
-            if (thumbnail == null || token.IsCancellationRequested) return;
-            await Dispatcher.InvokeAsync(() =>
+            await _searchThumbnailWorkGate.WaitAsync(token).ConfigureAwait(false);
+            try
             {
-                if (!token.IsCancellationRequested && CanApplyThumbnail(thumbnail) && _searchResults.Contains(viewModel))
-                    viewModel.Thumbnail = thumbnail;
-            });
+                var (thumbnail, hasFrame) = await Task.Run(async () =>
+                {
+                    var image = await _thumbnailService.GetThumbnailAsync(path, THUMBNAIL_SIZE, token).ConfigureAwait(false);
+                    return (image, !token.IsCancellationRequested && ThumbnailFraming.IsOpaque(image));
+                }, token).ConfigureAwait(false);
+                if (thumbnail == null || token.IsCancellationRequested) return;
+
+                await Dispatcher.InvokeAsync(async () =>
+                {
+                    await WaitForSearchPresentationAsync(token);
+                    if (!token.IsCancellationRequested && CanApplyThumbnail(thumbnail) && _searchResults.Contains(viewModel))
+                        viewModel.SetThumbnail(thumbnail, hasFrame);
+                }, DispatcherPriority.ApplicationIdle, token).Task.Unwrap().ConfigureAwait(false);
+            }
+            finally
+            {
+                _searchThumbnailWorkGate.Release();
+            }
         }
         catch (OperationCanceledException) { }
     }
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) {
-        if (!_isIndexed) {
-            Log("Arama yapılamadı: İndeksleme henüz tamamlanmadı");
-            return;
-        }
-        
+    private async void SearchBox_TextChanged(object sender, TextChangedEventArgs e) {
         var query = SearchBox.Text;
         
         if (string.IsNullOrWhiteSpace(query)) {
             CancelCurrentSearch();
+            _lastSearchQuery = string.Empty;
+            var version = Volatile.Read(ref _searchVersion);
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            if (!IsCurrentSearch(version) || _isPreparedForShutdown) return;
+
+            SearchLatencyText.Visibility = Visibility.Collapsed;
             
             ResultsContainer.Visibility = Visibility.Collapsed;
-            ShowPanel(DesktopIconsScroll);
+            ShowPanel(DesktopIconsScroll, animate: false);
             UpdateFilterBadge();
             CancelSearchThumbnailRequests();
-        _searchResults.Clear();
+            _searchResults.Clear();
         } else {
-            BeginSearch(query, debounce: true);
+            BeginSearch(query, debounce: _isNaturalLanguageMode);
         }
     }
 
-    private void BeginSearch(string query, bool debounce) {
-        var cancellation = new CancellationTokenSource();
-        var previous = Interlocked.Exchange(
-            ref _currentSearchCancellation,
-            cancellation);
-        var version = Interlocked.Increment(ref _searchVersion);
+    private sealed class SearchOperation : IDisposable {
+        private readonly CancellationTokenSource _cancellation = new();
+        public bool UpdateLatency { get; init; }
+        public long StartedTimestamp { get; } = Stopwatch.GetTimestamp();
+        public CancellationToken Token => _cancellation.Token;
+        public Task CancellationTask { get; private set; } = Task.CompletedTask;
+        public TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public bool WaitForInput { get; init; }
 
-        try {
-            previous?.Cancel();
-        } finally {
-            previous?.Dispose();
+        public void Cancel() {
+            if (!_cancellation.IsCancellationRequested)
+                CancellationTask = _cancellation.CancelAsync();
         }
 
+        public void Dispose() => _cancellation.Dispose();
+    }
+
+    private void BeginSearch(string query, bool debounce = false) => _ = StartSearchAsync(query, debounce: debounce);
+
+    private Task StartSearchAsync(string query, SearchRequest? request = null, bool updateLatency = true,
+        SearchOutcome? previousOutcome = null, bool debounce = false) {
+        if (!_isIndexed || _isPreparedForShutdown) return Task.CompletedTask;
+
+        request ??= new SearchRequest(query, _isNaturalLanguageMode, _connectivityMonitor.IsConnected,
+            ReasoningEffort: _appSettings.AiReasoningEffort, Filter: _searchView.Filter, Sort: _searchView.Sort);
+        Volatile.Write(ref _refreshSearchRequest, request);
+        if (previousOutcome == null) {
+            _completedSearchRequest = null;
+            _completedSearchOutcome = null;
+        }
+        var operation = new SearchOperation { UpdateLatency = updateLatency,
+            WaitForInput = debounce && request.NaturalLanguageMode && previousOutcome == null };
+        var previous = Interlocked.Exchange(ref _currentSearch, operation);
+        var version = Interlocked.Increment(ref _searchVersion);
+        previous?.Cancel();
+
         _lastSearchQuery = query;
-        _ = ExecuteSearchRequestAsync(query, version, cancellation, debounce);
+        return ExecuteSearchRequestAsync(query, version, operation, request, updateLatency, previousOutcome);
     }
 
     private async Task ExecuteSearchRequestAsync(
         string query,
         long version,
-        CancellationTokenSource cancellation,
-        bool debounce) {
+        SearchOperation operation,
+        SearchRequest? request,
+        bool updateLatency,
+        SearchOutcome? previousOutcome) {
+        var cancellationToken = operation.Token;
         try {
-            if (debounce) {
-                await Task.Delay(_isNaturalLanguageMode ? DEBOUNCE_DELAY_MS : LIVE_DEBOUNCE_MS, cancellation.Token);
-            }
-
-            cancellation.Token.ThrowIfCancellationRequested();
+            await Dispatcher.Yield(DispatcherPriority.Background);
+            if (operation.WaitForInput)
+                await Task.Delay(AiInputDelay, SearchTimeProvider, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(version)) return;
 
-            DesktopIconsScroll.Visibility = Visibility.Collapsed;
-            ShowPanel(ResultsContainer);
-            UpdateFilterBadge();
+            if (previousOutcome == null) {
+                DesktopIconsScroll.Visibility = Visibility.Collapsed;
+                ShowPanel(ResultsContainer);
+                UpdateFilterBadge();
+            }
+            if (updateLatency) {
+                SearchLatencyText.Text = "… ms";
+                SearchLatencyText.ToolTip = "Arama sürüyor";
+                SearchLatencyText.Visibility = Visibility.Visible;
+            }
 
-            if (_isNaturalLanguageMode) LogSearchQuery(query);
-            if (_isNaturalLanguageMode ||
-                (_searchResults.Count == 0 && NoResultsPanel.Visibility != Visibility.Visible)) {
+            if (previousOutcome == null && _searchResults.Count == 0 && NoResultsPanel.Visibility != Visibility.Visible) {
                 ShowSearchingIndicator(query);
             }
 
-            await RunSearchAsync(query, version, cancellation.Token);
+            await RunSearchAsync(query, version, cancellationToken, request, operation.StartedTimestamp, updateLatency, previousOutcome);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
             if (!IsCurrentSearch(version)) return;
 
             Log($"❌ Arama exception: {ex.Message}");
+            if (updateLatency) {
+                SearchLatencyText.Text = "— ms";
+                SearchLatencyText.ToolTip = "Arama tamamlanamadı";
+            }
             ShowError("Arama sırasında bir hata oluştu", ex.Message);
+        } finally {
+            Interlocked.CompareExchange(ref _currentSearch, null, operation);
+            try {
+                await operation.CancellationTask;
+            } catch (Exception ex) {
+                Log($"⚠️ Arama iptal hatası: {ex.Message}");
+            } finally {
+                operation.Dispose();
+                operation.Completion.TrySetResult();
+            }
         }
     }
 
     private void CancelCurrentSearch() {
+        Volatile.Write(ref _refreshSearchRequest, null);
+        _completedSearchRequest = null;
+        _completedSearchOutcome = null;
         Interlocked.Increment(ref _searchVersion);
-        var cancellation = Interlocked.Exchange(
-            ref _currentSearchCancellation,
-            null);
+        Interlocked.Exchange(ref _currentSearch, null)?.Cancel();
+    }
 
-        try {
-            cancellation?.Cancel();
-        } finally {
-            cancellation?.Dispose();
-        }
+    private async Task<(SearchOutcome Outcome, TimeSpan Elapsed)> SearchInBackgroundAsync(
+        SearchRequest request, long version, CancellationToken cancellationToken, SearchOutcome? previousOutcome) {
+        return await Task.Run(async () => {
+            await _searchWorkGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!IsCurrentSearch(version) || _isPreparedForShutdown)
+                    throw new OperationCanceledException(cancellationToken);
+                var timestamp = Stopwatch.GetTimestamp();
+                var outcome = previousOutcome == null
+                    ? await _searchService.SearchAsync(request, cancellationToken).ConfigureAwait(false)
+                    : await _searchService.RefreshAsync(request, previousOutcome, cancellationToken).ConfigureAwait(false);
+                return (outcome, Stopwatch.GetElapsedTime(timestamp));
+            } finally {
+                _searchWorkGate.Release();
+            }
+        }, cancellationToken);
     }
 
     private bool IsCurrentSearch(long version) =>
         version == Volatile.Read(ref _searchVersion);
+
+    private async Task WaitForSearchPresentationAsync(CancellationToken cancellationToken) {
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        cancellationToken.ThrowIfCancellationRequested();
+    }
     
     private void ShowSearchingIndicator(string query) {
         SearchingPanel.Visibility = Visibility.Visible;
@@ -1386,14 +1446,18 @@ public partial class MainWindow : Window {
             
             ErrorPanel.Visibility = Visibility.Collapsed;
             FallbackWarningBanner.Visibility = Visibility.Collapsed;
-            BeginSearch(_lastSearchQuery, debounce: false);
+            BeginSearch(_lastSearchQuery);
         }
     }
     
     private async Task RunSearchAsync(
         string query,
         long searchVersion,
-        CancellationToken cancellationToken = default) {
+        CancellationToken cancellationToken,
+        SearchRequest? request,
+        long requestTimestamp,
+        bool updateLatency,
+        SearchOutcome? previousOutcome) {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsCurrentSearch(searchVersion)) return;
 
@@ -1408,29 +1472,33 @@ public partial class MainWindow : Window {
         try {
             var searchTimestamp = Stopwatch.GetTimestamp();
             var reasoningEffort = _appSettings.AiReasoningEffort;
-            if (_isNaturalLanguageMode) Log($"🤖 Arama eforu: {reasoningEffort}");
-            var outcome = await _searchService.SearchAsync(
-                new SearchRequest(
+            request ??= new SearchRequest(
                     query,
                     _isNaturalLanguageMode,
                     _connectivityMonitor.IsConnected,
                     ReasoningEffort: reasoningEffort,
                     Filter: _searchView.Filter,
-                    Sort: _searchView.Sort),
-                cancellationToken);
+                    Sort: _searchView.Sort);
+            if (previousOutcome == null && !_indexLifecycle.IsTokenIndexReady && request.NaturalLanguageMode)
+                request = request with { NaturalLanguageMode = false };
+            var naturalLanguageMode = request.NaturalLanguageMode;
+            if (naturalLanguageMode && previousOutcome == null) Log($"🤖 Arama eforu: {reasoningEffort}");
+            var (outcome, queryElapsed) = await SearchInBackgroundAsync(request,
+                searchVersion, cancellationToken, previousOutcome);
             var searchElapsed = Stopwatch.GetElapsedTime(searchTimestamp);
 
-            cancellationToken.ThrowIfCancellationRequested();
+            await WaitForSearchPresentationAsync(cancellationToken);
             if (!IsCurrentSearch(searchVersion)) return;
 
             RecordSearchMetrics(query.Length, searchElapsed, outcome.Results.Count);
-            if (_isNaturalLanguageMode) {
-                LogSearchOutcome(outcome);
-            } else {
-                _ = LogSettledSearchAsync(query, searchVersion, outcome, cancellationToken);
+
+            if (previousOutcome != null && HaveSameSearchResults(previousOutcome, outcome)) {
+                _completedSearchRequest = request;
+                _completedSearchOutcome = outcome;
+                return;
             }
 
-            if (!string.IsNullOrEmpty(outcome.AutoOpenPath)) {
+            if (previousOutcome == null && !string.IsNullOrEmpty(outcome.AutoOpenPath)) {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!IsCurrentSearch(searchVersion)) return;
 
@@ -1438,47 +1506,102 @@ public partial class MainWindow : Window {
                 OpenFile(outcome.AutoOpenPath);
             }
 
-            if (_isNaturalLanguageMode &&
+            if (naturalLanguageMode &&
                 outcome.UsedFallback &&
                 !string.IsNullOrEmpty(outcome.FallbackReason)) {
                 ShowFallbackWarning(outcome.FallbackReason);
-            } else if (_isNaturalLanguageMode &&
+            } else if (naturalLanguageMode &&
                        !string.IsNullOrEmpty(outcome.WarningMessage)) {
                 ShowFallbackWarning(outcome.WarningMessage);
             } else {
                 FallbackWarningBanner.Visibility = Visibility.Collapsed;
             }
 
-            await Dispatcher.InvokeAsync(() => {
-                if (cancellationToken.IsCancellationRequested || !IsCurrentSearch(searchVersion)) return;
-                RenderSearchResults(outcome.Results, cancellationToken);
-            }, System.Windows.Threading.DispatcherPriority.Background);
+            await RenderSearchResultsAsync(outcome.Results, searchVersion, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentSearch(searchVersion)) return;
+
+            _completedSearchRequest = request;
+            _completedSearchOutcome = outcome;
+            if (updateLatency) {
+                var totalElapsed = Stopwatch.GetElapsedTime(requestTimestamp);
+                SearchLatencyText.Text = $"{queryElapsed.TotalMilliseconds:0.0} ms";
+                SearchLatencyText.ToolTip =
+                    $"Arama işlemi: {queryElapsed.TotalMilliseconds:0.0} ms\n" +
+                    $"İstek → liste güncellemesi: {totalElapsed.TotalMilliseconds:0.0} ms\n" +
+                    "AI modunda varsa çözümleme ve ağ beklemesi de dahildir.\n" +
+                    "Toplam süre kuyruk ve UI güncellemesini içerir; ekran çizimi ve küçük resimler hariçtir.";
+            }
+            var literalNames = outcome.Mode is SearchExecutionMode.Standard or SearchExecutionMode.OfflineFallback;
+            if (previousOutcome == null) LogSearchQuery(query, literalNames);
+            else Log($"🔄 Arama sonuçları güncellendi: '{query}'");
+            LogSearchOutcome(outcome);
+            if (outcome.Results.Count == 0 && !literalNames)
+                await LogSearchDiagnosticsAsync(query, searchVersion, cancellationToken);
         } catch (OperationCanceledException) {
             throw;
         } catch (Exception ex) {
             if (!IsCurrentSearch(searchVersion)) return;
 
+            if (previousOutcome != null) {
+                Log($"⚠️ Arama sonuçları güncellenemedi: {ex.Message}");
+                return;
+            }
             Log($"❌ Arama hatası: {ex.Message}");
             Log($"Stack: {ex.StackTrace}");
+            if (updateLatency) {
+                SearchLatencyText.Text = "— ms";
+                SearchLatencyText.ToolTip = "Arama tamamlanamadı";
+            }
             ShowError("Arama sırasında bir hata oluştu", ex.Message);
         }
     }
 
-    private void LogSearchQuery(string query) {
+    private string NoResultsHintText() => _searchView.Filter.IsActive
+        ? "Etkin filtre sonuçları gizliyor olabilir"
+        : "Farklı anahtar kelimeler deneyin";
+
+    private static bool HaveSameSearchResults(SearchOutcome previous, SearchOutcome current) {
+        if (previous.Mode != current.Mode || previous.UsedFallback != current.UsedFallback ||
+            previous.FallbackReason != current.FallbackReason || previous.WarningMessage != current.WarningMessage ||
+            previous.Results.Count != current.Results.Count) return false;
+        for (var i = 0; i < previous.Results.Count; i++) {
+            var left = previous.Results[i];
+            var right = current.Results[i];
+            if (left.Name != right.Name || left.FullPath != right.FullPath || !left.Score.Equals(right.Score) ||
+                left.IsDirectory != right.IsDirectory || left.SizeBytes != right.SizeBytes ||
+                left.LastWriteTime != right.LastWriteTime) return false;
+        }
+        return true;
+    }
+
+    private void LogSearchQuery(string query, bool literalNames) {
         Log($"🔍 Arama sorgusu: '{query}'");
+        if (literalNames) {
+            Log("🧪 Ad içinde arama deneyi: puanlama ve Türkçe toleransı kapalı; filtre ve sıralama korunuyor.");
+            return;
+        }
         var tokens = _searchDiagnostics.Tokenize(query);
         Log($"🔤 Query tokenler: [{string.Join(", ", tokens)}]");
     }
 
-    private async Task LogSettledSearchAsync(string query, long version, SearchOutcome outcome, CancellationToken cancellationToken) {
+    private async Task LogSearchDiagnosticsAsync(string query, long version, CancellationToken cancellationToken) {
         try {
-            await Task.Delay(DEBOUNCE_DELAY_MS, cancellationToken);
+            var diagnostics = await Task.Run(
+                () => _searchDiagnostics.Inspect(query, cancellationToken), cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!IsCurrentSearch(version) || _isPreparedForShutdown) return;
+            foreach (var diagnostic in diagnostics) {
+                Log($"   Token '{diagnostic.Token}' → indekste {diagnostic.MatchCount} eşleşme");
+                if (diagnostic.SampleNames.Count > 0)
+                    Log($"      Örnek: {string.Join(", ", diagnostic.SampleNames)}");
+            }
         } catch (OperationCanceledException) {
-            return;
+            throw;
+        } catch (Exception ex) {
+            if (IsCurrentSearch(version) && !_isPreparedForShutdown)
+                Log($"⚠️ Arama tanılama hatası: {ex.Message}");
         }
-        if (!IsCurrentSearch(version) || _isPreparedForShutdown) return;
-        LogSearchQuery(query);
-        LogSearchOutcome(outcome);
     }
 
     private void LogSearchOutcome(SearchOutcome outcome) {
@@ -1577,18 +1700,16 @@ public partial class MainWindow : Window {
         }
     }
 
-    private void RenderSearchResults(
+    private async Task RenderSearchResultsAsync(
         IReadOnlyList<SearchResult> results,
+        long searchVersion,
         CancellationToken cancellationToken) {
         SearchingPanel.Visibility = Visibility.Collapsed;
         ErrorPanel.Visibility = Visibility.Collapsed;
 
         if (results.Count == 0) {
-            NoResultsHint.Text = _searchView.Filter.IsActive
-                ? "Etkin filtre sonuçları gizliyor olabilir"
-                : "Farklı anahtar kelimeler deneyin";
+            NoResultsHint.Text = NoResultsHintText();
             CancelSearchThumbnailRequests();
-            foreach (var current in _searchResults) current.IsRemoving = false;
             _searchResults.Clear();
             NoResultsPanel.Visibility = Visibility.Visible;
             ResultsList.Visibility = Visibility.Collapsed;
@@ -1608,7 +1729,6 @@ public partial class MainWindow : Window {
         foreach (var current in _searchResults) existing[current.FullPath] = current;
 
         var desired = new List<SearchResultViewModel>(results.Count);
-        var added = new List<SearchResultViewModel>();
         foreach (var result in results) {
             cancellationToken.ThrowIfCancellationRequested();
             if (existing.TryGetValue(result.FullPath, out var kept)) {
@@ -1623,8 +1743,7 @@ public partial class MainWindow : Window {
                 FullPath = result.FullPath,
                 Score = result.Score,
                 Icon = isDirectory ? "folder" : GetFileIcon(result.Name),
-                IsDirectory = isDirectory,
-                IsNew = _searchResults.Count > 0 && SystemParameters.ClientAreaAnimation
+                IsDirectory = isDirectory
             };
 
             if (isDirectory) {
@@ -1632,131 +1751,47 @@ public partial class MainWindow : Window {
             }
 
             desired.Add(viewModel);
-            added.Add(viewModel);
+        }
+
+        const int resultUpdateBudgetMilliseconds = 2;
+        const int maxChangesPerBatch = 8;
+        var batchStarted = Stopwatch.GetTimestamp();
+        var changesInBatch = 0;
+
+        async ValueTask YieldToInputIfNeededAsync() {
+            if (++changesInBatch < maxChangesPerBatch &&
+                Stopwatch.GetElapsedTime(batchStarted).TotalMilliseconds < resultUpdateBudgetMilliseconds) return;
+
+            await WaitForSearchPresentationAsync(cancellationToken);
+            if (!IsCurrentSearch(searchVersion)) throw new OperationCanceledException(cancellationToken);
+            batchStarted = Stopwatch.GetTimestamp();
+            changesInBatch = 0;
         }
 
         var wanted = new HashSet<SearchResultViewModel>(desired);
-        var animateRemoval = SystemParameters.ClientAreaAnimation;
-        var leaving = new List<SearchResultViewModel>();
-        for (var i = _searchResults.Count - 1; i >= 0; i--) {
-            var current = _searchResults[i];
-            if (wanted.Contains(current)) {
-                current.IsRemoving = false;
-                continue;
-            }
-            if (animateRemoval && !current.IsRemoving) {
-                current.IsRemoving = true;
-                leaving.Add(current);
-            } else if (!animateRemoval) {
-                _searchResults.RemoveAt(i);
+        var previous = _searchResults.ToArray();
+        for (var i = previous.Length - 1; i >= 0; i--) {
+            if (!wanted.Contains(previous[i])) {
+                _searchResults.Remove(previous[i]);
+                await YieldToInputIfNeededAsync();
             }
         }
 
-        var host = ActiveResultsHost;
-        var before = CaptureResultPositions(host, desired);
-
         var slot = 0;
         foreach (var item in desired) {
-            while (slot < _searchResults.Count && _searchResults[slot].IsRemoving) slot++;
             var currentIndex = _searchResults.IndexOf(item);
             if (currentIndex < 0) {
                 _searchResults.Insert(slot, item);
+                await YieldToInputIfNeededAsync();
             } else if (currentIndex != slot) {
                 _searchResults.Move(currentIndex, slot);
+                await YieldToInputIfNeededAsync();
             }
             slot++;
         }
 
-        AnimateResultTransitions(host, before, added);
-
-        if (leaving.Count > 0) {
-            var sweep = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(280) };
-            sweep.Tick += (_, _) => {
-                sweep.Stop();
-                foreach (var gone in leaving) {
-                    if (gone.IsRemoving) _searchResults.Remove(gone);
-                }
-            };
-            sweep.Start();
-        }
-
-        foreach (var viewModel in added) {
-            _ = LoadSearchResultThumbnailAsync(viewModel);
-        }
-
-        if (added.Count > 0 && added[0].IsNew) {
-            var settle = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
-            settle.Tick += (_, _) => {
-                settle.Stop();
-                foreach (var viewModel in added) viewModel.IsNew = false;
-            };
-            settle.Start();
-        }
-    }
-
-    private Task LoadSearchResultThumbnailAsync(SearchResultViewModel viewModel) => LoadSearchThumbnailAsync(viewModel);
-
-    private System.Windows.Controls.ItemsControl ActiveResultsHost => _isGridViewMode ? ResultsGrid : ResultsList;
-
-    private static Dictionary<SearchResultViewModel, System.Windows.Point> CaptureResultPositions(
-        System.Windows.Controls.ItemsControl host,
-        IEnumerable<SearchResultViewModel> items) {
-        var positions = new Dictionary<SearchResultViewModel, System.Windows.Point>();
-        if (!SystemParameters.ClientAreaAnimation || !host.IsVisible) return positions;
-        foreach (var item in items) {
-            if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container || !container.IsVisible) continue;
-            try {
-                positions[item] = container.TransformToAncestor(host).Transform(new System.Windows.Point(0, 0));
-            } catch (InvalidOperationException) {
-            }
-        }
-        return positions;
-    }
-
-    private void AnimateResultTransitions(
-        System.Windows.Controls.ItemsControl host,
-        Dictionary<SearchResultViewModel, System.Windows.Point> before,
-        List<SearchResultViewModel> added) {
-        if (!SystemParameters.ClientAreaAnimation || !host.IsVisible) return;
-        host.UpdateLayout();
-        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
-
-        foreach (var (item, oldPosition) in before) {
-            if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container || !container.IsVisible) continue;
-            System.Windows.Point newPosition;
-            try {
-                newPosition = container.TransformToAncestor(host).Transform(new System.Windows.Point(0, 0));
-            } catch (InvalidOperationException) {
-                continue;
-            }
-            var dx = oldPosition.X - newPosition.X;
-            var dy = oldPosition.Y - newPosition.Y;
-            if (Math.Abs(dx) < 0.5 && Math.Abs(dy) < 0.5) continue;
-
-            var shift = new System.Windows.Media.TranslateTransform(dx, dy);
-            container.RenderTransform = shift;
-            var duration = TimeSpan.FromMilliseconds(240);
-            var toZeroX = new System.Windows.Media.Animation.DoubleAnimation(0, duration) { EasingFunction = ease };
-            toZeroX.Completed += (_, _) => {
-                if (ReferenceEquals(container.RenderTransform, shift)) container.RenderTransform = null;
-            };
-            shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, toZeroX);
-            shift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty,
-                new System.Windows.Media.Animation.DoubleAnimation(0, duration) { EasingFunction = ease });
-        }
-
-        var order = 0;
-        foreach (var item in added) {
-            if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container) continue;
-            var fade = new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(260)) {
-                BeginTime = TimeSpan.FromMilliseconds(Math.Min(order, 12) * 22),
-                EasingFunction = ease
-            };
-            container.Opacity = 0;
-            fade.Completed += (_, _) => { container.BeginAnimation(OpacityProperty, null); container.Opacity = 1; };
-            container.BeginAnimation(OpacityProperty, fade);
-            order++;
-        }
+        CancelSearchThumbnailRequests();
+        ReloadSearchThumbnails();
     }
 
     private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
