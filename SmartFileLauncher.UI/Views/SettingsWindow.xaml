@@ -21,311 +21,17 @@
         <SolidColorBrush x:Key="Ink2" Color="#64748B"/>
         <SolidColorBrush x:Key="Ink3" Color="#94A3B8"/>
         <SolidColorBrush x:Key="Line" Color="#E2E8F0"/>
-        <SolidColorBrush x:Key="Ground" Color="#F6F8FC"/>
-        <SolidColorBrush x:Key="Accent" Color="#007AFF"/>
-        <SolidColorBrush x:Key="AccentPressed" Color="#0055BB"/>
-        <SolidColorBrush x:Key="AccentHover" Color="#0066DD"/>
-
-        <Style x:Key="ModernButton" TargetType="Button">
-            <Setter Property="Background" Value="{StaticResource Accent}"/>
-            <Setter Property="Foreground" Value="White"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Padding" Value="14,6"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#0066DD"/>
-                                <Setter TargetName="border" Property="BorderBrush" Value="#0066DD"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#0055BB"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="#1E293B"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="border" Property="Background" Value="#E2E8F0"/>
-                                <Setter TargetName="border" Property="BorderBrush" Value="#E2E8F0"/>
-                                <Setter Property="Foreground" Value="#94A3B8"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="SecondaryButton" TargetType="Button">
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="Medium"/>
-            <Setter Property="Padding" Value="14,6"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#F1F5F9"/>
-                                <Setter TargetName="border" Property="BorderBrush" Value="#CBD5E1"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="border" Property="Background" Value="#E2E8F0"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource Accent}"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#94A3B8"/>
-                                <Setter TargetName="border" Property="Background" Value="#F8FAFC"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="StepButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
-            <Setter Property="Padding" Value="0"/>
-            <Setter Property="Width" Value="28"/>
-            <Setter Property="Height" Value="28"/>
-            <Setter Property="FontSize" Value="15"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
-        </Style>
-
-        <Style x:Key="SectionHeader" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="14"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-            <Setter Property="Margin" Value="0,0,0,4"/>
-        </Style>
-        <Style x:Key="RowLabel" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="Medium"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-        </Style>
-        <Style x:Key="Hint" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
-            <Setter Property="TextWrapping" Value="Wrap"/>
-            <Setter Property="LineHeight" Value="16"/>
-        </Style>
-        <Style x:Key="Card" TargetType="Border">
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="12"/>
-            <Setter Property="Padding" Value="18,14"/>
-            <Setter Property="Margin" Value="0,0,0,12"/>
-        </Style>
-        <Style x:Key="Row" TargetType="Grid">
-            <Setter Property="Margin" Value="0,10,0,0"/>
-        </Style>
-        <Style x:Key="Inset" TargetType="Border">
-            <Setter Property="Background" Value="{StaticResource Ground}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="CornerRadius" Value="8"/>
-            <Setter Property="Padding" Value="12,9"/>
-        </Style>
-
-        <Style x:Key="Switch" TargetType="CheckBox">
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="CheckBox">
-                        <Border x:Name="Track" Width="38" Height="22" CornerRadius="11" Background="#CBD5E1" BorderBrush="Transparent" BorderThickness="1">
-                            <Border x:Name="Thumb" Width="16" Height="16" CornerRadius="8" Background="White" HorizontalAlignment="Left" Margin="2,0,0,0"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Track" Property="Background" Value="{StaticResource Accent}"/>
-                                <Trigger.EnterActions>
-                                    <BeginStoryboard><Storyboard><ThicknessAnimation Storyboard.TargetName="Thumb" Storyboard.TargetProperty="Margin" To="18,0,0,0" Duration="0:0:0.12"/></Storyboard></BeginStoryboard>
-                                </Trigger.EnterActions>
-                                <Trigger.ExitActions>
-                                    <BeginStoryboard><Storyboard><ThicknessAnimation Storyboard.TargetName="Thumb" Storyboard.TargetProperty="Margin" To="2,0,0,0" Duration="0:0:0.12"/></Storyboard></BeginStoryboard>
-                                </Trigger.ExitActions>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Track" Property="Opacity" Value="0.9"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Track" Property="BorderBrush" Value="#1E293B"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter TargetName="Track" Property="Opacity" Value="0.45"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="Segment" TargetType="RadioButton">
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FontSize" Value="12.5"/>
-            <Setter Property="FontWeight" Value="Medium"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
-            <Setter Property="Padding" Value="12,4"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="Seg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="7" Padding="{TemplateBinding Padding}" Margin="2">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Seg" Property="Background" Value="White"/>
-                                <Setter TargetName="Seg" Property="BorderBrush" Value="#CBD5E1"/>
-                                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Seg" Property="BorderBrush" Value="{StaticResource Accent}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style x:Key="NumberBox" TargetType="TextBox">
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="FontWeight" Value="SemiBold"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
-            <Setter Property="Width" Value="72"/>
-            <Setter Property="Height" Value="28"/>
-            <Setter Property="TextAlignment" Value="Center"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
-            <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
-            <Setter Property="Margin" Value="4,0"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="TextBox">
-                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="8">
-                            <ScrollViewer x:Name="PART_ContentHost" Margin="6,0" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="border" Property="BorderBrush" Value="#CBD5E1"/></Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True"><Setter TargetName="border" Property="BorderBrush" Value="{StaticResource Accent}"/></Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <Style TargetType="ListBox">
-            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Background" Value="White"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-            <Setter Property="Padding" Value="2"/>
-        </Style>
-        <Style TargetType="Slider">
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Height" Value="24"/>
-            <Setter Property="IsMoveToPointEnabled" Value="True"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Slider">
-                        <Grid>
-                            <Border Height="4" CornerRadius="2" Background="#E2E8F0" VerticalAlignment="Center"/>
-                            <Track x:Name="PART_Track" VerticalAlignment="Center">
-                                <Track.DecreaseRepeatButton>
-                                    <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
-                                        <RepeatButton.Template>
-                                            <ControlTemplate TargetType="RepeatButton">
-                                                <Border Height="4" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,-8,0"/>
-                                            </ControlTemplate>
-                                        </RepeatButton.Template>
-                                    </RepeatButton>
-                                </Track.DecreaseRepeatButton>
-                                <Track.IncreaseRepeatButton>
-                                    <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
-                                        <RepeatButton.Template>
-                                            <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" Height="24"/></ControlTemplate>
-                                        </RepeatButton.Template>
-                                    </RepeatButton>
-                                </Track.IncreaseRepeatButton>
-                                <Track.Thumb>
-                                    <Thumb Width="18" Height="18" Cursor="Hand">
-                                        <Thumb.Template>
-                                            <ControlTemplate TargetType="Thumb">
-                                                <Border x:Name="Knob" Width="18" Height="18" CornerRadius="9" Background="White" BorderBrush="{StaticResource Accent}" BorderThickness="2"/>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Knob" Property="Background" Value="#E6F0FC"/></Trigger>
-                                                    <Trigger Property="IsDragging" Value="True"><Setter TargetName="Knob" Property="Background" Value="{StaticResource Accent}"/></Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Thumb.Template>
-                                    </Thumb>
-                                </Track.Thumb>
-                            </Track>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
-        <Style x:Key="DetailsToggle" TargetType="ToggleButton">
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="HorizontalAlignment" Value="Left"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="ToggleButton">
-                        <Border Background="Transparent" Padding="2,4">
-                            <StackPanel Orientation="Horizontal">
-                                <Path x:Name="Chevron" Data="M 1,1 L 5,5 L 9,1" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
-                                      Width="10" Height="6" Stretch="None" VerticalAlignment="Center" Margin="0,1,6,0" RenderTransformOrigin="0.5,0.5">
-                                </Path>
-                                <ContentPresenter VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="Chevron" Property="RenderTransform">
-                                    <Setter.Value><RotateTransform Angle="180"/></Setter.Value>
-                                </Setter>
-                            </Trigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
         <SolidColorBrush x:Key="LineStrong" Color="#CBD5E1"/>
+        <SolidColorBrush x:Key="Ground" Color="#F6F8FC"/>
         <SolidColorBrush x:Key="Fill" Color="#EDF1F7"/>
         <SolidColorBrush x:Key="Hover" Color="#F1F5F9"/>
+        <SolidColorBrush x:Key="Accent" Color="#007AFF"/>
+        <SolidColorBrush x:Key="AccentHover" Color="#0066DD"/>
+        <SolidColorBrush x:Key="AccentPressed" Color="#0055BB"/>
         <SolidColorBrush x:Key="AccentSoft" Color="#EAF2FF"/>
         <SolidColorBrush x:Key="Danger" Color="#B42318"/>
+        <BooleanToVisibilityConverter x:Key="BoolToVis"/>
+
         <Style x:Key="FocusRing">
             <Setter Property="Control.Template">
                 <Setter.Value>
@@ -344,8 +50,111 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <Style x:Key="ModernButton" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource Accent}"/>
+            <Setter Property="Foreground" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Padding" Value="16,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource AccentHover}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentHover}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource AccentPressed}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource AccentPressed}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource Line}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource Line}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SecondaryButton" TargetType="Button">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="MinHeight" Value="32"/>
+            <Setter Property="Padding" Value="14,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource Hover}"/>
+                                <Setter TargetName="border" Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="{StaticResource Line}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
+                                <Setter TargetName="border" Property="Background" Value="#F8FAFC"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="RemoveButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
             <Setter Property="Content" Value="Kaldır"/>
+        </Style>
+
+        <Style x:Key="SectionHeader" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+        </Style>
+        <Style x:Key="RowLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="Hint" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="LineHeight" Value="16"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
+                </Trigger>
+            </Style.Triggers>
         </Style>
         <Style x:Key="Validation" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12"/>
@@ -372,10 +181,167 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="20,16,20,18"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+        <Style x:Key="Row" TargetType="Grid">
+            <Setter Property="Margin" Value="0,12,0,0"/>
+        </Style>
         <Style x:Key="Control" TargetType="FrameworkElement">
             <Setter Property="Margin" Value="16,0,0,0"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
+        <Style x:Key="Inset" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource Ground}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Setter Property="Padding" Value="12,10"/>
+        </Style>
+
+        <Style x:Key="ApiKeyInput" TargetType="PasswordBox">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Background" Value="{StaticResource Ground}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style TargetType="ToolTip">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="HasDropShadow" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToolTip">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="1" CornerRadius="6" Padding="8,5">
+                            <ContentPresenter/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="ScrollThumb" TargetType="Thumb">
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Thumb">
+                        <Border x:Name="ThumbSurface" Background="#B9C2CF" CornerRadius="3" Margin="2" Opacity="0.75"/>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Background" Value="#8E99A8"/>
+                                <Setter TargetName="ThumbSurface" Property="Opacity" Value="1"/>
+                            </Trigger>
+                            <Trigger Property="IsDragging" Value="True">
+                                <Setter TargetName="ThumbSurface" Property="Background" Value="#6B7684"/>
+                                <Setter TargetName="ThumbSurface" Property="Opacity" Value="1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ScrollPage" TargetType="RepeatButton">
+            <Setter Property="IsTabStop" Value="False"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Background="Transparent"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ScrollBar">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Width" Value="10"/>
+            <Setter Property="MinWidth" Value="10"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ScrollBar">
+                        <Grid Background="Transparent" Margin="0,4,0,4">
+                            <Track x:Name="PART_Track" IsDirectionReversed="True">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageUpCommand" Style="{StaticResource ScrollPage}"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="ScrollBar.PageDownCommand" Style="{StaticResource ScrollPage}"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Style="{StaticResource ScrollThumb}"/>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="Switch" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="16,0,0,0"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource PillFocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="Track" Width="38" Height="22" CornerRadius="11" Background="{StaticResource LineStrong}" BorderBrush="Transparent" BorderThickness="1">
+                            <Border x:Name="Thumb" Width="16" Height="16" CornerRadius="8" Background="White" HorizontalAlignment="Left"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="False">
+                                <Setter TargetName="Thumb" Property="Margin" Value="2,0,0,0"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Track" Property="Background" Value="{StaticResource Accent}"/>
+                                <Setter TargetName="Thumb" Property="Margin" Value="18,0,0,0"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.9"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Track" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="SegmentTrack" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource Fill}"/>
             <Setter Property="CornerRadius" Value="9"/>
@@ -388,6 +354,103 @@
                 </Trigger>
             </Style.Triggers>
         </Style>
+        <Style x:Key="Segment" TargetType="RadioButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
+            <Setter Property="MinHeight" Value="28"/>
+            <Setter Property="Padding" Value="12,0"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Border x:Name="Seg" Background="Transparent" BorderBrush="Transparent" BorderThickness="1" CornerRadius="7" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Seg" Property="Background" Value="White"/>
+                                <Setter TargetName="Seg" Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StepperFrame" TargetType="Border">
+            <Setter Property="Width" Value="132"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Margin" Value="16,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="8"/>
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+                </Trigger>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+                </Trigger>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.45"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="StepButton" TargetType="Button">
+            <Setter Property="Width" Value="30"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FontSize" Value="15"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" CornerRadius="7" Margin="1">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,0,0,2"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="{StaticResource Hover}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="{StaticResource Line}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="NumberBox" TargetType="TextBox">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="TextAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="CaretBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="SelectionBrush" Value="{StaticResource Accent}"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TextBox">
+                        <Border Background="{TemplateBinding Background}">
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="Select" TargetType="ComboBox">
             <Setter Property="Width" Value="168"/>
             <Setter Property="Height" Value="32"/>
@@ -455,6 +518,32 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Padding" Value="10,7"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentSoft}"/>
+                                <Setter Property="Foreground" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="FolderItem" TargetType="ListBoxItem">
             <Setter Property="FontSize" Value="13"/>
             <Setter Property="Foreground" Value="{StaticResource Ink}"/>
@@ -521,32 +610,93 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="IsHitTestVisible" Value="False"/>
         </Style>
-        <Style x:Key="ApiKeyInput" TargetType="PasswordBox">
-            <Setter Property="FontSize" Value="13"/>
-            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
-            <Setter Property="Background" Value="{StaticResource Ground}"/>
-            <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="10,0"/>
-            <Setter Property="Height" Value="32"/>
+
+        <Style TargetType="Slider">
+            <Setter Property="Width" Value="168"/>
             <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="Height" Value="24"/>
+            <Setter Property="IsMoveToPointEnabled" Value="True"/>
             <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="PasswordBox">
-                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
-                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
-                        </Border>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid>
+                            <Border Height="4" CornerRadius="2" Background="{StaticResource Line}" VerticalAlignment="Center"/>
+                            <Track x:Name="PART_Track" VerticalAlignment="Center">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton Command="Slider.DecreaseLarge" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton">
+                                                <Border Height="4" CornerRadius="2" Background="{StaticResource Accent}" Margin="0,0,-8,0"/>
+                                            </ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Command="Slider.IncreaseLarge" Focusable="False">
+                                        <RepeatButton.Template>
+                                            <ControlTemplate TargetType="RepeatButton"><Border Background="Transparent" Height="24"/></ControlTemplate>
+                                        </RepeatButton.Template>
+                                    </RepeatButton>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb Width="18" Height="18" Cursor="Hand">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border x:Name="Knob" Width="18" Height="18" CornerRadius="9" Background="White" BorderBrush="{StaticResource Accent}" BorderThickness="2"/>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Knob" Property="Background" Value="{StaticResource AccentSoft}"/></Trigger>
+                                                    <Trigger Property="IsDragging" Value="True"><Setter TargetName="Knob" Property="Background" Value="{StaticResource Accent}"/></Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.45"/></Trigger>
+                        </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Setter.Value>
             </Setter>
-            <Style.Triggers>
-                <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                    <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
-                </Trigger>
-            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="DetailsToggle" TargetType="ToggleButton">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink2}"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border Background="Transparent" Padding="0,4">
+                            <StackPanel Orientation="Horizontal">
+                                <Path x:Name="Chevron" Data="M 1,1 L 5,5 L 9,1" Stroke="{TemplateBinding Foreground}" StrokeThickness="1.4" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                      Width="10" Height="6" Stretch="None" VerticalAlignment="Center" Margin="0,1,6,0" RenderTransformOrigin="0.5,0.5"/>
+                                <ContentPresenter VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Chevron" Property="RenderTransform">
+                                    <Setter.Value><RotateTransform Angle="180"/></Setter.Value>
+                                </Setter>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="LegendDot" TargetType="Ellipse">
+            <Setter Property="Width" Value="8"/>
+            <Setter Property="Height" Value="8"/>
+            <Setter Property="Margin" Value="0,2,6,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </Window.Resources>
 
@@ -562,24 +712,24 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
-            <StackPanel Margin="28,22,16,14">
+            <StackPanel Margin="28,22,16,16">
                 <TextBlock Text="Ayarlar" FontSize="20" FontWeight="SemiBold" Foreground="{StaticResource Ink}"/>
-                <TextBlock Text="Kısayol, başlangıç, küçük resim belleği ve arama indeksi" Style="{StaticResource Hint}" Margin="0,2,0,0"/>
+                <TextBlock Text="Kısayol, başlangıç, küçük resim belleği ve arama indeksi" Style="{StaticResource Hint}"/>
             </StackPanel>
             <Button Grid.Column="1" Width="36" Height="36" Margin="0,14,14,0" VerticalAlignment="Top" Cursor="Hand" Focusable="False"
                     ToolTip="Kapat" Click="CloseWindow_Click" WindowChrome.IsHitTestVisibleInChrome="True">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
-                        <Border x:Name="Surface" CornerRadius="12" Background="Transparent">
+                        <Border x:Name="Surface" CornerRadius="10" Background="Transparent">
                             <Path Data="M0 0 L10 10 M10 0 L0 10" Stroke="{StaticResource Ink2}" StrokeThickness="1.6" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                   Width="10" Height="10" Stretch="None" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="#14000000"/>
+                                <Setter TargetName="Surface" Property="Background" Value="{StaticResource Fill}"/>
                             </Trigger>
                             <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Surface" Property="Background" Value="#22000000"/>
+                                <Setter TargetName="Surface" Property="Background" Value="{StaticResource LineStrong}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -587,40 +737,50 @@
             </Button>
         </Grid>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="28,0,28,0">
-            <StackPanel Margin="0,0,0,6">
+        <ScrollViewer x:Name="SettingsScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                      Padding="28,0,28,0" Focusable="False" PreviewMouseWheel="SettingsScroll_PreviewMouseWheel">
+            <ScrollViewer.Template>
+                <ControlTemplate TargetType="ScrollViewer">
+                    <Grid>
+                        <ScrollContentPresenter x:Name="PART_ScrollContentPresenter" Margin="{TemplateBinding Padding}"
+                                                CanContentScroll="{TemplateBinding CanContentScroll}"/>
+                        <ScrollBar x:Name="PART_VerticalScrollBar" HorizontalAlignment="Right" Margin="0,0,8,0"
+                                   Minimum="0" Maximum="{TemplateBinding ScrollableHeight}" ViewportSize="{TemplateBinding ViewportHeight}"
+                                   Value="{Binding VerticalOffset, Mode=OneWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                   Visibility="{TemplateBinding ComputedVerticalScrollBarVisibility}"/>
+                    </Grid>
+                </ControlTemplate>
+            </ScrollViewer.Template>
+            <StackPanel Margin="0,0,0,16">
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Text="Kısayol tuşu" Style="{StaticResource SectionHeader}"/>
-                        <Grid Style="{StaticResource Row}" Margin="0,6,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="Auto"/>
-                            </Grid.ColumnDefinitions>
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="OmniSpot'u uyandırır" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Her uygulamada geçerli genel kısayol." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                <Border Style="{StaticResource Inset}" Padding="12,5" Margin="0,0,8,0">
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                <Border Background="{StaticResource Fill}" CornerRadius="8" Height="32" Padding="12,0" Margin="0,0,8,0">
                                     <TextBlock x:Name="CurrentHotkeyText" Text="Alt + Space" FontSize="13" FontWeight="SemiBold" Foreground="{StaticResource Ink}" VerticalAlignment="Center"/>
                                 </Border>
                                 <Button x:Name="ChangeHotkeyButton" Content="Değiştir" Style="{StaticResource SecondaryButton}" Click="ChangeHotkeyButton_Click"/>
                             </StackPanel>
                         </Grid>
-                        <Border x:Name="HotkeyRecordingPanel" Background="#FBF1DC" BorderBrush="#F0D9A8" BorderThickness="1" CornerRadius="8" Padding="14,10" Margin="0,12,0,0" Visibility="Collapsed">
+                        <Border x:Name="HotkeyRecordingPanel" Background="{StaticResource AccentSoft}" CornerRadius="8" Padding="14,10" Margin="0,12,0,0" Visibility="Collapsed">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="Yeni kısayolu girin" FontSize="13" FontWeight="SemiBold" Foreground="#9A5B00"/>
-                                    <TextBlock x:Name="RecordingHotkeyText" Text="Bir tuş kombinasyonuna basın" FontSize="12" Foreground="#9A5B00" Margin="0,2,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Text="Yeni kısayolu girin" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock x:Name="RecordingHotkeyText" Text="Bir tuş kombinasyonuna basın" Style="{StaticResource Hint}"/>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                                    <Button Content="Tamam" Style="{StaticResource ModernButton}" MinWidth="76" Click="ConfirmHotkey_Click" Margin="0,0,6,0"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                    <Button Content="Tamam" Style="{StaticResource ModernButton}" MinWidth="76" Click="ConfirmHotkey_Click" Margin="0,0,8,0"/>
                                     <Button Content="İptal" Style="{StaticResource SecondaryButton}" MinWidth="76" Click="CancelHotkey_Click"/>
                                 </StackPanel>
                             </Grid>
@@ -637,7 +797,7 @@
                                 <TextBlock Text="Windows ile başlat" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Oturum açılınca arka planda hazır olur." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="StartWithWindowsCheckbox" Style="{StaticResource Switch}"/>
+                            <CheckBox Grid.Column="1" x:Name="StartWithWindowsCheckbox" Style="{StaticResource Switch}" AutomationProperties.Name="Windows ile başlat"/>
                         </Grid>
                         <Grid Style="{StaticResource Row}">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -645,7 +805,7 @@
                                 <TextBlock Text="Küçültülmüş başlat" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Pencere açılışta görünmez, kısayolla gelir." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="StartMinimizedCheckbox" Style="{StaticResource Switch}"/>
+                            <CheckBox Grid.Column="1" x:Name="StartMinimizedCheckbox" Style="{StaticResource Switch}" AutomationProperties.Name="Küçültülmüş başlat"/>
                         </Grid>
                         <Grid Style="{StaticResource Row}">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -653,7 +813,7 @@
                                 <TextBlock Text="Kapat düğmesi tepsiye küçültsün" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Kapalıyken çıkmak için tepsi menüsünü kullanın." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="MinimizeToTrayCheckbox" Style="{StaticResource Switch}" IsChecked="True"/>
+                            <CheckBox Grid.Column="1" x:Name="MinimizeToTrayCheckbox" Style="{StaticResource Switch}" IsChecked="True" AutomationProperties.Name="Kapat düğmesi tepsiye küçültsün"/>
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -667,7 +827,7 @@
                                 <TextBlock Text="AI modu açık" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Doğal dil araması açılışta etkin olur." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="NaturalLanguageDefaultCheckbox" Style="{StaticResource Switch}"/>
+                            <CheckBox Grid.Column="1" x:Name="NaturalLanguageDefaultCheckbox" Style="{StaticResource Switch}" AutomationProperties.Name="AI modu açık"/>
                         </Grid>
                         <Grid Style="{StaticResource Row}">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
@@ -675,7 +835,7 @@
                                 <TextBlock Text="Grid görünümü" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Kapalıysa liste görünümüyle açılır." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="GridViewDefaultCheckbox" Style="{StaticResource Switch}"/>
+                            <CheckBox Grid.Column="1" x:Name="GridViewDefaultCheckbox" Style="{StaticResource Switch}" AutomationProperties.Name="Grid görünümü"/>
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -757,7 +917,8 @@
                                 <TextBlock Text="Önizlemeleri göster" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Görsel, video ve belgeler için kabuk önizlemesi." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="ThumbnailEnabled" Style="{StaticResource Switch}" Checked="ThumbnailSettingChanged" Unchecked="ThumbnailSettingChanged"/>
+                            <CheckBox Grid.Column="1" x:Name="ThumbnailEnabled" Style="{StaticResource Switch}" Checked="ThumbnailSettingChanged" Unchecked="ThumbnailSettingChanged"
+                                      AutomationProperties.Name="Önizlemeleri göster"/>
                         </Grid>
 
                         <StackPanel x:Name="ThumbnailControls">
@@ -767,7 +928,7 @@
                                     <TextBlock Text="Bellek sınırı" Style="{StaticResource RowLabel}"/>
                                     <TextBlock Text="Sabit adet ya da toplam RAM'in yüzdesi." Style="{StaticResource Hint}"/>
                                 </StackPanel>
-                                <Border Grid.Column="1" Background="#EDF1F7" CornerRadius="9" VerticalAlignment="Center">
+                                <Border Grid.Column="1" Style="{StaticResource SegmentTrack}">
                                     <StackPanel Orientation="Horizontal">
                                         <RadioButton x:Name="ThumbnailModeCount" Content="Adet" Style="{StaticResource Segment}" GroupName="ThumbnailMode" IsChecked="True"
                                                      Checked="ThumbnailSettingChanged" AutomationProperties.Name="Bellek sınırı: görsel adedi"/>
@@ -783,26 +944,33 @@
                                     <TextBlock Text="En fazla görsel" Style="{StaticResource RowLabel}"/>
                                     <TextBlock Text="Bellekte aynı anda tutulacak küçük resim sayısı." Style="{StaticResource Hint}"/>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Content="−" Style="{StaticResource StepButton}" Tag="ThumbnailCount,-100" Click="Step_Click" AutomationProperties.Name="Görsel sayısını azalt"/>
-                                    <TextBox x:Name="ThumbnailCount" Style="{StaticResource NumberBox}" MaxLength="10" TextChanged="ThumbnailSettingChanged"/>
-                                    <Button Content="+" Style="{StaticResource StepButton}" Tag="ThumbnailCount,100" Click="Step_Click" AutomationProperties.Name="Görsel sayısını artır"/>
-                                </StackPanel>
+                                <Border Grid.Column="1" Style="{StaticResource StepperFrame}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <Button Content="−" Style="{StaticResource StepButton}" Tag="ThumbnailCount,-100" Click="Step_Click" AutomationProperties.Name="Görsel sayısını azalt"/>
+                                        <TextBox Grid.Column="1" x:Name="ThumbnailCount" Style="{StaticResource NumberBox}" MaxLength="10" TextChanged="ThumbnailSettingChanged"
+                                                 AutomationProperties.Name="En fazla görsel"/>
+                                        <Button Grid.Column="2" Content="+" Style="{StaticResource StepButton}" Tag="ThumbnailCount,100" Click="Step_Click" AutomationProperties.Name="Görsel sayısını artır"/>
+                                    </Grid>
+                                </Border>
                             </Grid>
 
                             <Grid x:Name="ThumbnailRatioPanel" Style="{StaticResource Row}">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="RAM oranı" Style="{StaticResource RowLabel}"/>
-                                    <TextBlock x:Name="ThumbnailRatioValue" Style="{StaticResource Hint}"/>
+                                    <TextBlock Text="Toplam RAM'in küçük resimlere ayrılan payı." Style="{StaticResource Hint}"/>
                                 </StackPanel>
-                                <Slider Grid.Column="1" x:Name="ThumbnailRatio" Width="200" Minimum="0" SmallChange="0.005" LargeChange="0.05"
-                                        ValueChanged="ThumbnailSettingChanged" AutomationProperties.Name="Toplam RAM yüzdesi"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                    <Slider x:Name="ThumbnailRatio" Minimum="0" SmallChange="0.005" LargeChange="0.05"
+                                            ValueChanged="ThumbnailSettingChanged" AutomationProperties.Name="Toplam RAM yüzdesi"/>
+                                    <TextBlock x:Name="ThumbnailRatioValue" Style="{StaticResource ValueText}"/>
+                                </StackPanel>
                             </Grid>
 
                             <Border Style="{StaticResource Inset}" Margin="0,12,0,0">
                                 <StackPanel>
-                                    <TextBlock x:Name="ThumbnailBudget" FontSize="12.5" FontWeight="SemiBold" Foreground="{StaticResource Ink}" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="ThumbnailBudget" Style="{StaticResource RowLabel}" FontWeight="SemiBold"/>
                                     <ToggleButton x:Name="ThumbnailDetailsToggle" Style="{StaticResource DetailsToggle}" Margin="0,4,0,0">
                                         <ToggleButton.Content>
                                             <TextBlock>
@@ -821,8 +989,8 @@
                                     </ToggleButton>
                                     <StackPanel Visibility="{Binding IsChecked, ElementName=ThumbnailDetailsToggle, Converter={StaticResource BoolToVis}}" Margin="0,6,0,0">
                                         <TextBlock x:Name="ThumbnailSafeLimit" Style="{StaticResource Hint}" Margin="0,0,0,10"/>
-                                        <TextBlock x:Name="ThumbnailMemoryTitle" FontSize="12" FontWeight="Medium" Foreground="{StaticResource Ink}" Margin="0,0,0,6"/>
-                                        <Border CornerRadius="4" Height="8" Background="#E2E8F0">
+                                        <TextBlock x:Name="ThumbnailMemoryTitle" Style="{StaticResource RowLabel}" FontSize="12" Margin="0,0,0,6"/>
+                                        <Border CornerRadius="4" Height="8" Background="{StaticResource Line}">
                                             <Grid AutomationProperties.Name="Tahmini RAM dağılımı">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition x:Name="ThumbnailOtherColumn"/>
@@ -830,79 +998,102 @@
                                                     <ColumnDefinition x:Name="ThumbnailCacheColumn"/>
                                                     <ColumnDefinition x:Name="ThumbnailFreeColumn"/>
                                                 </Grid.ColumnDefinitions>
-                                                <Border Grid.Column="0" Background="#94A3B8" CornerRadius="4,0,0,4" ToolTip="Diğer RAM kullanımı"/>
+                                                <Border Grid.Column="0" Background="{StaticResource Ink3}" CornerRadius="4,0,0,4" ToolTip="Diğer RAM kullanımı"/>
                                                 <Border Grid.Column="1" Background="#475569" ToolTip="OmniSpot, küçük resim önbelleği hariç (tahmini)"/>
-                                                <Border Grid.Column="2" Background="#007AFF" ToolTip="Ayarlanan küçük resim bütçesi"/>
-                                                <Border Grid.Column="3" Background="#E2E8F0" CornerRadius="0,4,4,0" ToolTip="Tahmini kalan RAM"/>
+                                                <Border Grid.Column="2" Background="{StaticResource Accent}" ToolTip="Ayarlanan küçük resim bütçesi"/>
+                                                <Border Grid.Column="3" Background="{StaticResource Line}" CornerRadius="0,4,4,0" ToolTip="Tahmini kalan RAM"/>
                                             </Grid>
                                         </Border>
-                                        <WrapPanel Margin="0,6,0,0">
-                                            <TextBlock x:Name="ThumbnailOtherLabel" FontSize="11" Foreground="#64748B" Margin="0,0,14,2"/>
-                                            <TextBlock x:Name="ThumbnailAppLabel" FontSize="11" Foreground="#475569" Margin="0,0,14,2"/>
-                                            <TextBlock x:Name="ThumbnailCacheLabel" FontSize="11" Foreground="#0066DD" Margin="0,0,14,2"/>
-                                            <TextBlock x:Name="ThumbnailFreeLabel" FontSize="11" Foreground="#94A3B8" Margin="0,0,0,2"/>
+                                        <WrapPanel Margin="0,8,0,0">
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                                                <Ellipse Style="{StaticResource LegendDot}" Fill="{StaticResource Ink3}"/>
+                                                <TextBlock x:Name="ThumbnailOtherLabel" Style="{StaticResource Hint}" Margin="0"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                                                <Ellipse Style="{StaticResource LegendDot}" Fill="#475569"/>
+                                                <TextBlock x:Name="ThumbnailAppLabel" Style="{StaticResource Hint}" Margin="0"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,16,4">
+                                                <Ellipse Style="{StaticResource LegendDot}" Fill="{StaticResource Accent}"/>
+                                                <TextBlock x:Name="ThumbnailCacheLabel" Style="{StaticResource Hint}" Margin="0"/>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                                <Ellipse Style="{StaticResource LegendDot}" Fill="{StaticResource Line}" Stroke="{StaticResource LineStrong}" StrokeThickness="1"/>
+                                                <TextBlock x:Name="ThumbnailFreeLabel" Style="{StaticResource Hint}" Margin="0"/>
+                                            </StackPanel>
                                         </WrapPanel>
-                                        <TextBlock Text="Önbellek tamamen dolduğunda beklenen dağılım; bütçe hemen belleğe yüklenmez." Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                                        <TextBlock Text="Önbellek tamamen dolduğunda beklenen dağılım; bütçe hemen belleğe yüklenmez." Style="{StaticResource Hint}" Margin="0,4,0,0"/>
                                     </StackPanel>
                                 </StackPanel>
                             </Border>
 
-                            <Grid Style="{StaticResource Row}" Margin="0,12,0,0">
+                            <Grid Style="{StaticResource Row}">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="Hareketsizlikte boşalt" Style="{StaticResource RowLabel}"/>
-                                    <TextBlock Text="OmniSpot içindeki fare ve klavye hareketi süreyi yeniler." Style="{StaticResource Hint}"/>
+                                    <TextBlock Text="Saniye cinsinden; OmniSpot içindeki fare ve klavye hareketi süreyi yeniler." Style="{StaticResource Hint}"/>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Content="−" Style="{StaticResource StepButton}" Tag="ThumbnailIdle,-15" Click="Step_Click" AutomationProperties.Name="Süreyi azalt"/>
-                                    <TextBox x:Name="ThumbnailIdle" Style="{StaticResource NumberBox}" MaxLength="6"/>
-                                    <Button Content="+" Style="{StaticResource StepButton}" Tag="ThumbnailIdle,15" Click="Step_Click" AutomationProperties.Name="Süreyi artır"/>
-                                    <TextBlock Text="sn" Style="{StaticResource Hint}" VerticalAlignment="Center" Margin="6,0,0,0"/>
-                                </StackPanel>
+                                <Border Grid.Column="1" Style="{StaticResource StepperFrame}">
+                                    <Grid>
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                        <Button Content="−" Style="{StaticResource StepButton}" Tag="ThumbnailIdle,-15" Click="Step_Click" AutomationProperties.Name="Süreyi azalt"/>
+                                        <TextBox Grid.Column="1" x:Name="ThumbnailIdle" Style="{StaticResource NumberBox}" MaxLength="6" AutomationProperties.Name="Hareketsizlik süresi, saniye"/>
+                                        <Button Grid.Column="2" Content="+" Style="{StaticResource StepButton}" Tag="ThumbnailIdle,15" Click="Step_Click" AutomationProperties.Name="Süreyi artır"/>
+                                    </Grid>
+                                </Border>
                             </Grid>
 
-                            <Grid Style="{StaticResource Row}" Margin="0,14,0,0">
+                            <Grid Style="{StaticResource Row}">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="Boşta da bellekte tutulan klasörler" Style="{StaticResource RowLabel}"/>
                                     <TextBlock Text="Alt klasörler dahil; genel sınır yine geçerli." Style="{StaticResource Hint}"/>
                                 </StackPanel>
-                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <Button Content="Ekle" Style="{StaticResource SecondaryButton}" Padding="12,5" Click="AddThumbnailFolder_Click" Margin="0,0,6,0"/>
-                                    <Button Content="Kaldır" Style="{StaticResource SecondaryButton}" Padding="12,5" Click="RemoveThumbnailFolder_Click" IsEnabled="{Binding ElementName=ThumbnailFolders, Path=HasItems}"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                    <Button Content="Ekle" Style="{StaticResource SecondaryButton}" Click="AddThumbnailFolder_Click" Margin="0,0,8,0"/>
+                                    <Button Click="RemoveThumbnailFolder_Click">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource RemoveButton}">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding SelectedItem, ElementName=ThumbnailFolders}" Value="{x:Null}">
+                                                        <Setter Property="IsEnabled" Value="False"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
                                 </StackPanel>
                             </Grid>
-                            <Grid Margin="0,8,0,0">
-                                <ListBox x:Name="ThumbnailFolders" MinHeight="44" MaxHeight="96" HorizontalContentAlignment="Stretch"
-                                         AutomationProperties.Name="Küçük resimleri RAM'de tutulacak klasörler">
-                                    <ListBox.ItemTemplate><DataTemplate><TextBlock Text="{Binding}" ToolTip="{Binding}" TextTrimming="CharacterEllipsis" Padding="6,3"/></DataTemplate></ListBox.ItemTemplate>
-                                </ListBox>
-                                <TextBlock Text="Henüz klasör eklenmedi." FontSize="12" Foreground="{StaticResource Ink3}" Margin="10,0" VerticalAlignment="Center" IsHitTestVisible="False">
+                            <Grid>
+                                <ListBox x:Name="ThumbnailFolders" Style="{StaticResource FolderList}" MinHeight="44" MaxHeight="112"
+                                         AutomationProperties.Name="Küçük resimleri RAM'de tutulacak klasörler"/>
+                                <TextBlock Text="Henüz klasör eklenmedi.">
                                     <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyListText}">
                                             <Setter Property="Visibility" Value="Collapsed"/>
-                                            <Style.Triggers><DataTrigger Binding="{Binding ElementName=ThumbnailFolders, Path=HasItems}" Value="False"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                            <Style.Triggers><DataTrigger Binding="{Binding HasItems, ElementName=ThumbnailFolders}" Value="False"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
                                         </Style>
                                     </TextBlock.Style>
                                 </TextBlock>
                             </Grid>
                         </StackPanel>
-                        <TextBlock x:Name="ThumbnailValidation" Foreground="#B42318" FontSize="12" TextWrapping="Wrap" Margin="0,8,0,0"/>
+                        <TextBlock x:Name="ThumbnailValidation" Style="{StaticResource Validation}"/>
                     </StackPanel>
                 </Border>
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
                         <TextBlock Text="Arama indeksi" Style="{StaticResource SectionHeader}"/>
-                        <Grid Style="{StaticResource Row}" Margin="0,6,0,0">
+                        <Grid Style="{StaticResource Row}">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock x:Name="IndexStatusText" Text="İndeks mevcut" Style="{StaticResource RowLabel}"/>
                                 <TextBlock x:Name="IndexSizeText" Text="Boyut: 0 KB" Style="{StaticResource Hint}"/>
-                                <TextBlock x:Name="IndexPathText" Text="Konum: %APPDATA%\OmniSpot\index.db" FontSize="11" Foreground="{StaticResource Ink3}" TextTrimming="CharacterEllipsis"/>
+                                <TextBlock x:Name="IndexPathText" Text="Konum: %APPDATA%\OmniSpot\index.db" Style="{StaticResource Hint}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Text, RelativeSource={RelativeSource Self}}"/>
                             </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
-                                <Button x:Name="OpenIndexFolderButton" Content="Klasörü aç" Style="{StaticResource SecondaryButton}" Click="OpenIndexFolder_Click" Margin="0,0,6,0"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                <Button x:Name="OpenIndexFolderButton" Content="Klasörü aç" Style="{StaticResource SecondaryButton}" Click="OpenIndexFolder_Click" Margin="0,0,8,0"/>
                                 <Button x:Name="RebuildIndexButton" Content="Yeniden oluştur" Style="{StaticResource SecondaryButton}" Click="RebuildIndex_Click"/>
                             </StackPanel>
                         </Grid>
@@ -940,13 +1131,13 @@
                                 </TextBlock>
                         </Grid>
                         <TextBlock x:Name="IndexingValidation" Style="{StaticResource Validation}"/>
-                        <Grid Style="{StaticResource Row}" Margin="0,12,0,0">
+                        <Grid Style="{StaticResource Row}">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="Kompakt arama kataloğu" Style="{StaticResource RowLabel}"/>
                                 <TextBlock Text="Daha az bellek ve daha hızlı açılış; değişiklik yeniden başlatınca uygulanır." Style="{StaticResource Hint}"/>
                             </StackPanel>
-                            <CheckBox Grid.Column="1" x:Name="CompactCatalogCheckbox" Style="{StaticResource Switch}" IsChecked="True"/>
+                            <CheckBox Grid.Column="1" x:Name="CompactCatalogCheckbox" Style="{StaticResource Switch}" IsChecked="True" AutomationProperties.Name="Kompakt arama kataloğu"/>
                         </Grid>
                     </StackPanel>
                 </Border>
@@ -1048,14 +1239,31 @@
                     </StackPanel>
                 </Border>
 
+                <Border Style="{StaticResource Card}" Margin="0">
+                    <StackPanel>
+                        <TextBlock Text="Uygulama" Style="{StaticResource SectionHeader}"/>
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Uygulamayı yeniden başlat" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Text="İndeks silinmez; kaydedilmemiş ayarlar uygulanmaz." Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                            <Button Grid.Column="1" x:Name="RestartApplicationButton" Content="Yeniden başlat" Style="{StaticResource SecondaryButton}" Click="RestartApplication_Click" Margin="16,0,0,0"/>
+                        </Grid>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
 
-        <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Background="White" Padding="28,12" CornerRadius="0,0,8,8">
-            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                <Button Content="Varsayılanlara sıfırla" Style="{StaticResource SecondaryButton}" Click="ResetDefaults_Click" Margin="0,0,10,0"/>
-                <Button Content="Kaydet" Style="{StaticResource ModernButton}" Click="Save_Click" MinWidth="104"/>
-            </StackPanel>
+        <Border Grid.Row="2" BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Background="White" Padding="28,12">
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <Button Content="Varsayılanlara sıfırla" Style="{StaticResource SecondaryButton}" Click="ResetDefaults_Click"/>
+                <StackPanel Grid.Column="2" Orientation="Horizontal">
+                    <Button Content="Vazgeç" Style="{StaticResource SecondaryButton}" Click="CloseWindow_Click" MinWidth="88" Margin="0,0,8,0"/>
+                    <Button Content="Kaydet" Style="{StaticResource ModernButton}" Click="Save_Click" MinWidth="104"/>
+                </StackPanel>
+            </Grid>
         </Border>
     </Grid>
 </Window>

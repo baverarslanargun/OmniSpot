@@ -78,7 +78,7 @@ public partial class SettingsWindow
         ThumbnailManualPanel.Visibility = draft.ThumbnailCacheUseRamRatio ? Visibility.Collapsed : Visibility.Visible;
         ThumbnailRatioPanel.Visibility = draft.ThumbnailCacheUseRamRatio ? Visibility.Visible : Visibility.Collapsed;
         ThumbnailControls.IsEnabled = draft.ThumbnailPreviewsEnabled;
-        ThumbnailRatioValue.Text = $"İstenen: %{_thumbnailRequestedPercent:N3}";
+        ThumbnailRatioValue.Text = $"%{_thumbnailRequestedPercent:N3}";
         ThumbnailBudget.Text = $"Uygulanacak sınır: {budget.Count:N0} görsel · {FormatThumbnailBytes(budget.Bytes)}";
         ThumbnailSafeLimit.Text = $"Güvenli üst sınır: {budget.SafeMaxCount:N0} görsel / {FormatThumbnailBytes(budget.SafeMaxBytes)} (%{budget.SafeMaxPercent:N3}). Boş RAM azaldığında otomatik düşer.";
         var total = Math.Max(1, _thumbnailMemory.TotalBytes);
@@ -94,8 +94,8 @@ public partial class SettingsWindow
         ThumbnailCacheColumn.Width = new(preview, GridUnitType.Star);
         ThumbnailFreeColumn.Width = new(free, GridUnitType.Star);
         ThumbnailOtherLabel.Text = $"Diğer kullanım: {FormatThumbnailBytes(other)}";
-        ThumbnailAppLabel.Text = $"OmniSpot, cache hariç: ≈ {FormatThumbnailBytes(appBase)}";
-        ThumbnailCacheLabel.Text = $"Thumbnail bütçesi: {FormatThumbnailBytes(preview)}";
+        ThumbnailAppLabel.Text = $"OmniSpot, önbellek hariç: ≈ {FormatThumbnailBytes(appBase)}";
+        ThumbnailCacheLabel.Text = $"Küçük resim bütçesi: {FormatThumbnailBytes(preview)}";
         ThumbnailFreeLabel.Text = $"Kalan: ≈ {FormatThumbnailBytes(free)}";
         ThumbnailMemoryTitle.Text = _thumbnailMemory.TotalBytes == 0
             ? "RAM bilgisi okunamadı; önbellek güvenli olarak kapalı."
