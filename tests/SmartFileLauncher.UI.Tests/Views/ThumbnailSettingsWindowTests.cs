@@ -14,6 +14,28 @@ namespace SmartFileLauncher.UI.Tests.Views;
 public sealed class ThumbnailSettingsWindowTests
 {
     [Fact]
+    public Task AnimationSwitchSavesOnlyWhenConfirmed() => RunSta(() =>
+    {
+        var original = new AppSettings { IndexedFolders = [@"C:\Documents"] };
+        var store = new FakeSettings();
+        var window = new SettingsWindow(original, store, new FakeMaintenance());
+        try
+        {
+            var checkbox = (CheckBox)window.FindName("AnimationsCheckbox");
+            Assert.True(checkbox.IsChecked);
+            checkbox.IsChecked = false;
+            Assert.True(original.AnimationsEnabled);
+            window.Dispatcher.BeginInvoke(new Action(() =>
+                typeof(SettingsWindow).GetMethod("Save_Click", BindingFlags.NonPublic | BindingFlags.Instance)!
+                    .Invoke(window, new object[] { window, new RoutedEventArgs() })));
+            Assert.True(window.ShowDialog());
+            Assert.False(store.Saved!.AnimationsEnabled);
+            Assert.True(original.AnimationsEnabled);
+        }
+        finally { window.Close(); }
+    });
+
+    [Fact]
     public Task SaveDialogPersistsAndPublishesThumbnailPreferences() => RunSta(() =>
     {
         var original = new AppSettings();

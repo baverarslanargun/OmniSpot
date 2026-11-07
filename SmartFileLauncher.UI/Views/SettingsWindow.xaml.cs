@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using SmartFileLauncher.Core.Application.Indexing;
@@ -13,6 +14,8 @@ public partial class SettingsWindow : Window
     private readonly ISettingsApplicationService _settingsApplication;
     private readonly IIndexMaintenanceService _indexMaintenance;
     private readonly Action<string>? _log;
+    private bool _indexStatusStarted;
+    private bool _indexStatusClosed;
     
     private bool _isRecordingHotkey = false;
     private GlobalHotkeyService.ModifierKeys _pendingModifiers;
@@ -46,6 +49,8 @@ public partial class SettingsWindow : Window
         MaxHeight = SystemParameters.WorkArea.Height;
         
         PreviewKeyDown += SettingsWindow_PreviewKeyDown;
+        Loaded += LoadIndexStatus;
+        Closed += (_, _) => _indexStatusClosed = true;
         SourceInitialized += (_, _) => ModernDialog.ApplyRoundedCorners(this);
     }
 
@@ -61,29 +66,51 @@ public partial class SettingsWindow : Window
         
         NaturalLanguageDefaultCheckbox.IsChecked = _settings.NaturalLanguageModeEnabled;
         GridViewDefaultCheckbox.IsChecked = _settings.GridViewEnabled;
+        AnimationsCheckbox.IsChecked = _settings.AnimationsEnabled;
         CompactCatalogCheckbox.IsChecked = _settings.CompactSearchStateEnabled;
         InitializeIndexingSettings();
         
-        UpdateIndexStatus();
+        IndexStatusText.Text = "İndeks bilgisi yükleniyor…";
+        IndexSizeText.Text = "Boyut hesaplanıyor…";
+        IndexPathText.Text = "Konum yükleniyor…";
+        RebuildIndexButton.IsEnabled = false;
         InitializeThumbnailSettings();
     }
 
-    private void UpdateIndexStatus()
+    private async void LoadIndexStatus(object sender, RoutedEventArgs e)
     {
-        var status = _indexMaintenance.GetStatus();
+        if (_indexStatusStarted) return;
+        _indexStatusStarted = true;
+        try
+        {
+            var status = await Task.Run(_indexMaintenance.GetStatus);
+            if (!_indexStatusClosed) UpdateIndexStatus(status);
+        }
+        catch (Exception failure)
+        {
+            if (_indexStatusClosed) return;
+            IndexStatusText.Text = "İndeks bilgisi okunamadı";
+            IndexSizeText.Text = "Boyut: -";
+            IndexPathText.Text = "Konum: -";
+            _log?.Invoke($"⚠️ İndeks bilgisi okunamadı: {failure.Message}");
+        }
+    }
+
+    private void UpdateIndexStatus(IndexStorageStatus status)
+    {
         if (status.Exists)
         {
             IndexStatusText.Text = "İndeks mevcut";
-            IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x1D, 0x1D, 0x1F));
-            IndexSizeText.Text = $"Boyut: {status.SizeKilobytes:N0} KB";
+            IndexStatusText.Foreground = (System.Windows.Media.Brush)FindResource("Ink");
+            IndexSizeText.Text = status.SizeKilobytes >= 1024
+                ? $"Boyut: {FormatThumbnailBytes(status.SizeKilobytes * 1024)}"
+                : $"Boyut: {status.SizeKilobytes:N0} KB";
             RebuildIndexButton.IsEnabled = true;
         }
         else
         {
             IndexStatusText.Text = "İndeks henüz oluşturulmadı";
-            IndexStatusText.Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x86, 0x86, 0x8B));
+            IndexStatusText.Foreground = (System.Windows.Media.Brush)FindResource("Ink2");
             IndexSizeText.Text = "Boyut: -";
             RebuildIndexButton.IsEnabled = false;
         }
@@ -314,6 +341,7 @@ public partial class SettingsWindow : Window
         _settings.MinimizeToTrayOnClose = MinimizeToTrayCheckbox.IsChecked ?? true;
         _settings.NaturalLanguageModeEnabled = NaturalLanguageDefaultCheckbox.IsChecked ?? false;
         _settings.GridViewEnabled = GridViewDefaultCheckbox.IsChecked ?? false;
+        _settings.AnimationsEnabled = AnimationsCheckbox.IsChecked ?? true;
         _settings.CompactSearchStateEnabled = CompactCatalogCheckbox.IsChecked ?? true;
 
         try
