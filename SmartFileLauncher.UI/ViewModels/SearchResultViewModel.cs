@@ -51,6 +51,31 @@ public class SearchResultViewModel : INotifyPropertyChanged
     }
 
     private bool _isNew;
+    private bool _isTransferSelected;
+    private bool _isCut;
+
+    public bool IsTransferSelected
+    {
+        get => _isTransferSelected;
+        set
+        {
+            if (_isTransferSelected == value) return;
+            _isTransferSelected = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsTransferSelected)));
+        }
+    }
+
+    public bool IsCut
+    {
+        get => _isCut;
+        set
+        {
+            if (_isCut == value) return;
+            _isCut = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsCut)));
+        }
+    }
+
     public bool IsNew
     {
         get => _isNew;

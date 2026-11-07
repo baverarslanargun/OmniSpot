@@ -1,0 +1,162 @@
+<Window x:Class="SmartFileLauncher.UI.Views.BatchRenameDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Toplu yeniden adlandır"
+        Width="580"
+        SizeToContent="Height"
+        WindowStartupLocation="CenterOwner"
+        WindowStyle="None"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Background="#F6F8FC"
+        FontFamily="Segoe UI"
+        TextOptions.TextFormattingMode="Ideal"
+        UseLayoutRounding="True"
+        KeyDown="Window_KeyDown"
+        MouseLeftButtonDown="Window_MouseLeftButtonDown">
+    <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="pack://application:,,,/OmniSpot;component/Themes/DialogTheme.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+            <Style x:Key="FieldLabel" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="12.5"/>
+                <Setter Property="Foreground" Value="#4A5462"/>
+                <Setter Property="Margin" Value="0,0,0,5"/>
+            </Style>
+            <Style x:Key="CaseOption" TargetType="RadioButton">
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="FontSize" Value="12.5"/>
+                <Setter Property="Foreground" Value="#334155"/>
+                <Setter Property="Margin" Value="0,0,6,0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Border x:Name="Surface" Background="#FFFFFF" BorderBrush="#D6DEEA" BorderThickness="1"
+                                    CornerRadius="8" Padding="10,5">
+                                <ContentPresenter/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="Surface" Property="BorderBrush" Value="#B9CCEC"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="Surface" Property="Background" Value="#EAF1FD"/>
+                                    <Setter TargetName="Surface" Property="BorderBrush" Value="#3F7EE8"/>
+                                    <Setter Property="Foreground" Value="#1F4FA8"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
+    </Window.Resources>
+    <Border Padding="24,22,24,20">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Style="{StaticResource DialogTile}">
+                    <Path Data="{StaticResource DialogPencilGeometry}" Stroke="#3F7EE8" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                          Width="22" Height="22" Stretch="Uniform"/>
+                </Border>
+                <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                    <TextBlock Text="Toplu yeniden adlandır" Style="{StaticResource DialogTitle}"/>
+                    <TextBlock x:Name="SubtitleText" Style="{StaticResource DialogMessage}"/>
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Grid.Row="1" Margin="0,18,0,0">
+                <TextBlock Text="Yeni ad (isteğe bağlı)" Style="{StaticResource FieldLabel}"/>
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="64"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox x:Name="TemplateBox" Style="{StaticResource DialogTextBox}"
+                             ToolTip="{}{n} sıra numarasına dönüşür. Boş bırakırsan mevcut adlar kullanılır."/>
+                    <TextBlock Grid.Column="1" Text="Başlangıç" FontSize="12.5" Foreground="#4A5462"
+                               VerticalAlignment="Center" Margin="12,0,8,0"/>
+                    <TextBox Grid.Column="2" x:Name="StartBox" Text="1" Style="{StaticResource DialogTextBox}"
+                             HorizontalContentAlignment="Center"/>
+                </Grid>
+                <TextBlock Text="Örnek: “Tatil {n}” → Tatil 01, Tatil 02… Uzantılar korunur." FontSize="12" Foreground="#6B7686" Margin="0,5,0,0"/>
+            </StackPanel>
+
+            <Grid Grid.Row="2" Margin="0,14,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="14"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel>
+                    <TextBlock Text="Bul" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="FindBox" Style="{StaticResource DialogTextBox}"/>
+                </StackPanel>
+                <StackPanel Grid.Column="2">
+                    <TextBlock Text="Şununla değiştir" Style="{StaticResource FieldLabel}"/>
+                    <TextBox x:Name="ReplaceBox" Style="{StaticResource DialogTextBox}"/>
+                </StackPanel>
+            </Grid>
+
+            <StackPanel Grid.Row="3" Margin="0,14,0,0">
+                <TextBlock Text="Harfler" Style="{StaticResource FieldLabel}"/>
+                <StackPanel Orientation="Horizontal">
+                    <RadioButton x:Name="CaseKeep" GroupName="Case" Content="Olduğu gibi" IsChecked="True" Style="{StaticResource CaseOption}"/>
+                    <RadioButton x:Name="CaseLower" GroupName="Case" Content="küçük harf" Style="{StaticResource CaseOption}"/>
+                    <RadioButton x:Name="CaseUpper" GroupName="Case" Content="BÜYÜK HARF" Style="{StaticResource CaseOption}"/>
+                    <RadioButton x:Name="CaseTitle" GroupName="Case" Content="Baş Harfler Büyük" Style="{StaticResource CaseOption}"/>
+                </StackPanel>
+            </StackPanel>
+
+            <Border Grid.Row="4" Margin="0,16,0,0" Background="#FFFFFF" BorderBrush="#D6DEEA" BorderThickness="1" CornerRadius="10">
+                <ScrollViewer MaxHeight="240" VerticalScrollBarVisibility="Auto" Padding="4">
+                    <ItemsControl x:Name="PreviewList" Grid.IsSharedSizeScope="True">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="8,5">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto" SharedSizeGroup="Note"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="{Binding OldName}" FontSize="12.5" Foreground="#6B7686" TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding SourcePath}"/>
+                                    <TextBlock Grid.Column="1" Text="→" FontSize="12.5" Foreground="#A0AABB" Margin="10,0"/>
+                                    <TextBlock Grid.Column="2" Text="{Binding NewName}" FontSize="12.5" Foreground="{Binding NameBrush}"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding NewName}"/>
+                                    <TextBlock Grid.Column="3" Text="{Binding Note}" FontSize="11.5" Foreground="{Binding NoteBrush}" Margin="10,0,0,0"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+                </ScrollViewer>
+            </Border>
+
+            <Grid Grid.Row="5" Margin="0,18,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="SummaryText" FontSize="12.5" Foreground="#4A5462" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button Content="Vazgeç" Style="{StaticResource DialogSecondaryButton}" Margin="0,0,10,0" IsCancel="True" Click="Cancel_Click"/>
+                    <Button x:Name="ApplyButton" Content="Yeniden adlandır" Style="{StaticResource DialogPrimaryButton}" IsDefault="True" Click="Apply_Click"/>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </Border>
+</Window>
