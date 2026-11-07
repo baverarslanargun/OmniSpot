@@ -702,6 +702,7 @@ public sealed class ChangeFeedIndexBridgeTests
     [InlineData(false)]
     public async Task LeaseIsRenewedWhileApplyingAndFailedRenewalPreventsAcknowledgement(bool succeeds)
     {
+        var clock = new RenewalClock();
         var renewalObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseApply = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var channel = new ScriptedChannel { LeaseRenewal = _ =>
@@ -713,7 +714,9 @@ public sealed class ChangeFeedIndexBridgeTests
         channel.Respond(Ok());
         channel.Respond(Ok());
         channel.Respond(Delivered(Page(Root, Event(ChangeFeedEventKind.Modified, Root + @"\local.txt")), receipt: "receipt"));
-        var adoption = new ChangeFeedIndexBridge(channel, target, TimeSpan.FromSeconds(3)).AdoptAsync([Root], default);
+        var adoption = new ChangeFeedIndexBridge(channel, target, TimeSpan.FromSeconds(3), clock).AdoptAsync([Root], default);
+        await clock.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        clock.Tick();
         await renewalObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
         if (succeeds) releaseApply.TrySetResult();
         var result = await adoption.WaitAsync(TimeSpan.FromSeconds(5));
@@ -726,6 +729,7 @@ public sealed class ChangeFeedIndexBridgeTests
     [Fact]
     public async Task CancellationWaitsForAnInFlightRenewalBeforeReleasingTheLease()
     {
+        var clock = new RenewalClock();
         var renewalStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finishRenewal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var applyCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -740,7 +744,9 @@ public sealed class ChangeFeedIndexBridgeTests
         channel.Respond(Ok());
         channel.Respond(Delivered(Page(Root, Event(ChangeFeedEventKind.Modified, Root + @"\local.txt")), receipt: "receipt"));
         using var cancellation = new CancellationTokenSource();
-        var adoption = new ChangeFeedIndexBridge(channel, target, TimeSpan.FromSeconds(3)).AdoptAsync([Root], cancellation.Token);
+        var adoption = new ChangeFeedIndexBridge(channel, target, TimeSpan.FromSeconds(3), clock).AdoptAsync([Root], cancellation.Token);
+        await clock.TimerCreated.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        clock.Tick();
         await renewalStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         cancellation.Cancel();
         await applyCancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -781,6 +787,30 @@ public sealed class ChangeFeedIndexBridgeTests
 
     private static ChangeFeedEventDto Event(ChangeFeedEventKind kind, string path) =>
         new(kind, path, false, null);
+
+    private sealed class RenewalClock : TimeProvider
+    {
+        private RenewalTimer? _timer;
+        internal TaskCompletionSource TimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            _timer = new RenewalTimer(callback, state);
+            TimerCreated.SetResult();
+            return _timer;
+        }
+
+        internal void Tick() => _timer!.Tick();
+
+        private sealed class RenewalTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private int _disposed;
+            internal void Tick() { if (Volatile.Read(ref _disposed) == 0) callback(state); }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => Volatile.Read(ref _disposed) == 0;
+            public void Dispose() => Interlocked.Exchange(ref _disposed, 1);
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
+    }
 
     private sealed class ScriptedChannel : IChangeFeedRequestChannel
     {

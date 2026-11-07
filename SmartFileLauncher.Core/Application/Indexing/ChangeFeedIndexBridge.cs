@@ -59,15 +59,26 @@ public sealed partial class ChangeFeedIndexBridge
     private readonly IChangeFeedRequestChannel _channel;
     private readonly IChangeFeedIndexTarget _target;
     private readonly TimeSpan _leaseDuration;
+    private readonly TimeProvider _timeProvider;
 
     public ChangeFeedIndexBridge(
         IChangeFeedRequestChannel channel,
         IChangeFeedIndexTarget target,
         TimeSpan? leaseDuration = null)
+        : this(channel, target, leaseDuration, TimeProvider.System)
+    {
+    }
+
+    internal ChangeFeedIndexBridge(
+        IChangeFeedRequestChannel channel,
+        IChangeFeedIndexTarget target,
+        TimeSpan? leaseDuration,
+        TimeProvider timeProvider)
     {
         _channel = channel ?? throw new ArgumentNullException(nameof(channel));
         _target = target ?? throw new ArgumentNullException(nameof(target));
         _leaseDuration = leaseDuration ?? DefaultLeaseDuration;
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
 
         if (_leaseDuration <= TimeSpan.Zero ||
             _leaseDuration > ChangeFeedWatcherLease.MaximumDuration)
@@ -273,7 +284,8 @@ public sealed partial class ChangeFeedIndexBridge
 
         async Task KeepLeaseAsync()
         {
-            using var timer = new PeriodicTimer(TimeSpan.FromTicks(Math.Max(1, _leaseDuration.Ticks / 3)));
+            using var timer = new PeriodicTimer(
+                TimeSpan.FromTicks(Math.Max(1, _leaseDuration.Ticks / 3)), _timeProvider);
             try
             {
                 while (await timer.WaitForNextTickAsync(lifetime.Token).ConfigureAwait(false))
