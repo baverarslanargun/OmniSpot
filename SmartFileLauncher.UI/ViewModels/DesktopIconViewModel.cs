@@ -13,6 +13,7 @@ public class DesktopIconViewModel : INotifyPropertyChanged
     private string _icon = "file";
     private bool _isDirectory;
     private bool _isCut;
+    private bool _isTransferSelected;
     private double _opacity = 1.0;
 
     private static readonly Dictionary<string, MediaBrush> _brushCache = new();
@@ -98,6 +99,17 @@ public class DesktopIconViewModel : INotifyPropertyChanged
                 Opacity = value ? 0.5 : 1.0;
                 OnPropertyChanged(nameof(IsCut));
             }
+        }
+    }
+
+    public bool IsTransferSelected
+    {
+        get => _isTransferSelected;
+        set
+        {
+            if (_isTransferSelected == value) return;
+            _isTransferSelected = value;
+            OnPropertyChanged(nameof(IsTransferSelected));
         }
     }
 

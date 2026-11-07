@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:services="clr-namespace:SmartFileLauncher.UI.Services"
         mc:Ignorable="d"
         Title="OmniSpot" 
         Icon="/OmniSpot;component/Resources/app.ico"
@@ -19,7 +20,6 @@
         MaxHeight="700"
         WindowStartupLocation="CenterScreen" 
         KeyDown="Window_KeyDown"
-        xmlns:services="clr-namespace:SmartFileLauncher.UI.Services"
         xmlns:converters="clr-namespace:SmartFileLauncher.UI.Converters">
     
     <Window.Resources>
@@ -229,7 +229,6 @@
         <Geometry x:Key="InfoGeometry">M12 3 A9 9 0 1 0 12 21 A9 9 0 1 0 12 3 M12 11 V16 M12 8 V8.1</Geometry>
         <Geometry x:Key="WarningTriangleGeometry">M12 2.5 L22.5 20.5 H1.5 Z</Geometry>
         <Geometry x:Key="WarningMarkGeometry">M12 9 V14.2 M12 17.2 V17.3</Geometry>
-        <BitmapImage x:Key="OmniSpotLogo" UriSource="/Resources/omnispot-amblem.png"/>
         <Style x:Key="StateTile" TargetType="Border">
             <Setter Property="Width" Value="104"/>
             <Setter Property="Height" Value="104"/>
@@ -727,18 +726,225 @@
             <Setter Property="Background" Value="#E2E8F0"/>
         </Style>
         
+        <Style x:Key="HeaderNavButton" TargetType="Button">
+            <Setter Property="Width" Value="40"/>
+            <Setter Property="Height" Value="40"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="border"
+                                Background="#F1F5F9"
+                                CornerRadius="12"
+                                Width="40"
+                                Height="40">
+                            <Viewbox Width="18" Height="18">
+                                <Canvas Width="24" Height="24">
+                                    <Path Fill="#64748B"
+                                          Data="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
+                                </Canvas>
+                            </Viewbox>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#E2E8F0"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="border" Property="Background" Value="#CBD5E1"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="FolderPathSegmentButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Foreground" Value="#64748B"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Padding" Value="6,3"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EEF2F7"/>
+                                <Setter Property="Foreground" Value="#1E293B"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#E2E8F0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <SolidColorBrush x:Key="ShelfLineBrush" Color="#E2E8F0"/>
+        <SolidColorBrush x:Key="ShelfAccentBrush" Color="#3F7EE8"/>
+
+        <Style x:Key="ShelfPrimaryButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="#3F7EE8" CornerRadius="8" Padding="12,5">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#3570D6"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#2D62BF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SelectionBarButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Foreground" Value="#334155"/>
+            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Padding" Value="10,5"/>
+            <Setter Property="Margin" Value="2,0,0,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#F1F5F9"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#E2E8F0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BrowserTab" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Foreground" Value="#64748B"/>
+            <Setter Property="Margin" Value="0,0,2,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" BorderBrush="Transparent" BorderThickness="1,1,1,0"
+                                CornerRadius="10,10,0,0" Padding="12,6,7,7">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EEF2F7"/>
+                                <Setter Property="Foreground" Value="#334155"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BrowserTabActive" TargetType="Button" BasedOn="{StaticResource BrowserTab}">
+            <Setter Property="Foreground" Value="#1E293B"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="#FFFFFF" BorderBrush="#E2E8F0" BorderThickness="1,1,1,0"
+                                CornerRadius="10,10,0,0" Padding="12,6,7,7" Margin="0,0,0,-1">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TabCloseButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Width="18" Height="18" CornerRadius="5" Background="Transparent">
+                            <Path x:Name="Glyph" Data="M 0,0 L 7,7 M 7,0 L 0,7" Stroke="#94A3B8" StrokeThickness="1.3"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#E2E8F0"/>
+                                <Setter TargetName="Glyph" Property="Stroke" Value="#334155"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="TabAddButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Margin" Value="4,0,0,3"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Width="26" Height="26" CornerRadius="8" Background="Transparent">
+                            <Path x:Name="Glyph" Data="M 5,0 V 10 M 0,5 H 10" Stroke="#64748B" StrokeThickness="1.4"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#EEF2F7"/>
+                                <Setter TargetName="Glyph" Property="Stroke" Value="#1E293B"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- File/Folder Context Menu -->
-        <ContextMenu x:Key="FileContextMenu" Style="{StaticResource ModernContextMenu}" Opened="ThumbnailContextMenu_Opened">
+        <ContextMenu x:Key="FileContextMenu" Style="{StaticResource ModernContextMenu}" Opened="FileContextMenu_Opened">
             <MenuItem Header="Aç" Tag="📂" InputGestureText="Enter" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Open"/>
+            <MenuItem x:Name="OpenInNewTabMenuItem" Header="Yeni Sekmede Aç" Tag="📑" InputGestureText="Orta tık" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenInNewTab"/>
             <MenuItem Header="Birlikte Aç..." Tag="🔗" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenWith"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
-            <MenuItem Header="Kopyala" Tag="📋" InputGestureText="Ctrl+C" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Copy"/>
-            <MenuItem Header="Kes" Tag="✂️" InputGestureText="Ctrl+X" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Cut"/>
+            <MenuItem x:Name="CopyMenuItem" Header="Kopyala" Tag="📋" InputGestureText="Ctrl+C" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Copy"/>
+            <MenuItem x:Name="CutMenuItem" Header="Kes" Tag="✂️" InputGestureText="Ctrl+X" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Cut"/>
             <MenuItem Header="Yapıştır" Tag="📥" InputGestureText="Ctrl+V" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Paste"/>
+            <MenuItem x:Name="CopyPathMenuItem" Header="Yolu Kopyala" Tag="🔤" InputGestureText="Ctrl+Shift+C" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_CopyPath"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
-            <MenuItem Header="Yeniden Adlandır" Tag="✏️" InputGestureText="F2" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Rename"/>
-            <MenuItem Header="Sil" Tag="🗑️" InputGestureText="Del" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Delete"/>
+            <MenuItem x:Name="RenameMenuItem" Header="Yeniden Adlandır" Tag="✏️" InputGestureText="F2" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Rename"/>
+            <MenuItem x:Name="DeleteMenuItem" Header="Sil" Tag="🗑️" InputGestureText="Del" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Delete"/>
+            <MenuItem x:Name="ZipMenuItem" Header="Sıkıştır (ZIP)" Tag="🗜️" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Compress"/>
+            <MenuItem x:Name="ExtractMenuItem" Header="Buraya Çıkar" Tag="📦" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Extract"/>
+            <MenuItem x:Name="MoveToNewFolderMenuItem" Header="Yeni Klasöre Taşı" Tag="🗂️" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_MoveToNewFolder"/>
+            <MenuItem x:Name="DualCopyMenuItem" Header="Karşı Panele Kopyala" Tag="➡️" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_DualCopy"/>
+            <MenuItem x:Name="DualMoveMenuItem" Header="Karşı Panele Taşı" Tag="⏩" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_DualMove"/>
+            <MenuItem x:Name="AddToShelfMenuItem" Header="Rafa Ekle" Tag="🧺" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_AddToShelf"
+                      ToolTip="Farklı yerlerden öğe topla; sonra bir klasöre gidip hepsini oraya kopyala ya da taşı"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
+            <MenuItem x:Name="GoToContainingFolderMenuItem" Header="Klasörüne Git" Tag="📁" InputGestureText="Omni içinde" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_GoToContainingFolder"/>
             <MenuItem Header="Dosya Konumunu Aç" Tag="📍" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenLocation"/>
             <MenuItem Header="Özellikler" Tag="ℹ️" InputGestureText="Alt+Enter" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Properties"/>
             <MenuItem Header="Diğer" Tag="ThumbnailOther" Style="{StaticResource ModernSubmenuHeader}">
@@ -753,6 +959,7 @@
             <MenuItem Header="Yeni Metin Dosyası" Tag="📄" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_NewTextFile"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
             <MenuItem Header="Yapıştır" Tag="📥" InputGestureText="Ctrl+V" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Paste"/>
+            <MenuItem Header="Tümünü Seç" Tag="☑️" InputGestureText="Ctrl+A" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_SelectAll"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
             <MenuItem Header="Yenile" Tag="🔄" InputGestureText="F5" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Refresh"/>
         </ContextMenu>
@@ -790,6 +997,10 @@
                                                                 <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
                                                                 <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
                                                             </Trigger>
+                                                            <DataTrigger Binding="{Binding IsTransferSelected}" Value="True">
+                                                                <Setter TargetName="CardBorder" Property="Background" Value="#EFF6FF"/>
+                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
+                                                            </DataTrigger>
                                                         </ControlTemplate.Triggers>
                                                     </ControlTemplate>
                                                 </Setter.Value>
@@ -837,6 +1048,10 @@
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="Row" Property="BorderBrush" Value="#007AFF"/>
                             </Trigger>
+                            <DataTrigger Binding="{Binding IsTransferSelected}" Value="True">
+                                <Setter TargetName="Row" Property="Background" Value="#EFF6FF"/>
+                                <Setter TargetName="Row" Property="BorderBrush" Value="#007AFF"/>
+                            </DataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Button.Template>
@@ -874,12 +1089,149 @@
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/> <!-- Delta Sync Progress Row -->
             </Grid.RowDefinitions>
-            
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <Border x:Name="DualPane"
+                    Grid.Column="1"
+                    Grid.RowSpan="5"
+                    Width="460"
+                    Visibility="Collapsed"
+                    Background="#FFFFFF"
+                    BorderBrush="#E2E8F0"
+                    BorderThickness="1,0,0,0"
+                    CornerRadius="0,8,8,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <Grid Margin="18,16,12,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Karşı panel" FontSize="12" FontWeight="SemiBold" Foreground="#94A3B8" VerticalAlignment="Center"/>
+                        <Button Grid.Column="1" Style="{StaticResource SelectionBarButton}" Content="⇄  Yer değiştir"
+                                ToolTip="Soldaki ve sağdaki klasörü yer değiştir" Click="DualPaneSwap_Click"/>
+                        <Button Grid.Column="2" Style="{StaticResource TabCloseButton}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                ToolTip="Çift paneli kapat (Ctrl+Shift+D)" AutomationProperties.Name="Çift paneli kapat" Click="DualPaneClose_Click"/>
+                    </Grid>
+                    <StackPanel x:Name="DualPanePath" Grid.Row="1" Orientation="Horizontal" Margin="12,0,14,6" Height="28" ClipToBounds="True"/>
+                    <ListBox x:Name="DualPaneList"
+                             Grid.Row="2"
+                             SelectionMode="Extended"
+                             BorderThickness="0"
+                             Background="Transparent"
+                             Padding="8,0,8,8"
+                             MaxHeight="560"
+                             AllowDrop="True"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0,1"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="Row" Background="Transparent" CornerRadius="8" Padding="10,6">
+                                                <ContentPresenter/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="Row" Property="Background" Value="#F8FAFC"/>
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="Row" Property="Background" Value="#EAF1FD"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid ToolTip="{Binding Path}">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+                                    <Viewbox Width="18" Height="18" VerticalAlignment="Center">
+                                        <Canvas Width="24" Height="24">
+                                            <Canvas.Style>
+                                                <Style TargetType="Canvas">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Canvas.Style>
+                                            <Path Fill="#3F7EE8" Data="{StaticResource FolderBackGeometry}"/>
+                                            <Path Fill="#6FA4F7" Data="{StaticResource FolderFrontGeometry}"/>
+                                        </Canvas>
+                                    </Viewbox>
+                                    <Path Data="M 3,1 H 10 L 14,5 V 17 H 3 Z M 10,1 V 5 H 14" Stroke="#94A3B8" StrokeThickness="1.3"
+                                          StrokeLineJoin="Round" Width="18" Height="18" Stretch="None" VerticalAlignment="Center">
+                                        <Path.Style>
+                                            <Style TargetType="Path">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDirectory}" Value="True">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Path.Style>
+                                    </Path>
+                                    <TextBlock Grid.Column="1" Text="{Binding Name}" FontSize="13" Foreground="#1E293B" Margin="10,0,0,0"
+                                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                    <TextBlock x:Name="DualPaneEmpty" Grid.Row="2" Text="Bu klasör boş" FontSize="13" Foreground="#94A3B8"
+                               HorizontalAlignment="Center" Margin="0,40,0,40" Visibility="Collapsed"/>
+                    <Border Grid.Row="3" BorderBrush="#EEF2F7" BorderThickness="0,1,0,0" Padding="18,8,12,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="DualPaneStatusText" FontSize="12" Foreground="#64748B" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button x:Name="DualPaneCopyLeftButton" Style="{StaticResource SelectionBarButton}" Content="← Sola kopyala"
+                                        Click="DualPaneCopyLeft_Click"/>
+                                <Button x:Name="DualPaneMoveLeftButton" Style="{StaticResource SelectionBarButton}" Content="← Sola taşı"
+                                        Click="DualPaneMoveLeft_Click"/>
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+
+            <Border x:Name="TabStrip" Grid.Row="0" Visibility="Collapsed" Padding="14,8,14,0">
+                <StackPanel x:Name="TabStripItems" Orientation="Horizontal" VerticalAlignment="Bottom" ClipToBounds="True"/>
+            </Border>
+
             <!-- Search Box Area -->
-            <Border Grid.Row="0" 
+            <Border x:Name="SearchHeader"
+                    Grid.Row="1"
                     CornerRadius="8,8,0,0"
                     Padding="20,16,20,16">
                 <Border.Background>
@@ -899,52 +1251,13 @@
                     <!-- Back Button (Navigation) -->
                     <Button x:Name="BackButton"
                             Grid.Column="0"
-                            FontSize="18"
-                            FontWeight="Bold"
-                            Foreground="#64748B"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            Cursor="Hand"
-                            Width="40"
-                            Height="40"
+                            Style="{StaticResource HeaderNavButton}"
                             Margin="0,0,12,0"
-                            VerticalAlignment="Center"
                             Visibility="Collapsed"
                             Click="BackButton_Click"
-                            ToolTip="Geri (Üst Klasör)">
-                        <Button.Style>
-                            <Style TargetType="Button">
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="Button">
-                                            <Border x:Name="border"
-                                                    Background="#F1F5F9"
-                                                    CornerRadius="12"
-                                                    Width="40"
-                                                    Height="40">
-                                                <!-- Back Arrow SVG -->
-                                                <Viewbox Width="18" Height="18">
-                                                    <Canvas Width="24" Height="24">
-                                                        <Path Fill="#64748B" 
-                                                              Data="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/>
-                                                    </Canvas>
-                                                </Viewbox>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#E2E8F0"/>
-                                                </Trigger>
-                                                <Trigger Property="IsPressed" Value="True">
-                                                    <Setter TargetName="border" Property="Background" Value="#CBD5E1"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </Button.Style>
-                    </Button>
-                    
+                            AutomationProperties.Name="Geri"
+                            ToolTip="Geri (Alt+←)"/>
+
                     <!-- Modern Search Container -->
                     <Border Grid.Column="1" 
                             Background="#F1F5F9"
@@ -983,10 +1296,13 @@
                                            Visibility="Visible"/>
                                 <TextBlock x:Name="SearchWaitShimmer"
                                            Text="{Binding Text, ElementName=SearchWatermark}"
-                                           FontSize="16" VerticalAlignment="Center"
-                                           Style="{StaticResource SearchWaitGlint}" Visibility="Collapsed"/>
-                                
-                                <TextBox x:Name="SearchBox" IsEnabled="False"
+                                           FontSize="16"
+                                           VerticalAlignment="Center"
+                                           Style="{StaticResource SearchWaitGlint}"
+                                           Visibility="Collapsed"/>
+
+                                <TextBox x:Name="SearchBox"
+                                         IsEnabled="False"
                                          FontSize="16" 
                                          Background="Transparent" 
                                          Foreground="#1E293B" 
@@ -1009,6 +1325,7 @@
                                        Margin="10,2,0,0" Visibility="Collapsed"
                                        ToolTip="Dosya araması hazır. AI ve gelişmiş arama indeksi arka planda hazırlanıyor."/>
                             </StackPanel>
+
                             <Grid Grid.Column="3">
                                 <Border x:Name="FilterBadge"
                                         Visibility="Collapsed"
@@ -1101,77 +1418,73 @@
                     <!-- Natural Language Toggle -->
                     <StackPanel x:Name="AiControls" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,6,0">
                     <Grid>
-                        <ToggleButton x:Name="NaturalLanguageToggle" IsEnabled="False"
-                                      FontSize="11"
-                                      FontWeight="SemiBold"
-                                      Padding="12,0"
-                                      Height="40"
-                                      Margin="0"
-                                      Background="#F1F5F9"
-                                      Foreground="#64748B"
-                                      BorderThickness="0"
-                                      Cursor="Hand"
-                                      VerticalAlignment="Center"
-                                      ToolTipService.ShowOnDisabled="True">
-                            <ToggleButton.Style>
-                                <Style TargetType="ToggleButton">
-                                    <Setter Property="ToolTip" Value="AI destekli doğal dil araması"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="ToggleButton">
-                                                <Border x:Name="border"
-                                                        Background="{TemplateBinding Background}"
-                                                        CornerRadius="12"
-                                                        Padding="{TemplateBinding Padding}"
-                                                        BorderBrush="#E2E8F0"
-                                                        BorderThickness="1">
-                                                    <TextBlock x:Name="content"
-                                                               Text="🤖 AI"
-                                                               Foreground="{TemplateBinding Foreground}"
-                                                               FontSize="{TemplateBinding FontSize}"
-                                                               FontWeight="{TemplateBinding FontWeight}"
-                                                               HorizontalAlignment="Center"
-                                                               VerticalAlignment="Center"/>
-                                                </Border>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsChecked" Value="True">
-                                                        <Setter TargetName="border" Property="Background" Value="#007AFF"/>
-                                                        <Setter TargetName="content" Property="Foreground" Value="White"/>
-                                                    </Trigger>
-                                                    <MultiTrigger>
-                                                        <MultiTrigger.Conditions>
-                                                            <Condition Property="IsMouseOver" Value="True"/>
-                                                            <Condition Property="IsChecked" Value="False"/>
-                                                        </MultiTrigger.Conditions>
-                                                        <Setter TargetName="border" Property="Background" Value="#E8E8ED"/>
-                                                    </MultiTrigger>
-                                                    <MultiTrigger>
-                                                        <MultiTrigger.Conditions>
-                                                            <Condition Property="IsMouseOver" Value="True"/>
-                                                            <Condition Property="IsChecked" Value="True"/>
-                                                        </MultiTrigger.Conditions>
-                                                        <Setter TargetName="border" Property="Background" Value="#0066DD"/>
-                                                    </MultiTrigger>
-                                                    <Trigger Property="IsEnabled" Value="False">
-                                                        <Setter TargetName="border" Property="Background" Value="#E8E8E8"/>
-                                                        <Setter TargetName="content" Property="Foreground" Value="#AAAAAA"/>
-                                                        <Setter Property="Cursor" Value="No"/>
-                                                    </Trigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                    <Style.Triggers>
-                                        <Trigger Property="IsEnabled" Value="False">
-                                            <Setter Property="ToolTip" Value="⚠️ İnternet bağlantısı yok - AI modu kullanılamıyor"/>
-                                        </Trigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ToggleButton.Style>
-                        </ToggleButton>
-                        <TextBlock x:Name="AiWaitShimmer" Text="🤖 AI" FontSize="11" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                   Style="{StaticResource AiWaitGlint}" Visibility="Collapsed"/>
+                    <ToggleButton x:Name="NaturalLanguageToggle"
+                                  IsEnabled="False"
+                                  FontSize="11"
+                                  FontWeight="SemiBold"
+                                  Padding="12,0"
+                                  Height="40"
+                                  Margin="0"
+                                  Background="#F1F5F9"
+                                  Foreground="#64748B"
+                                  BorderThickness="0"
+                                  Cursor="Hand"
+                                  VerticalAlignment="Center"
+                                  ToolTipService.ShowOnDisabled="True">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton">
+                                <Setter Property="ToolTip" Value="AI destekli doğal dil araması"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ToggleButton">
+                                            <Border x:Name="border"
+                                                    Background="{TemplateBinding Background}"
+                                                    CornerRadius="12"
+                                                    Padding="{TemplateBinding Padding}"
+                                                    BorderBrush="#E2E8F0"
+                                                    BorderThickness="1">
+                                                <TextBlock x:Name="content"
+                                                           Text="🤖 AI"
+                                                           Foreground="{TemplateBinding Foreground}"
+                                                           FontSize="{TemplateBinding FontSize}"
+                                                           FontWeight="{TemplateBinding FontWeight}"
+                                                           HorizontalAlignment="Center"
+                                                           VerticalAlignment="Center"/>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsChecked" Value="True">
+                                                    <Setter TargetName="border" Property="Background" Value="#007AFF"/>
+                                                    <Setter TargetName="content" Property="Foreground" Value="White"/>
+                                                </Trigger>
+                                                <MultiTrigger>
+                                                    <MultiTrigger.Conditions>
+                                                        <Condition Property="IsMouseOver" Value="True"/>
+                                                        <Condition Property="IsChecked" Value="False"/>
+                                                    </MultiTrigger.Conditions>
+                                                    <Setter TargetName="border" Property="Background" Value="#E8E8ED"/>
+                                                </MultiTrigger>
+                                                <MultiTrigger>
+                                                    <MultiTrigger.Conditions>
+                                                        <Condition Property="IsMouseOver" Value="True"/>
+                                                        <Condition Property="IsChecked" Value="True"/>
+                                                    </MultiTrigger.Conditions>
+                                                    <Setter TargetName="border" Property="Background" Value="#0066DD"/>
+                                                </MultiTrigger>
+                                                <Trigger Property="IsEnabled" Value="False">
+                                                    <Setter TargetName="border" Property="Background" Value="#E8E8E8"/>
+                                                    <Setter TargetName="content" Property="Foreground" Value="#AAAAAA"/>
+                                                    <Setter Property="Cursor" Value="No"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ToggleButton.Style>
+                    </ToggleButton>
+                    <TextBlock x:Name="AiWaitShimmer" Text="🤖 AI" FontSize="11" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                               Style="{StaticResource AiWaitGlint}" Visibility="Collapsed"/>
                     </Grid>
                     <Button x:Name="AiEffortButton" IsEnabled="False" Width="44" Height="40" Margin="4,0,0,0"
                             Click="AiEffortButton_Click" AutomationProperties.Name="AI eforu: Medium">
@@ -1348,6 +1661,35 @@
                                     </MenuItem.Header>
                                 </MenuItem>
                                 <Separator Margin="6,3"/>
+                                <MenuItem Click="NewTabMenuItem_Click" AutomationProperties.Name="Yeni sekme">
+                                    <MenuItem.Header>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <AccessText Text="Yeni _sekme" VerticalAlignment="Center"/>
+                                            <TextBlock Grid.Column="1" Text="Ctrl+T" FontSize="11" Foreground="#94A3B8" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                                <MenuItem Click="DualPaneMenuItem_Click" AutomationProperties.Name="Çift panel">
+                                    <MenuItem.Header>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Orientation="Horizontal">
+                                                <AccessText Text="Çift _panel" VerticalAlignment="Center"/>
+                                                <TextBlock x:Name="DualPaneCheck" Text="  ✓" Foreground="#3F7EE8" FontWeight="SemiBold"
+                                                           VerticalAlignment="Center" Visibility="Collapsed"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="1" Text="Ctrl+Shift+D" FontSize="11" Foreground="#94A3B8" Margin="16,0,0,0" VerticalAlignment="Center"/>
+                                        </Grid>
+                                    </MenuItem.Header>
+                                </MenuItem>
+                                <Separator Margin="6,3"/>
                                 <MenuItem Header="_Ayarlar" Click="SettingsButton_Click"/>
                             </ContextMenu>
                         </Button.ContextMenu>
@@ -1408,12 +1750,23 @@
             </Border>
             
             <!-- Results Area -->
-            <Grid Grid.Row="1" Margin="0">
-
-
-
+            <Grid x:Name="FileContentArea" Grid.Row="2" Margin="0" Background="Transparent">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid x:Name="FolderPathBar" Grid.Row="0" Margin="16,8,24,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel x:Name="FolderPathSegments" Orientation="Horizontal" VerticalAlignment="Center" ClipToBounds="True"/>
+                    <TextBlock x:Name="FolderItemCountText" Grid.Column="1" FontSize="12" Foreground="#94A3B8"
+                               VerticalAlignment="Center" Margin="12,0,0,0"/>
+                </Grid>
                 <!-- Desktop Icons (Hidden by default in Spotlight style) -->
                 <Border x:Name="DesktopIconsScroll"
+                        Grid.Row="1"
                         Visibility="Collapsed"
                         Background="Transparent"
                         MaxHeight="500"
@@ -1450,7 +1803,9 @@
                 </Border>
 
                 <!-- Search Results List -->
-                <Border x:Name="ResultsContainer" services:UiAnimationScope.ThumbnailFadeEnabled="False"
+                <Border x:Name="ResultsContainer"
+                        Grid.Row="1"
+                        services:UiAnimationScope.ThumbnailFadeEnabled="False"
                         Background="Transparent"
                         CornerRadius="0,0,8,8"
                         Visibility="Collapsed">
@@ -1536,8 +1891,6 @@
                                           Width="46" Height="46" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center"/>
                                 </Grid>
                                 <TextBlock x:Name="SearchingText" Text="Aranıyor…" Style="{StaticResource StateTitle}"/>
-                                <ProgressBar IsIndeterminate="True" Height="3" Width="160" Margin="0,10,0,0"
-                                             Foreground="#3F7EE8" Background="#E3ECFB" BorderThickness="0"/>
                             </StackPanel>
 
                             <!-- Error Panel -->
@@ -1585,7 +1938,7 @@
                                   Grid.Row="1"
                                   Background="Transparent" 
                                   BorderThickness="0" 
-                                  SelectionMode="Single"
+                                  SelectionMode="Extended"
                                   Padding="12,4,12,12"
                                   MaxHeight="500"
                                   ScrollViewer.VerticalScrollBarVisibility="Visible"
@@ -1609,9 +1962,6 @@
                                                         Padding="12,10"
                                                         BorderBrush="#E2E8F0"
                                                         BorderThickness="1">
-                                                    <Border.LayoutTransform>
-                                                        <ScaleTransform x:Name="borderScale"/>
-                                                    </Border.LayoutTransform>
                                                     <ContentPresenter/>
                                                 </Border>
                                                 <ControlTemplate.Triggers>
@@ -1623,32 +1973,6 @@
                                                         <Setter TargetName="border" Property="Background" Value="#6366F1"/>
                                                         <Setter TargetName="border" Property="BorderBrush" Value="#6366F1"/>
                                                     </Trigger>
-                                                    <DataTrigger Binding="{Binding IsNew}" Value="True">
-                                                    <DataTrigger.EnterActions>
-                                                    <BeginStoryboard>
-                                                    <Storyboard>
-                                                    <DoubleAnimation Storyboard.TargetName="borderScale" Storyboard.TargetProperty="ScaleY" From="0" To="1" Duration="0:0:0.30">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    </Storyboard>
-                                                    </BeginStoryboard>
-                                                    </DataTrigger.EnterActions>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding IsRemoving}" Value="True">
-                                                    <Setter TargetName="border" Property="IsHitTestVisible" Value="False"/>
-                                                    <DataTrigger.EnterActions>
-                                                    <BeginStoryboard>
-                                                    <Storyboard>
-                                                    <DoubleAnimation Storyboard.TargetName="border" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.22">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    <DoubleAnimation Storyboard.TargetName="borderScale" Storyboard.TargetProperty="ScaleY" To="0" Duration="0:0:0.26">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    </Storyboard>
-                                                    </BeginStoryboard>
-                                                    </DataTrigger.EnterActions>
-                                                    </DataTrigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Setter.Value>
@@ -1657,6 +1981,9 @@
                                         <Trigger Property="IsSelected" Value="True">
                                             <Setter Property="Foreground" Value="White"/>
                                         </Trigger>
+                                        <DataTrigger Binding="{Binding IsCut}" Value="True">
+                                            <Setter Property="Opacity" Value="0.5"/>
+                                        </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </ListView.ItemContainerStyle>
@@ -1776,6 +2103,11 @@
                                             ContextMenu="{StaticResource FileContextMenu}">
                                         <Button.Style>
                                             <Style TargetType="Button">
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsCut}" Value="True">
+                                                        <Setter Property="Opacity" Value="0.5"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
                                                 <Setter Property="Template">
                                                     <Setter.Value>
                                                         <ControlTemplate TargetType="Button">
@@ -1786,9 +2118,6 @@
                                                                     BorderBrush="#E2E8F0"
                                                                     BorderThickness="1"
                                                                     RenderTransformOrigin="0.5,0.5">
-                                                                <Border.LayoutTransform>
-                                                                    <ScaleTransform x:Name="CardScale"/>
-                                                                </Border.LayoutTransform>
                                                                 <ContentPresenter/>
                                                             </Border>
                                                             <ControlTemplate.Triggers>
@@ -1796,38 +2125,10 @@
                                                                     <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
                                                                 <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
                                                                 </Trigger>
-                                                    <DataTrigger Binding="{Binding IsNew}" Value="True">
-                                                    <DataTrigger.EnterActions>
-                                                    <BeginStoryboard>
-                                                    <Storyboard>
-                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" From="0" To="1" Duration="0:0:0.30">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" From="0" To="1" Duration="0:0:0.30">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    </Storyboard>
-                                                    </BeginStoryboard>
-                                                    </DataTrigger.EnterActions>
-                                                    </DataTrigger>
-                                                    <DataTrigger Binding="{Binding IsRemoving}" Value="True">
-                                                    <Setter TargetName="CardBorder" Property="IsHitTestVisible" Value="False"/>
-                                                    <DataTrigger.EnterActions>
-                                                    <BeginStoryboard>
-                                                    <Storyboard>
-                                                    <DoubleAnimation Storyboard.TargetName="CardBorder" Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.22">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseIn"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleX" To="0" Duration="0:0:0.26">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    <DoubleAnimation Storyboard.TargetName="CardScale" Storyboard.TargetProperty="ScaleY" To="0" Duration="0:0:0.26">
-                                                    <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseInOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    </Storyboard>
-                                                    </BeginStoryboard>
-                                                    </DataTrigger.EnterActions>
-                                                    </DataTrigger>
+                                                                <DataTrigger Binding="{Binding IsTransferSelected}" Value="True">
+                                                                    <Setter TargetName="CardBorder" Property="Background" Value="#EFF6FF"/>
+                                                                    <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
+                                                                </DataTrigger>
                                                             </ControlTemplate.Triggers>
                                                         </ControlTemplate>
                                                     </Setter.Value>
@@ -1863,10 +2164,11 @@
                 </Border>
                 
                 <!-- Folder Loading Indicator (Improved - more spacious) -->
-                <ProgressBar x:Name="FolderLoadingBar" Height="2" VerticalAlignment="Top" Margin="0" Panel.ZIndex="5"
+                <ProgressBar x:Name="FolderLoadingBar" Grid.RowSpan="2" Height="2" VerticalAlignment="Top" Margin="0" Panel.ZIndex="5"
                              Visibility="Collapsed" IsIndeterminate="False" Foreground="#007AFF" Background="Transparent" BorderThickness="0"/>
                 <!-- Empty Folder Message -->
                 <Border x:Name="EmptyFolderPanel"
+                        Grid.Row="1"
                         Background="Transparent"
                         Visibility="Collapsed"
                         VerticalAlignment="Center"
@@ -1918,7 +2220,7 @@
                                    MaxWidth="380"
                                    Margin="0,0,0,18"/>
                         <Button x:Name="EmptyFolderBackButton"
-                                Click="BackButton_Click"
+                                Click="EmptyFolderUpButton_Click"
                                 Cursor="Hand"
                                 Focusable="False"
                                 HorizontalAlignment="Center"
@@ -1946,10 +2248,132 @@
                         </Button>
                     </StackPanel>
                 </Border>
+
+                <Grid Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,24,12" Panel.ZIndex="6">
+                    <Button x:Name="ShelfChip"
+                            Visibility="Collapsed"
+                            Cursor="Hand"
+                            Focusable="False"
+                            BorderBrush="{StaticResource ShelfLineBrush}"
+                            Click="ShelfChip_Click"
+                            AutomationProperties.Name="Raf"
+                            ToolTip="Raf: farklı yerlerden topladığın öğeler. Bir klasöre git, hepsini oraya kopyala ya da taşı. Öğeleri buraya sürükleyerek de ekleyebilirsin.">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Surface" Background="#FFFFFF" BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="1" CornerRadius="16" Padding="12,6,7,6">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.10" Color="#0F172A"/>
+                                    </Border.Effect>
+                                    <ContentPresenter/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Surface" Property="Background" Value="#F8FAFC"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                        <StackPanel Orientation="Horizontal">
+                            <Path Data="M 1,6 H 4.5 L 6,8.5 H 10 L 11.5,6 H 15 V 13.5 H 1 Z M 3,3.5 H 13 M 4.5,1 H 11.5"
+                                  Stroke="#475569" StrokeThickness="1.3" StrokeLineJoin="Round"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Width="16" Height="15" Stretch="None" VerticalAlignment="Center"/>
+                            <TextBlock Text="Raf" FontSize="12.5" FontWeight="SemiBold" Foreground="#334155" Margin="8,0,8,0" VerticalAlignment="Center"/>
+                            <Border Background="#EAF1FD" CornerRadius="9" MinWidth="20" Padding="6,1" VerticalAlignment="Center">
+                                <TextBlock x:Name="ShelfCountText" FontSize="11.5" FontWeight="SemiBold" Foreground="#1F4FA8" HorizontalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+                    </Button>
+                    <Popup x:Name="ShelfPopup"
+                           PlacementTarget="{Binding ElementName=ShelfChip}"
+                           Placement="Top"
+                           VerticalOffset="6"
+                           AllowsTransparency="True"
+                           StaysOpen="False"
+                           PopupAnimation="Fade">
+                        <Border Width="330" Background="#FFFFFF" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="12"
+                                Padding="8" Margin="12,12,12,12">
+                            <Border.Effect>
+                                <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
+                            </Border.Effect>
+                            <StackPanel>
+                                <Grid Margin="6,2,0,6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock x:Name="ShelfTitleText" FontSize="13" FontWeight="SemiBold" Foreground="#1E293B" VerticalAlignment="Center"/>
+                                    <Button Grid.Column="1" Style="{StaticResource SelectionBarButton}" Content="Boşalt"
+                                            ToolTip="Raftaki tüm öğeleri bırak (dosyalara dokunmaz)" Click="ShelfClear_Click"/>
+                                </Grid>
+                                <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                    <ItemsControl x:Name="ShelfItems">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="6,3,2,3" ToolTip="{Binding Path}">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="*"/>
+                                                        <ColumnDefinition Width="Auto"/>
+                                                    </Grid.ColumnDefinitions>
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding Name}" FontSize="12.5" Foreground="#1E293B" TextTrimming="CharacterEllipsis"/>
+                                                        <TextBlock Text="{Binding Folder}" FontSize="11" Foreground="#94A3B8" TextTrimming="CharacterEllipsis"/>
+                                                    </StackPanel>
+                                                    <Button Grid.Column="1" Style="{StaticResource TabCloseButton}" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                            ToolTip="Raftan çıkar" Click="ShelfRemoveItem_Click"/>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                                <Border Height="1" Background="#EEF2F7" Margin="4,6,4,8"/>
+                                <TextBlock x:Name="ShelfDestinationText" FontSize="11.5" Foreground="#64748B" Margin="6,0,6,8" TextTrimming="CharacterEllipsis"/>
+                                <StackPanel Orientation="Horizontal" Margin="4,0,0,0">
+                                    <Button x:Name="ShelfCopyButton" Style="{StaticResource ShelfPrimaryButton}" Content="Buraya kopyala" Click="ShelfCopy_Click"/>
+                                    <Button x:Name="ShelfMoveButton" Style="{StaticResource SelectionBarButton}" Content="Buraya taşı" Margin="6,0,0,0" Click="ShelfMove_Click"/>
+                                    <Button Style="{StaticResource SelectionBarButton}" Content="Panoya al" Click="ShelfClipboard_Click"
+                                            ToolTip="Dosyaları panoya koy; Explorer'da da yapıştırabilirsin"/>
+                                </StackPanel>
+                                <Border x:Name="ShelfDragHandle" Margin="4,8,4,0" Padding="8,6" CornerRadius="8" Background="#F8FAFC"
+                                        Cursor="SizeAll" MouseLeftButtonDown="ShelfDragHandle_MouseDown"
+                                        MouseMove="ShelfDragHandle_MouseMove" MouseLeftButtonUp="ShelfDragHandle_MouseUp">
+                                    <TextBlock Text="⠿  Hepsini sürükle: bir klasöre ya da Explorer'a" FontSize="11.5" Foreground="#64748B"/>
+                                </Border>
+                            </StackPanel>
+                        </Border>
+                    </Popup>
+                </Grid>
             </Grid>
-            
+
+            <Border x:Name="SelectionBar"
+                    Grid.Row="3"
+                    Visibility="Collapsed"
+                    Background="#FFFFFF"
+                    BorderBrush="#E2E8F0"
+                    BorderThickness="0,1,0,0"
+                    Padding="20,8,14,8">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="SelectionCountText" FontSize="13" FontWeight="SemiBold" Foreground="#1E293B"
+                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button Style="{StaticResource SelectionBarButton}" Content="Kopyala" ToolTip="Ctrl+C" Click="SelectionCopy_Click"/>
+                        <Button Style="{StaticResource SelectionBarButton}" Content="Kes" ToolTip="Ctrl+X" Click="SelectionCut_Click"/>
+                        <Button Style="{StaticResource SelectionBarButton}" Content="Yeniden adlandır" ToolTip="Hepsini birlikte adlandır (F2)" Click="SelectionRename_Click"/>
+                        <Button x:Name="SelectionMoreButton" Style="{StaticResource SelectionBarButton}" Content="Diğer ▾" ToolTip="Yolu kopyala, sıkıştır, rafa ekle…" Click="SelectionMore_Click"/>
+                        <Button Style="{StaticResource SelectionBarButton}" Content="Sil" Foreground="#B42318" ToolTip="Geri Dönüşüm Kutusu'na taşı (Del)" Click="SelectionDelete_Click"/>
+                        <Button Style="{StaticResource SelectionBarButton}" Content="✕" Padding="9,5" Margin="4,0,0,0"
+                                ToolTip="Seçimi kaldır (Esc)" AutomationProperties.Name="Seçimi kaldır" Click="SelectionClear_Click"/>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
             <!-- Delta Sync Progress Row (Row 2) - Below content, extends window height -->
-            <Grid Grid.Row="2">
+            <Grid Grid.Row="4">
                 <!-- Search catalog build row -->
                 <Border x:Name="CatalogBuildPanel"
                         Background="#FFFFFF"
@@ -2017,7 +2441,7 @@
                                          Minimum="0"
                                          Maximum="100"
                                          Value="0"
-                                         IsIndeterminate="True"
+                                         IsIndeterminate="False"
                                          Foreground="#3F7EE8"
                                          Background="#E3ECFB"
                                          Margin="0,9,0,0"
@@ -2053,6 +2477,14 @@
                     </StackPanel>
                 </Border>
             </Grid>
+            <Canvas x:Name="FileTransferOverlay" Grid.RowSpan="5" Grid.ColumnSpan="2" Panel.ZIndex="10" IsHitTestVisible="False">
+                <Border x:Name="FileTransferLabel" Visibility="Collapsed" Padding="9,5" CornerRadius="6"
+                        Background="{DynamicResource {x:Static SystemColors.InfoBrushKey}}"
+                        BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}" BorderThickness="1">
+                    <TextBlock x:Name="FileTransferText" MaxWidth="340" TextTrimming="CharacterEllipsis"
+                               Foreground="{DynamicResource {x:Static SystemColors.InfoTextBrushKey}}" FontSize="12"/>
+                </Border>
+            </Canvas>
         </Grid>
     </Border>
 </Window>

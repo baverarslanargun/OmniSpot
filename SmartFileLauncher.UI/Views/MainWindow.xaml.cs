@@ -159,6 +159,7 @@ public partial class MainWindow : Window {
 
         DataContext = _viewModel;
         InitializeComponent();
+        InitializeFileTransfers();
         TrackMoreOptionsMenuState();
         DesktopIcons.ItemsSource = _desktopRows;
         _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
@@ -197,6 +198,11 @@ public partial class MainWindow : Window {
         
         InitializeThumbnailViewport();
         InitializeFilters();
+        InitializeNavigation();
+        InitializeBatchCommands();
+        InitializeTabs();
+        InitializeShelf();
+        InitializeDualPane();
 
         Loaded += MainWindow_Loaded;
     }
@@ -230,6 +236,7 @@ public partial class MainWindow : Window {
     
     private void HandleSourceInitialized(object? sender, EventArgs e) {
         _shellService.Initialize(this, _appSettings);
+        StartFileClipboardListener();
         ApplyWindowCorners();
     }
 
@@ -357,6 +364,7 @@ public partial class MainWindow : Window {
 
         _lifetimeCancellation.Cancel();
         ShutdownThumbnailPolicy();
+        StopFileClipboardListener();
         _viewportDebounce.Stop();
         _thumbnailIdleRelease.Stop();
         _thumbnailViewport?.Cancel();
@@ -558,6 +566,7 @@ public partial class MainWindow : Window {
     }
 
     private void RestartSearchAfterModeChange() {
+        if (_restoringSearch) return;
         CancelCurrentSearch();
         if (_isIndexed && !string.IsNullOrWhiteSpace(SearchBox.Text))
             BeginSearch(SearchBox.Text, debounce: _isNaturalLanguageMode);
@@ -651,6 +660,7 @@ public partial class MainWindow : Window {
         _desktopRows.Clear();
         foreach (var row in rows) _desktopRows.Add(row);
         ScheduleViewportUpdate();
+        UpdateFolderItemCount();
     }
 
     private void ApplyDesktopLayout() {
@@ -755,7 +765,9 @@ public partial class MainWindow : Window {
         if (IsActive && (Keyboard.FocusedElement == null || ReferenceEquals(Keyboard.FocusedElement, this))) {
             SearchBox.Focus();
         }
-        LoadDesktopIcons();
+        if (_currentFolderPath == null) {
+            LoadDesktopIcons();
+        }
         Log("✅ Arama motoru hazır");
 
         if (_indexLifecycle.ReconciliationStatus.IsRunning) {
@@ -776,7 +788,9 @@ public partial class MainWindow : Window {
             Dispatcher.HasShutdownStarted ||
             Dispatcher.HasShutdownFinished) return;
 
-        Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
+        Interlocked.Increment(ref _fileChangeSequence);
+        if (System.IO.Path.IsPathFullyQualified(evt.FullPath))
+            Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
 
         if (SearchRefreshPolicy.ShouldRefresh(evt, Volatile.Read(ref _refreshSearchRequest), _measurementRun == null))
             Interlocked.Exchange(ref _searchRefreshRequested, 1);
@@ -850,6 +864,8 @@ public partial class MainWindow : Window {
                 await RefreshCurrentFolderIconsAsync();
             }
 
+            await RefreshDualPaneAsync();
+
             if (Interlocked.Exchange(ref _searchRefreshRequested, 0) != 0 &&
                 !string.IsNullOrWhiteSpace(SearchBox.Text) &&
                 ResultsContainer.Visibility == Visibility.Visible)
@@ -898,6 +914,7 @@ public partial class MainWindow : Window {
             var folderView = _folderViews.Get(folderPath);
             var now = DateTime.Now;
             _currentFolderEntries = page.Entries;
+            _folderPageTruncated = page.IsTruncated;
 
             foreach (var entry in SortEntries(page.Entries, folderView.Sort))
             {
@@ -1075,6 +1092,7 @@ public partial class MainWindow : Window {
 
         var rootView = _folderViews.Get(null);
         _currentFolderEntries = entries;
+        _folderPageTruncated = false;
         var items = BuildFolderItems(entries, rootView);
         foreach (var item in items) {
             _desktopIcons.Add(item);
@@ -1121,6 +1139,7 @@ public partial class MainWindow : Window {
         catch (OperationCanceledException) { }
     }
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs e) {
+        if (_restoringSearch) return;
         var query = SearchBox.Text;
         
         if (string.IsNullOrWhiteSpace(query)) {
@@ -1825,47 +1844,26 @@ public partial class MainWindow : Window {
         bool altPressed = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
         
         var targetPath = _hoveredItemPath ?? _selectedItemPath;
-        var targetItem = _hoveredItem;
-        
-        if (ctrlPressed && e.Key == Key.C && !string.IsNullOrEmpty(targetPath)) {
-            CopyItemToClipboard(targetPath, isCut: false);
+
+        if (ctrlPressed && HandleFileTransferKey(e, targetPath)) {
             e.Handled = true;
             return;
         }
-        
-        if (ctrlPressed && e.Key == Key.X && !string.IsNullOrEmpty(targetPath)) {
-            CopyItemToClipboard(targetPath, isCut: true);
-            if (targetItem != null) {
-                if (_cutItem != null) {
-                    _cutItem.IsCut = false;
-                }
-                targetItem.IsCut = true;
-                _cutItem = targetItem;
-            }
-            e.Handled = true;
-            return;
-        }
-        
-        if (ctrlPressed && e.Key == Key.V) {
-            PasteFromClipboard();
-            e.Handled = true;
-            return;
-        }
-        
+
         if (ctrlPressed && shiftPressed && e.Key == Key.N) {
             ContextMenu_NewFolder(this, new RoutedEventArgs());
             e.Handled = true;
             return;
         }
         
-        if (e.Key == Key.F2 && !string.IsNullOrEmpty(targetPath)) {
-            RenameItem(targetPath);
+        if (e.Key == Key.F2 && KeyboardTargets(targetPath) is { Count: > 0 } renameTargets) {
+            RenameItems(renameTargets);
             e.Handled = true;
             return;
         }
         
-        if (e.Key == Key.Delete && !string.IsNullOrEmpty(targetPath)) {
-            DeleteItem(targetPath);
+        if (e.Key == Key.Delete && KeyboardTargets(targetPath) is { Count: > 0 } deleteTargets) {
+            DeleteItems(deleteTargets);
             e.Handled = true;
             return;
         }
@@ -1888,7 +1886,7 @@ public partial class MainWindow : Window {
         Log($"💬 {message}");
     }
     
-    private void CopyItemToClipboard(string path, bool isCut) {
+    private void CopyItemToInternalClipboard(string path, bool isCut) {
         _clipboardPath = path;
         _isCutOperation = isCut;
         
@@ -1902,7 +1900,7 @@ public partial class MainWindow : Window {
         ShowFeedback($"{operation}: {name}");
     }
     
-    private void PasteFromClipboard() {
+    private void PasteFromInternalClipboard() {
         if (string.IsNullOrEmpty(_clipboardPath)) {
             ShowFeedback("⚠️ Panoda öğe yok");
             return;
@@ -1932,7 +1930,6 @@ public partial class MainWindow : Window {
                     _desktopIcons.Remove(_cutItem);
                     _cutItem = null;
                 }
-                System.Windows.Clipboard.Clear();
                 _clipboardPath = null;
                 _isCutOperation = false;
             }
@@ -2013,7 +2010,7 @@ public partial class MainWindow : Window {
     private void OpenFile(string path) {
         try {
             if (_fileOperations.GetItemKind(path) == FileItemKind.Directory) {
-                _ = OpenFolderInApp(path);
+                _ = NavigateToFolderAsync(path);
             } else {
                 _fileOperations.OpenFile(path);
             }
@@ -2022,41 +2019,7 @@ public partial class MainWindow : Window {
         }
     }
     
-    private async Task OpenFolderInApp(string folderPath) {
-        try {
-            if (_navigationDirection == 0) _navigationDirection = 1;
-            Log($"📂 Klasör açılıyor: {folderPath}");
-            
-            ShowFolderLoadingIndicator(folderPath);
-            
-            try {
-                if (!await LoadFolderContentsAsync(
-                        folderPath,
-                        ensureSynchronized: true)) {
-                    return;
-                }
 
-                _currentFolderPath = folderPath;
-                UpdateFilterBadge();
-                
-                SearchBox.Clear();
-                ResultsContainer.Visibility = Visibility.Collapsed;
-                ShowPanel(DesktopIconsScroll);
-                
-                BackButton.Visibility = Visibility.Visible;
-                
-                var folderName = System.IO.Path.GetFileName(folderPath);
-                if (string.IsNullOrEmpty(folderName)) folderName = folderPath;
-                SearchWatermark.Text = $"📂 {folderName}";
-            } finally {
-                HideFolderLoadingIndicator();
-            }
-            
-        } catch (Exception ex) {
-            Log($"❌ Klasör açılamadı: {ex.Message}");
-            ModernDialog.Show(this, "Klasör açılamadı", ex.Message, DialogKind.Warning);
-        }
-    }
     
     private const int MAX_FOLDER_ITEMS = 1000;
 
@@ -2314,36 +2277,10 @@ public partial class MainWindow : Window {
         };
     }
     
-    private void GoToParentFolder() {
-        if (string.IsNullOrEmpty(_currentFolderPath)) {
-            GoToHome();
-            return;
-        }
 
-        var parent = _folderNavigation.GetParentWithinRoots(
-            _currentFolderPath,
-            _indexedRootPaths);
-        if (string.IsNullOrEmpty(parent) ||
-            _fileOperations.GetItemKind(parent) != FileItemKind.Directory) {
-            GoToHome();
-            return;
-        }
 
-        _navigationDirection = -1;
-        _ = OpenFolderInApp(parent);
-    }
-    private void GoToHome() {
-        _currentFolderPath = null;
-        BackButton.Visibility = Visibility.Collapsed;
-        _navigationDirection = -1;
-        LoadDesktopIcons();
-        UpdateFilterBadge();
-        SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
-    }
     
-    private void BackButton_Click(object sender, RoutedEventArgs e) {
-        GoToParentFolder();
-    }
+
     
     private void SettingsButton_Click(object sender, RoutedEventArgs e) {
         OpenSettings();
@@ -2420,43 +2357,30 @@ public partial class MainWindow : Window {
     }
 
     private void ContextMenu_Copy(object sender, RoutedEventArgs e) {
-        var path = GetPathFromContextMenu(sender);
-        if (string.IsNullOrEmpty(path)) return;
-        CopyItemToClipboard(path, isCut: false);
+        CopySelectionToClipboard(GetPathFromContextMenu(sender), isCut: false, fromMenu: true);
     }
     
     private void ContextMenu_Cut(object sender, RoutedEventArgs e) {
-        var path = GetPathFromContextMenu(sender);
-        if (string.IsNullOrEmpty(path)) return;
-        
-        var item = _desktopIcons.FirstOrDefault(i => 
-            string.Equals(i.FullPath, path, StringComparison.OrdinalIgnoreCase));
-        
-        CopyItemToClipboard(path, isCut: true);
-        
-        if (item != null) {
-            if (_cutItem != null) {
-                _cutItem.IsCut = false;
-            }
-            item.IsCut = true;
-            _cutItem = item;
-        }
+        CopySelectionToClipboard(GetPathFromContextMenu(sender), isCut: true, fromMenu: true);
     }
     
     private void ContextMenu_Paste(object sender, RoutedEventArgs e) {
-        PasteFromClipboard();
+        var item = sender is MenuItem { Parent: ContextMenu { PlacementTarget: FrameworkElement target } }
+            ? GetFileItem(target).Item
+            : null;
+        PasteFromWindowsClipboard(GetFolderPath(item) ?? GetPasteDestination());
     }
     
     private void ContextMenu_Rename(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
-        RenameItem(path);
+        RenameItems(MenuTargets(path));
     }
     
     private void ContextMenu_Delete(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
-        DeleteItem(path);
+        DeleteItems(MenuTargets(path));
     }
     
     private void ContextMenu_OpenLocation(object sender, RoutedEventArgs e) {

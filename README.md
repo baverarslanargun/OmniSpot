@@ -15,7 +15,13 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 - ✅ **Akıllı Arama**: Dosya adlarında hızlı arama
 - ✅ **Doğal Dil Arama**: İsteğe bağlı Groq desteği ve kural tabanlı fallback ile sorguları yapılandırın
 - ✅ **Klasör Navigasyonu**: Uygulama içinde klasörlerde gezinin
+- ✅ **Adres Çubuğu ve Geçmiş**: Klasördeyken içeriğin üstünde tıklanabilir yol; Geri/İleri aramaya da döner ve aramayı yeniden çalıştırmaz
+- ✅ **Sekmeler**: "⋯ → Yeni sekme", sağ tıkta "Yeni Sekmede Aç" veya klasöre orta tık; şerit yalnız 2+ sekmede görünür
+- ✅ **Toplu Komutlar**: 2+ öğe seçince beliren çubuk; toplu yeniden adlandırma, ZIP'e sıkıştırma/çıkarma, yolu kopyalama, yeni klasöre taşıma
+- ✅ **Raf**: Farklı aramalardan öğe toplayın, bir klasöre gidip hepsini tek seferde kopyalayın veya taşıyın
+- ✅ **Çift Panel**: "⋯ → Çift panel" ile pencere geçici olarak genişler; iki klasör arasında sürükle-bırak ve karşı panele kopyala/taşı
 - ✅ **Dosya İşlemleri**: Kopyala, Kes, Yapıştır, Sil, Yeniden Adlandır
+- ✅ **Sürükle-Bırak**: OmniSpot ile Gezgin arasında dosya ve klasör aktarın. OmniSpot'ta açık klasörün boş alanına veya bir klasörün üzerine bırakın.
 - ✅ **Thumbnail Önizleme**: Resim ve video önizlemeleri
 - ✅ **Renkli Klasörler**: Klasör türüne göre renk kodlaması
 - ✅ **Kalıcı Çoklu Dizin İndeksi**: Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini indeksleyin; sonraki açılışlarda kayıtlı indeksi kullanın
@@ -25,13 +31,23 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 | Kısayol | İşlem |
 |---------|-------|
 | **Ctrl+Space** | OmniSpot'u aç/kapat |
-| **Ctrl+C** | Kopyala (hover) |
-| **Ctrl+X** | Kes (hover) |
-| **Ctrl+V** | Yapıştır |
-| **F2** | Yeniden adlandır (hover) |
-| **Delete** | Sil (hover) |
+| **Ctrl+C** | Seçili dosya ve klasörleri Windows panosuna kopyala |
+| **Ctrl+X** | Seçili dosya ve klasörleri Windows panosuna kes |
+| **Ctrl+V** | Windows panosundaki dosya ve klasörleri hedefe yapıştır |
+| **Ctrl / Shift + tıklama** | Birden çok öğe veya bir öğe aralığı seç |
+| **Ctrl / Shift + sürükleme** | Sırasıyla kopyala veya taşı |
+| **F2** | Yeniden adlandır (hover); 2+ öğe seçiliyse toplu yeniden adlandır |
+| **Delete** | Sil (hover); 2+ öğe seçiliyse seçimin tamamını sil |
 | **F5** | Yenile |
-| **ESC** | Kapat |
+| **Alt+← / Alt+→** | Geri / ileri (fare yan tuşları da çalışır); geri tuşu aramaya da döner |
+| **Alt+↑** | Üst klasör |
+| **Backspace** | Arama kutusu boşken geri |
+| **Ctrl+A** | Arama kutusu boşken tümünü seç |
+| **Ctrl+Shift+C** | Yolu kopyala |
+| **Ctrl+T / Ctrl+W** | Yeni sekme / sekmeyi kapat |
+| **Ctrl+Tab / Ctrl+1…9** | Sekmeler arasında geç |
+| **Ctrl+Shift+D** | Çift paneli aç/kapat |
+| **ESC** | 2+ öğe seçiliyse seçimi kaldır, değilse kapat |
 
 ### Doğal Dil Arama ve Gizlilik
 
