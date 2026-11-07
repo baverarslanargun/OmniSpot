@@ -129,16 +129,18 @@ public partial class IndexManager
     {
         var builders = _activeRootPaths.Select(root => new LiveCatalog(Path.Combine(LiveDirectory, "root-" + Guid.NewGuid().ToString("N")), root, _liveControl!.LastScanUtc)).ToArray();
         var accepted = 0; long lastProgress = 0;
+        var inventoryMessage = inventory is null ? "Dosyalar okunuyor ve kataloğa yerleştiriliyor..."
+            : "MFT okunuyor ve kataloğa yerleştiriliyor...";
         void Progress()
         {
             if (started.ElapsedMilliseconds - lastProgress < 250) return;
             lastProgress = started.ElapsedMilliseconds;
-            ReportProgress("Dosyalar okunuyor ve kataloğa yerleştiriliyor...", 0, accepted, started.ElapsedMilliseconds, isIndeterminate: true, phase: "live_inventory");
+            ReportProgress(inventoryMessage, 0, accepted, started.ElapsedMilliseconds, isIndeterminate: true, phase: "live_inventory");
         }
         void Receive(ReconciliationEntry entry)
         {
             if (IsLiveStoragePath(entry.Path)) return;
-            if (entry.IsDirectory && (entry.Attributes & FileAttributes.ReparsePoint) != 0 && !IsHiddenOrSystem(entry.Attributes))
+            if (entry.IsDirectory && (entry.Attributes & FileAttributes.ReparsePoint) != 0)
                 TrackLiveLink(entry.Path, dispatchPaused: true);
             var builder = builders.First(candidate => IsSameOrDescendantPath(entry.Path, candidate.RootPath));
             try { builder.Add(ToLiveRecord(entry, builder.RootPath)); }
@@ -147,17 +149,14 @@ public partial class IndexManager
         }
         try
         {
-            ReportProgress("Dosyalar okunuyor ve kataloğa yerleştiriliyor...", 0, 0, started.ElapsedMilliseconds, isIndeterminate: true, phase: "live_inventory");
+            ReportProgress(inventoryMessage, 0, 0, started.ElapsedMilliseconds, isIndeterminate: true, phase: "live_inventory");
             if (inventory is not null)
             {
-                var excluded = new List<string>();
                 await using var session = await inventory.ReadAsync(_activeRootPaths, entry =>
                 {
                     Receive(new(entry.Path, entry.IsDirectory, entry.LastWriteTimeUtc, entry.SizeBytes, entry.Attributes, entry.CreatedTimeUtc));
-                    if (IsHiddenOrSystem(entry.Attributes) && !_activeRootPaths.Contains(entry.Path, StringComparer.OrdinalIgnoreCase)) excluded.Add(entry.Path);
                 }, ct).ConfigureAwait(false);
                 if (session is null || !await session.ValidateAsync(ct).ConfigureAwait(false)) throw new IOException("MFT envanteri doğrulanamadı.");
-                foreach (var path in excluded.OrderBy(path => path.Length)) builders.First(builder => IsSameOrDescendantPath(path, builder.RootPath)).ApplyMutation(new(path, null));
                 foreach (var link in NormalizeRootPaths(_liveLinkScopes))
                 {
                     var builder = builders.First(candidate => IsSameOrDescendantPath(link, candidate.RootPath));
@@ -166,7 +165,8 @@ public partial class IndexManager
                         try { builder.ApplyMutation(new(entry.Path, ToLiveRecord(entry, builder.RootPath))); }
                         catch (Exception error) { throw new InvalidOperationException("Bağlantı kataloğu yazılamadı.", error); }
                     });
-                    if (captured.UnreadableScopes.Count > 0) throw new IOException("MFT bağlantı kapsamı okunamadı.");
+                    if (captured.UnreadableScopes.Count > 0)
+                        NotifyError($"Bağlantı taramasında {captured.UnreadableScopes.Count} erişilemeyen kapsam atlandı: {string.Join(" | ", captured.Errors.Take(3))}");
                 }
             }
             else
@@ -201,9 +201,22 @@ public partial class IndexManager
     private void TrackLiveLink(string path, bool dispatchPaused)
     {
         if (LiveWatcherRoots.Any(root => IsSameOrDescendantPath(path, root))) return;
+        var root = _activeRootPaths.FirstOrDefault(candidate => IsSameOrDescendantPath(path, candidate));
+        try { if (root is not null && IsDirectoryLinkCycle(path, root)) return; }
+        catch (IOException error) { NotifyError(error.Message); return; }
+        try
+        {
+            _watcher.Start(dispatchPaused, captureAllChanges: true);
+            _watcher.Watch(path);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            if (_watcher.WatchedPathCount == 0) _watcher.Stop();
+            NotifyError($"Bağlantı izlenemedi: {path}; {error.Message}");
+            return;
+        }
         _liveLinkScopes.Add(path);
         LiveWatcherRoots = NormalizeRootPaths(LiveWatcherRoots.Append(path)).ToArray();
-        _watcher.Watch(path); _watcher.Start(dispatchPaused, captureAllChanges: true);
         if (_isInitialized) lock (_lock) SaveLiveControl(_liveControl! with { LinkScopes = _liveLinkScopes.ToArray() });
     }
     internal void CompleteLiveBootstrap()

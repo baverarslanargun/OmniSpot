@@ -6,6 +6,8 @@ namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public sealed class ChangeFeedInventorySessions : IDisposable
 {
+    private const int MaximumPageEntries = 2048;
+    private const int TargetPageBytes = 768 * 1024;
     private readonly object _gate = new();
     private readonly Dictionary<string, Session> _sessions = new(StringComparer.Ordinal);
     private readonly Func<IReadOnlyList<ChangeFeedSubscribedRoot>, CancellationToken, NtfsInventorySecurityGuard?,
@@ -93,23 +95,24 @@ public sealed class ChangeFeedInventorySessions : IDisposable
             }
             session.LastAccess = DateTime.UtcNow;
             if (validateOnly)
-                return session.Completed && ValidateSecurity(session, ct) ? ChangeFeedResponse.Ok() : Failed();
+                return session.Completed && ValidateSecurity(session, ct) ? ChangeFeedResponse.Ok()
+                    : Failed(session.Security?.LastFailure ?? "Envanter tamamlanamadı veya geçerliliğini kaybetti.");
             if (session.Completed) return Failed();
 
             var entries = new List<ChangeFeedInventoryEntryDto>();
             long bytes = 1024;
-            for (var count = 0; count < 512 && session.Entries.Reader.TryPeek(out var candidate); count++)
+            for (var count = 0; count < MaximumPageEntries && session.Entries.Reader.TryPeek(out var candidate); count++)
             {
                 ct.ThrowIfCancellationRequested();
                 var allowed = canReturn(candidate.Path);
                 var dto = allowed ? ChangeFeedInventoryEntryDto.FromEntry(candidate) : null;
-                var size = dto is null ? 0 : ChangeFeedMessageChannel.MeasureResponse(dto) + 1;
-                if (size + 1024 > ChangeFeedProtocol.MaximumResponseBytes)
+                var size = dto is null ? 0 : dto.EncodedSizeUpperBound + 1;
+                if (size + 1024 > ChangeFeedProtocol.MaximumPageBytes)
                 {
                     Cancel(binding.OwnerSid, token);
                     return Failed();
                 }
-                if (entries.Count > 0 && bytes + size > 256 * 1024) break;
+                if (entries.Count > 0 && bytes + size > TargetPageBytes) break;
                 session.Entries.Reader.TryRead(out _);
                 if (dto is not null) entries.Add(dto);
                 bytes += size;
@@ -123,7 +126,7 @@ public sealed class ChangeFeedInventorySessions : IDisposable
             if (session.Completed && !ValidateSecurity(session, ct))
             {
                 Cancel(binding.OwnerSid, token);
-                return Failed("MFT kapsamının erişim güvenliği veya USN sürekliliği değişti.");
+                return Failed(session.Security?.LastFailure ?? "MFT kapsamının erişim güvenliği veya USN sürekliliği değişti.");
             }
             session.Token = Guid.NewGuid().ToString("N");
             return new ChangeFeedResponse(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok,
@@ -196,7 +199,7 @@ public sealed class ChangeFeedInventorySessions : IDisposable
         public ChangeFeedSubscribedRoot[] Roots { get; } = roots;
         public string Token { get; set; } = Guid.NewGuid().ToString("N");
         public DateTime LastAccess { get; set; } = DateTime.UtcNow;
-        public Channel<IndexInventoryEntry> Entries { get; } = Channel.CreateBounded<IndexInventoryEntry>(512);
+        public Channel<IndexInventoryEntry> Entries { get; } = Channel.CreateBounded<IndexInventoryEntry>(MaximumPageEntries);
         public CancellationTokenSource Cancellation { get; } = new();
         public volatile bool Failed;
         public bool Completed { get; set; }

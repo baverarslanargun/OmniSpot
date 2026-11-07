@@ -16,16 +16,21 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     private readonly TimeSpan _handoffDrainBudget;
     private readonly long _pageBudget;
     private readonly ChangeFeedInventorySessions? _inventory;
+    private readonly SharedCatalogService? _catalogs;
+    private readonly IndexVolumeService _volumes = new();
+    internal Func<string, CancellationToken, SmartFileLauncher.Core.ChangeFeed.Usn.UsnDrainRunner.BootstrapLease>? CatalogBootstrap { get; }
 
     public ChangeFeedAdmissionService(
         ChangeFeedRootAdmission admission,
         Func<string, IChangeFeedStore> storeFactory,
         ChangeFeedDeliveryLedger? ledger = null,
         Func<string, ChangeFeedPathAuthorizer>? authorizerFactory = null,
-        long pageBudget = ChangeFeedProtocol.MaximumResponseBytes,
+        long pageBudget = ChangeFeedProtocol.MaximumPageBytes,
         Func<string, CancellationToken, bool>? handoffDrainer = null,
         TimeSpan? handoffDrainBudget = null,
-        ChangeFeedInventorySessions? inventory = null)
+        ChangeFeedInventorySessions? inventory = null,
+        Func<string, ChangeFeedStoreLayout>? sharedCatalogLayout = null,
+        Func<string, CancellationToken, SmartFileLauncher.Core.ChangeFeed.Usn.UsnDrainRunner.BootstrapLease>? catalogBootstrap = null)
     {
         _admission = admission ?? throw new ArgumentNullException(nameof(admission));
         _storeFactory = storeFactory ?? throw new ArgumentNullException(nameof(storeFactory));
@@ -34,6 +39,8 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         _pageBudget = pageBudget;
         _handoffDrainer = handoffDrainer;
         _inventory = inventory;
+        if (sharedCatalogLayout is not null) _catalogs = new(this, sharedCatalogLayout, _storeFactory);
+        CatalogBootstrap = catalogBootstrap;
         _handoffDrainBudget = handoffDrainBudget ?? ChangeFeedProtocol.HandoffDrainBudget;
 
         if (_handoffDrainBudget <= TimeSpan.Zero ||
@@ -43,8 +50,11 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         }
     }
 
-    public ChangeFeedResponse Handle(
-        NamedPipeServerStream pipe,
+    public ChangeFeedResponse Handle(NamedPipeServerStream pipe, ChangeFeedRequest request,
+        CancellationToken cancellationToken = default) =>
+        Handle(ChangeFeedCaller.FromPipe(pipe), request, cancellationToken);
+    internal ChangeFeedResponse Handle(
+        ChangeFeedCaller pipe,
         ChangeFeedRequest request,
         CancellationToken cancellationToken = default)
     {
@@ -76,11 +86,17 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
                     DrainAndHoldLease(pipe, request.LeaseSeconds, cancellationToken),
                 ChangeFeedRequestKind.ReleaseLease =>
                     ReleaseLease(pipe, cancellationToken),
-                ChangeFeedRequestKind.GetCapabilities => ChangeFeedResponse.Granted("continuous-usn-v1"),
+                ChangeFeedRequestKind.GetCapabilities => ChangeFeedResponse.Granted("continuous-usn-v1") with
+                    { Capabilities = ["shared-build-options-v1", "two-phase-index-v1", "volume-index-v1"] },
                 ChangeFeedRequestKind.PrepareContinuousRoot => PrepareContinuousRoot(pipe, request.RootPath, cancellationToken),
                 ChangeFeedRequestKind.DrainContinuous => DrainContinuous(pipe, cancellationToken),
                 ChangeFeedRequestKind.Inventory or ChangeFeedRequestKind.ValidateInventory or
                     ChangeFeedRequestKind.CancelInventory => Inventory(pipe, request, cancellationToken),
+                ChangeFeedRequestKind.OpenCatalog or ChangeFeedRequestKind.PollCatalog or
+                    ChangeFeedRequestKind.RecordCatalogOpen or ChangeFeedRequestKind.RepairCatalog or ChangeFeedRequestKind.SynchronizeCatalog or ChangeFeedRequestKind.CloseCatalog =>
+                    _catalogs?.Handle(pipe, request) ?? ChangeFeedResponse.Failed(ChangeFeedResponseStatus.Unavailable, "Ortak katalog hizmeti etkin değil."),
+                ChangeFeedRequestKind.IndexVolumeOpen or ChangeFeedRequestKind.IndexVolumeScan or ChangeFeedRequestKind.IndexVolumeChanges =>
+                    _volumes.Handle(pipe, request, cancellationToken),
                 _ => ChangeFeedResponse.Failed(
                     ChangeFeedResponseStatus.InvalidRequest,
                     "Bilinmeyen istek türü.")
@@ -94,8 +110,11 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         }
     }
 
+    internal ChangeFeedResponse HandleCatalog(ChangeFeedCaller caller, ChangeFeedRequest request, bool allNames, CancellationToken ct) =>
+        allNames && request.Kind == ChangeFeedRequestKind.Pull ? Pull(caller, request.Token, ct, true) : Handle(caller, request, ct);
+
     private ChangeFeedResponse AddRoot(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         string? rootPath,
         CancellationToken cancellationToken)
     {
@@ -136,7 +155,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse HoldLease(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         int leaseSeconds,
         CancellationToken cancellationToken)
     {
@@ -162,7 +181,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse ReleaseLease(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         CancellationToken cancellationToken)
     {
         var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
@@ -178,7 +197,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse DrainAndHoldLease(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         int leaseSeconds,
         CancellationToken cancellationToken)
     {
@@ -253,7 +272,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse RemoveRoot(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         string? rootPath,
         CancellationToken cancellationToken)
     {
@@ -290,7 +309,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse ListRoots(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         CancellationToken cancellationToken)
     {
         var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
@@ -304,14 +323,14 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse Pull(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         string? token,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool allNames = false)
     {
         try
         {
             var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
-            var result = Session(pipe, caller).Pull(caller.Value, token, cancellationToken);
+            var result = Session(pipe, caller, allNames).Pull(caller.Value, token, cancellationToken);
 
             return result.Status == ChangeFeedDeliveryStatus.Ok
                 ? ChangeFeedResponse.Delivered(ChangeFeedDeliveryContract.ToWire(
@@ -329,7 +348,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     }
 
     private ChangeFeedResponse Acknowledge(
-        NamedPipeServerStream pipe,
+        ChangeFeedCaller pipe,
         string? token,
         CancellationToken cancellationToken)
     {
@@ -351,7 +370,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         }
     }
 
-    private ChangeFeedPullSession Session(NamedPipeServerStream pipe, SecurityIdentifier caller) =>
+    private ChangeFeedPullSession Session(ChangeFeedCaller pipe, SecurityIdentifier caller, bool allNames = false) =>
         new(
             _storeFactory(caller.Value),
             _ledger,
@@ -359,7 +378,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
                 ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid =>
                     sid.Equals(caller)
                         ? new ChangeFeedDeliveryProjector(
-                            _authorizerFactory,
+                            allNames ? root => new ChangeFeedPathAuthorizer(root, _ => true) : _authorizerFactory,
                             new ChangeFeedWireMeasure(),
                             _pageBudget).Walk(subscription, slice, start, cancellationToken)
                         : throw new ChangeFeedImpersonationException(
@@ -393,5 +412,5 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         }
     }
 
-    public void Dispose() => _inventory?.Dispose();
+    public void Dispose() { _catalogs?.Dispose(); _inventory?.Dispose(); _volumes.Dispose(); }
 }

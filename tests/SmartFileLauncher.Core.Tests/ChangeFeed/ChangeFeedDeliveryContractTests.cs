@@ -31,7 +31,7 @@ public sealed class ChangeFeedDeliveryContractTests
             Members(typeof(ChangeFeedRootPageDto)));
 
         Assert.Equal(
-            new[] { "Kind", "Path", "IsDirectory", "OldPath" },
+            new[] { "Kind", "Path", "IsDirectory", "OldPath", "RefreshSubtree" },
             Members(typeof(ChangeFeedEventDto)));
     }
 

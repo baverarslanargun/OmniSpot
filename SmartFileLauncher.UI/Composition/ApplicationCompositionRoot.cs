@@ -21,6 +21,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
     private readonly ISettingsApplicationService _settingsApplication;
     private readonly IIndexMaintenanceService _indexMaintenance;
     private readonly IIndexLifecycleService _indexLifecycle;
+    private readonly IIndexedLocationProvider _indexedLocations;
     private readonly ISearchApplicationService _search;
     private readonly ISearchDiagnosticsService _searchDiagnostics;
     private readonly IThumbnailService _thumbnails;
@@ -74,8 +75,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
         var searchStateLayout = _measurementRun == null || _settings.CompactSearchStateEnabled
             ? SearchStateLayout.Compact
             : SearchStateLayout.Legacy;
-        var indexManager = _measurementRun == null
-            ? new IndexManager(tokenizer, searchStateLayout)
+        var indexManager = _measurementRun == null ? null
             : IndexManager.CreateWithDatabasePath(
                 _measurementRun.DatabasePath,
                 tokenizer,
@@ -84,28 +84,34 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 skipReparsePoints:
                     _startupOptions.Profile == MeasurementProfile.ProductionCopy,
                 layout: searchStateLayout);
-        if (_measurementRun == null) indexManager.EnableLiveCatalog();
         IIndexedLocationProvider locationProvider = _measurementRun == null
-            ? Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") == "1"
-                ? new UserProfileIndexedLocationProvider()
-                : new IndexedLocationProvider()
+            ? Environment.GetEnvironmentVariable("OMNISPOT_INDEX_ROOTS") is { Length: > 0 } overrideRoots
+                ? new EnvironmentRootsIndexedLocationProvider(overrideRoots)
+                : Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") == "1"
+                    ? new UserProfileIndexedLocationProvider()
+                    : new IndexedLocationProvider()
             : _startupOptions.Profile == MeasurementProfile.EmptyProduction
                 ? new FixedIndexedLocationProvider(_measurementRun.CorpusPath!)
                 : new IndexedLocationProvider();
-        _indexLifecycle = new IndexLifecycleService(
-            indexManager,
-            locationProvider,
-            _measurementRun == null
-                ? new ChangeFeedIndexBridge(
-                    new ChangeFeedClientChannel(),
-                    new IndexManagerChangeFeedTarget(indexManager))
-                : null,
-            inventorySource: _measurementRun == null
-                ? new ChangeFeedInventorySource(new ChangeFeedClientChannel(), _log.Write)
-                : null,
-            preferDirectoryEnumeration: true);
+        if (_measurementRun == null &&
+            string.IsNullOrEmpty(Environment.GetEnvironmentVariable("OMNISPOT_INDEX_ROOTS")) &&
+            Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") != "1")
+            locationProvider = new SettingsIndexedLocationProvider(_settings, locationProvider);
+        _indexedLocations = locationProvider;
+        var useMft = SettingsIndexedLocationProvider.UsesMft(
+            _settings, Environment.GetEnvironmentVariable("OMNISPOT_INDEX_METHOD"));
+        _indexLifecycle = _measurementRun == null && useMft
+            ? new VolumeIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "index.v2.live"), _settings.IndexBuild)
+            : _measurementRun == null
+            ? new SharedIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
+                useMft ? IndexScanMethod.Mft : IndexScanMethod.SelectedFolders,
+                Path.Combine(Environment.GetEnvironmentVariable("OMNISPOT_INDEX_PATH") is { Length: > 0 } sharedOverride
+                    ? Path.GetFullPath(sharedOverride) + ".live" : Path.Combine(appDataDirectory, "index.shared.live"), "control.bin"), _settings.IndexBuild)
+            : new IndexLifecycleService(indexManager!, locationProvider, preferDirectoryEnumeration: !useMft);
         var indexMaintenance = new IndexMaintenanceService(
-            _indexLifecycle.DatabasePath);
+            _indexLifecycle.DatabasePath,
+            _indexLifecycle is SharedIndexLifecycleService shared ? () => shared.CatalogDirectory : null);
         _indexMaintenance = _measurementRun == null
             ? indexMaintenance
             : new MeasurementIndexMaintenanceService(
@@ -117,7 +123,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
         var standardSearch = new SearchEngine(
             _indexLifecycle.CreateSearchState,
             tokenizer,
-            scoring);
+            scoring, literalNamesOnly: _measurementRun == null);
         var advancedSearch = new AdvancedSearchEngine(
             _indexLifecycle.CreateSearchState,
             tokenizer,
@@ -172,6 +178,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             _settingsApplication,
             _indexMaintenance,
             _indexLifecycle,
+            _indexedLocations,
             _search,
             _searchDiagnostics,
             _thumbnails,
@@ -222,6 +229,21 @@ public sealed class ApplicationCompositionRoot : IDisposable
         public IndexLocations Resolve()
         {
             return new IndexLocations(rootPath, new[] { rootPath });
+        }
+    }
+
+    private sealed class EnvironmentRootsIndexedLocationProvider(string roots)
+        : IIndexedLocationProvider
+    {
+        public IndexLocations Resolve()
+        {
+            var standard = new IndexedLocationProvider().Resolve();
+            var rootPaths = roots
+                .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(Path.GetFullPath)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+            return new IndexLocations(standard.DesktopPath, rootPaths);
         }
     }
 

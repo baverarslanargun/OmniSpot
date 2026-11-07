@@ -10,12 +10,82 @@ namespace SmartFileLauncher.Core.Tests.Indexing.Ntfs;
 public sealed class NtfsInventorySecurityGuardTests
 {
     [Theory]
+    [InlineData("renamed", true)]
+    [InlineData("created", true)]
+    [InlineData("deleted", true)]
+    [InlineData("unproven", false)]
+    [InlineData("wrong-reference", false)]
+    [InlineData("file-event", false)]
+    [InlineData("metadata-only", false)]
+    public void DirectoryChurnRequiresMatchingStructuralJournalEvidence(string scenario, bool valid)
+    {
+        var journal = new Reader();
+        using var guard = new NtfsInventorySecurityGuard(_ => journal);
+        var pass = 0;
+        var child = Directory(20, 10, "before");
+        var inventory = new NtfsRootInventory((_, _) => ++pass == 1
+            ? [Directory(5, 5, "."), Directory(10, 5, "root"), child]
+            : [Directory(5, 5, "."), Directory(10, 5, "root"), child with { Name = "after" }]);
+        var result = inventory.Read([NtfsRootInventoryTests.Root(10, @"C:\root")], default, guard).ToArray();
+        Assert.Contains(result, entry => entry.Path == @"C:\root\before");
+        Assert.DoesNotContain(result, entry => entry.Path == @"C:\root\after");
+        journal.End = 200;
+        var reason = scenario switch
+        {
+            "created" => UsnReason.FileCreate,
+            "deleted" => UsnReason.FileDelete,
+            "metadata-only" => UsnReason.BasicInfoChange,
+            _ => UsnReason.RenameNewName
+        };
+        if (scenario != "unproven")
+            journal.Records = new UsnRecordBuffer().AddVersion2(150, scenario == "wrong-reference" ? 21UL : 20UL,
+                10, reason, "after", scenario == "file-event" ? FileAttributes.Normal : FileAttributes.Directory).Build();
+        Assert.Equal(valid, guard.Validate(default));
+        Assert.Equal(valid, guard.Validate(default));
+    }
+
+    [Fact]
+    public void NewAndDisappearedDirectoriesKeepTheBaselineAndRequireJournalProof()
+    {
+        var journal = new Reader();
+        using var guard = new NtfsInventorySecurityGuard(_ => journal);
+        var pass = 0;
+        var inventory = new NtfsRootInventory((_, _) => ++pass == 1
+            ? [Directory(5, 5, "."), Directory(10, 5, "root"), Directory(20, 10, "removed")]
+            : [Directory(5, 5, "."), Directory(10, 5, "root"),
+                new(40, 30, "new.txt", false, FileAttributes.Normal, 1, 1, 2), Directory(30, 10, "added")]);
+        var result = inventory.Read([NtfsRootInventoryTests.Root(10, @"C:\root")], default, guard).ToArray();
+        Assert.Contains(result, entry => entry.Path == @"C:\root\removed");
+        Assert.DoesNotContain(result, entry => entry.Path.Contains("added"));
+        Assert.False(guard.Validate(default));
+        journal.End = 200;
+        journal.Records = new UsnRecordBuffer()
+            .AddVersion2(110, 20, 10, UsnReason.FileDelete, "removed", FileAttributes.Directory)
+            .AddVersion2(120, 30, 10, UsnReason.FileCreate, "added", FileAttributes.Directory).Build();
+        Assert.True(guard.Validate(default));
+    }
+
+    [Theory]
+    [InlineData(10UL)]
+    [InlineData(20UL)]
+    public void SelectedRootAndAncestorsCannotChangeEvenWithJournalProtection(ulong changed)
+    {
+        using var guard = new NtfsInventorySecurityGuard(_ => new Reader());
+        NtfsMftEntry[] before = [Directory(5, 5, "."), Directory(10, 5, "parent"), Directory(20, 10, "root")];
+        var pass = 0;
+        var inventory = new NtfsRootInventory((_, _) => ++pass == 1 ? before
+            : before.Select(entry => entry.FileReference == changed ? entry with { Name = "changed" } : entry));
+        Assert.Throws<InvalidDataException>(() => inventory.Read(
+            [NtfsRootInventoryTests.Root(20, @"C:\parent\root")], default, guard).ToArray());
+    }
+
+    [Theory]
     [InlineData(5UL, false)]
     [InlineData(10UL, false)]
     [InlineData(20UL, false)]
-    [InlineData(30UL, false)]
+    [InlineData(30UL, true)]
     [InlineData(999UL, true)]
-    public void InventoryProtectsAncestorsAndFileIdentitiesIncludingOutsideHardlinks(ulong changed, bool valid)
+    public void DirectoryPermissionsProtectListingsWhileFileAclsDoNotHideHardlinkNames(ulong changed, bool valid)
     {
         var journal = new Reader();
         using var guard = new NtfsInventorySecurityGuard(_ => journal);
@@ -24,7 +94,7 @@ public sealed class NtfsInventorySecurityGuardTests
             new(30, 5, "outside-hardlink", false, FileAttributes.Normal, 1, 1, 2)];
         var inventory = new NtfsRootInventory((_, _) => entries);
         Assert.Equal(2, inventory.Read([NtfsRootInventoryTests.Root(20, @"C:\parent\root")], default, guard).Count());
-        journal.SetChange(changed, UsnReason.SecurityChange);
+        journal.SetChange(changed, UsnReason.SecurityChange | UsnReason.BasicInfoChange, isDirectory: changed is 5 or 10 or 20);
         Assert.Equal(valid, guard.Validate(default));
     }
 
@@ -36,6 +106,22 @@ public sealed class NtfsInventorySecurityGuardTests
         guard.BeginVolume(@"C:\");
         guard.Include(@"C:\", 5);
         reader.SetChange(5, UsnReason.ReparsePointChange);
+        Assert.False(guard.Validate(default));
+        Assert.Contains("ReparsePointChange", guard.LastFailure);
+        Assert.Contains("0000000000000005", guard.LastFailure);
+        Assert.DoesNotContain("name", guard.LastFailure);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReparseChangesRemainInvalidatingForFilesAndDirectories(bool isDirectory)
+    {
+        var reader = new Reader();
+        using var guard = new NtfsInventorySecurityGuard(_ => reader);
+        guard.BeginVolume(@"C:\");
+        guard.Include(@"C:\", 30);
+        reader.SetChange(30, UsnReason.SecurityChange | UsnReason.ReparsePointChange, isDirectory);
         Assert.False(guard.Validate(default));
     }
 
@@ -55,7 +141,11 @@ public sealed class NtfsInventorySecurityGuardTests
         if (failure == "short") reader.PageEnd = 100;
         if (failure == "malformed") reader.Records = [1];
         if (failure == "malformed") Assert.Throws<UsnRecordFormatException>(() => guard.Validate(default));
-        else Assert.False(guard.Validate(default));
+        else
+        {
+            Assert.False(guard.Validate(default));
+            Assert.Contains("USN", guard.LastFailure);
+        }
     }
 
     [Fact]
@@ -65,6 +155,7 @@ public sealed class NtfsInventorySecurityGuardTests
         using var sessions = new ChangeFeedInventorySessions((_, _, guard) =>
         {
             guard!.BeginVolume(@"C:\");
+            guard.Include(@"C:\", 20);
             guard.Include(@"C:\", 30);
             return [new IndexInventoryEntry(@"C:\root\file", false, FileAttributes.Normal, 1, 1, 2)];
         }, () => new NtfsInventorySecurityGuard(_ => reader));
@@ -84,8 +175,11 @@ public sealed class NtfsInventorySecurityGuardTests
             ChangeFeedQueueEpoch.New(), ChangeFeedSecurityStamp.New(), binding.Roots);
         reader.SetChange(999, UsnReason.SecurityChange);
         Assert.Equal(ChangeFeedResponseStatus.Ok, sessions.Page(changedBinding, token, _ => true, true, default).Status);
-        reader.SetChange(30, UsnReason.SecurityChange);
-        Assert.NotEqual(ChangeFeedResponseStatus.Ok, sessions.Page(changedBinding, token, _ => true, true, default).Status);
+        reader.SetChange(20, UsnReason.SecurityChange, isDirectory: true);
+        var failed = sessions.Page(changedBinding, token, _ => true, true, default);
+        Assert.NotEqual(ChangeFeedResponseStatus.Ok, failed.Status);
+        Assert.Contains("SecurityChange", failed.Message);
+        Assert.DoesNotContain("name", failed.Message);
         sessions.Cancel(binding.OwnerSid, token);
         await reader.Disposed.Task.WaitAsync(deadline.Token);
     }
@@ -132,10 +226,11 @@ public sealed class NtfsInventorySecurityGuardTests
         public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public UsnJournalDescriptor QueryJournal() => new(JournalId, First, End, First, long.MaxValue, 0, 0);
         public UsnReadPage ReadPage(long startUsn, ulong journalId) => new(PageEnd ?? End, Records);
-        public void SetChange(ulong reference, UsnReason reason)
+        public void SetChange(ulong reference, UsnReason reason, bool isDirectory = false)
         {
             End = 200;
-            Records = new UsnRecordBuffer().AddVersion2(150, reference, 999, reason, "name").Build();
+            Records = new UsnRecordBuffer().AddVersion2(150, reference, 999, reason, "name",
+                isDirectory ? FileAttributes.Directory : FileAttributes.Normal).Build();
         }
         public void Dispose() => Disposed.TrySetResult();
     }

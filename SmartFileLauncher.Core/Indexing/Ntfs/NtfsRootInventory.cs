@@ -9,9 +9,13 @@ public sealed record IndexInventoryEntry(
     FileAttributes Attributes,
     long SizeBytes,
     long CreatedTimeUtc,
-    long LastWriteTimeUtc);
+    long LastWriteTimeUtc,
+    NtfsInventoryIdentity? Identity = null);
 
-public sealed class NtfsRootInventory
+public sealed record NtfsInventoryIdentity(
+    string VolumeId, ulong FileReference, ulong ParentFileReference, string Name);
+
+public sealed partial class NtfsRootInventory
 {
     private readonly Func<string, CancellationToken, IEnumerable<NtfsMftEntry>> _read;
 
@@ -32,6 +36,9 @@ public sealed class NtfsRootInventory
                      StringComparer.OrdinalIgnoreCase))
         {
             security?.BeginVolume(group.Key);
+            var volumeId = group.First().Identity.VolumeId;
+            if (group.Any(root => root.Identity.VolumeId != volumeId))
+                throw new InvalidDataException("Aynı diskte farklı birim kimlikleri var.");
             var selected = new Dictionary<ulong, string>();
             foreach (var root in group)
             {
@@ -54,6 +61,7 @@ public sealed class NtfsRootInventory
             if (selected.Keys.Any(reference => !directories.ContainsKey(reference)))
                 throw new InvalidDataException("MFT kök dizini bulunamadı.");
 
+            var protectedDirectories = selected.Keys.ToHashSet();
             if (security is not null)
             {
                 foreach (var root in selected.Keys)
@@ -64,6 +72,7 @@ public sealed class NtfsRootInventory
                         if (depth >= 512 || !directories.TryGetValue(reference, out var ancestor))
                             throw new InvalidDataException("MFT kök üst dizin zinciri tutarsız.");
                         security.Include(group.Key, reference);
+                        protectedDirectories.Add(reference);
                         if ((reference & 0xFFFFFFFFFFFFUL) == 5) break;
                         reference = ancestor.ParentFileReference;
                     }
@@ -71,37 +80,41 @@ public sealed class NtfsRootInventory
             }
 
             var resolved = new Dictionary<ulong, string?>();
+            void ExpectDirectoryChange(ulong reference)
+            {
+                if (security is null || protectedDirectories.Contains(reference))
+                    throw new InvalidDataException("MFT dizinleri okuma sırasında değişti.");
+                security.ExpectDirectoryChange(group.Key, reference);
+            }
+
             string? Resolve(ulong reference, int depth = 0)
             {
                 if (selected.TryGetValue(reference, out var rootPath)) return rootPath;
                 if (resolved.TryGetValue(reference, out var cached)) return cached;
-                if (depth >= 512 || !directories.TryGetValue(reference, out var directory))
+                if (depth >= 512)
                     throw new InvalidDataException("MFT dizin zinciri tutarsız.");
+                if (!directories.TryGetValue(reference, out var directory))
+                {
+                    ExpectDirectoryChange(reference);
+                    return resolved[reference] = null;
+                }
                 if ((reference & 0xFFFFFFFFFFFFUL) == 5 ||
-                    (directory.Attributes & (FileAttributes.Hidden | FileAttributes.System |
-                        FileAttributes.ReparsePoint)) != 0)
+                    (directory.Attributes & FileAttributes.ReparsePoint) != 0)
                     return resolved[reference] = null;
                 var parent = Resolve(directory.ParentFileReference, depth + 1);
                 return resolved[reference] = parent is null ? null : Join(parent, directory.Name);
             }
 
-            var seenRoots = new HashSet<ulong>();
-            foreach (var entry in _read(group.Key, cancellationToken))
+            foreach (var entry in directories.Values)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 string? path;
-                if (entry.IsDirectory && selected.TryGetValue(entry.FileReference, out var rootPath))
+                if (selected.TryGetValue(entry.FileReference, out var rootPath))
                 {
-                    seenRoots.Add(entry.FileReference);
                     path = rootPath;
                 }
                 else
                 {
-                    if ((entry.Attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0)
-                        continue;
-                    if (entry.IsDirectory && (!directories.TryGetValue(entry.FileReference, out var old) ||
-                        old.Name != entry.Name || old.ParentFileReference != entry.ParentFileReference))
-                        throw new InvalidDataException("MFT dizinleri okuma sırasında değişti.");
                     var parent = Resolve(entry.ParentFileReference);
                     path = parent is null ? null : Join(parent, entry.Name);
                 }
@@ -109,11 +122,31 @@ public sealed class NtfsRootInventory
                 {
                     security?.Include(group.Key, entry.FileReference);
                     yield return new IndexInventoryEntry(path, entry.IsDirectory, entry.Attributes,
-                        entry.SizeBytes, entry.CreatedTimeUtc, entry.LastWriteTimeUtc);
+                        entry.SizeBytes, entry.CreatedTimeUtc, entry.LastWriteTimeUtc,
+                        new NtfsInventoryIdentity(volumeId, entry.FileReference, entry.ParentFileReference, entry.Name));
                 }
             }
-            if (seenRoots.Count != selected.Count)
-                throw new InvalidDataException("MFT kökü okuma sırasında değişti.");
+
+            var remainingDirectories = directories.Keys.ToHashSet();
+            foreach (var entry in _read(group.Key, cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (entry.IsDirectory)
+                {
+                    remainingDirectories.Remove(entry.FileReference);
+                    if (!directories.TryGetValue(entry.FileReference, out var old) ||
+                        old.Name != entry.Name || old.ParentFileReference != entry.ParentFileReference)
+                        ExpectDirectoryChange(entry.FileReference);
+                    continue;
+                }
+                var parent = Resolve(entry.ParentFileReference);
+                if (parent is null) continue;
+                security?.Include(group.Key, entry.FileReference);
+                yield return new IndexInventoryEntry(Join(parent, entry.Name), false, entry.Attributes,
+                    entry.SizeBytes, entry.CreatedTimeUtc, entry.LastWriteTimeUtc,
+                    new NtfsInventoryIdentity(volumeId, entry.FileReference, entry.ParentFileReference, entry.Name));
+            }
+            foreach (var reference in remainingDirectories) ExpectDirectoryChange(reference);
         }
     }
 

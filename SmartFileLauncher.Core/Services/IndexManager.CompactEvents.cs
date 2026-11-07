@@ -47,6 +47,7 @@ public partial class IndexManager
 
     private bool IsCompactEventExcluded(string path)
     {
+        if (_useLiveCatalog) return false;
         var root = _activeRootPaths.Where(candidate => IsSameOrDescendantPath(path, candidate))
             .OrderByDescending(candidate => candidate.Length).FirstOrDefault();
         if (root is null) return false;

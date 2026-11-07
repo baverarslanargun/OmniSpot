@@ -42,6 +42,102 @@ public sealed class UsnChangeFeedStateStoreTests
     }
 
     [Fact]
+    public void MapChangesAppendDeltasInsteadOfRewritingTheSnapshot()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json");
+        var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        store.Write(JournalId, NextUsn, [State(FirstRoot, 1, Entry(10, "alt", 1), Entry(11, "derin", 10))]);
+        var snapshot = File.ReadAllBytes(path);
+
+        store.Write(JournalId, NextUsn + 100, [State(FirstRoot, 1, Entry(10, "alt", 1), Entry(11, "derin2", 10), Entry(12, "yeni", 1))]);
+        var removed = State(FirstRoot, 1, Entry(10, "alt", 1), Entry(12, "yeni", 1));
+        store.Write(JournalId, NextUsn + 200, [removed]);
+        store.Write(JournalId, NextUsn + 300, [removed.WithPosition(JournalId, NextUsn + 300)], pendingSecurityChange: true);
+
+        Assert.Equal(snapshot, File.ReadAllBytes(path));
+        Assert.True(File.Exists(path + ".delta"));
+        Assert.False(File.Exists(path + ".cursor"));
+        var restored = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 300, restored.NextUsn);
+        Assert.True(restored.PendingSecurityChange);
+        var root = Assert.Single(restored.Roots);
+        Assert.Equal(NextUsn + 300, root.NextUsn);
+        Assert.Equal(
+            new[] { (10UL, "alt", 1UL), (12UL, "yeni", 1UL) },
+            root.Directories.Select(entry => (entry.Reference.Low, entry.Name, entry.ParentReference.Low)).OrderBy(entry => entry.Item1));
+    }
+
+    [Fact]
+    public void ATornDeltaTailFallsBackToTheLastCompleteFrameAndIsOverwritten()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json");
+        var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        store.Write(JournalId, NextUsn, [State(FirstRoot, 1, Entry(10, "alt", 1))]);
+        store.Write(JournalId, NextUsn + 100, [State(FirstRoot, 1, Entry(10, "alt", 1), Entry(11, "ikinci", 10))]);
+        var complete = new FileInfo(path + ".delta").Length;
+        store.Write(JournalId, NextUsn + 200, [State(FirstRoot, 1, Entry(10, "alt", 1), Entry(11, "ikinci", 10), Entry(12, "ucuncu", 10))]);
+        using (var delta = new FileStream(path + ".delta", FileMode.Open, FileAccess.Write))
+            delta.SetLength(complete + 7);
+
+        var survivor = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var torn = survivor.Read()!;
+        Assert.Equal(NextUsn + 100, torn.NextUsn);
+        Assert.Equal(new[] { "alt", "ikinci" }, Assert.Single(torn.Roots).Directories.Select(entry => entry.Name).Order());
+
+        survivor.Write(JournalId, NextUsn + 300, [State(FirstRoot, 1, Entry(10, "alt", 1), Entry(13, "dorduncu", 10))]);
+        var restored = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 300, restored.NextUsn);
+        Assert.Equal(new[] { "alt", "dorduncu" }, Assert.Single(restored.Roots).Directories.Select(entry => entry.Name).Order());
+    }
+
+    [Fact]
+    public void ADeltaThatOutgrowsItsBudgetIsCompactedIntoANewSnapshot()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json");
+        var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        var entries = new List<UsnDirectoryEntry> { Entry(10, "alt", 1) };
+        store.Write(JournalId, NextUsn, [State(FirstRoot, 1, entries.ToArray())]);
+        var snapshot = File.ReadAllBytes(path);
+        var compacted = false;
+
+        for (var round = 1; round <= 40 && !compacted; round++)
+        {
+            for (var item = 0; item < 500; item++)
+                entries.Add(Entry((ulong)(round * 1000 + item + 100), $"klasor-{round}-{item}-uzun-bir-ad", 10));
+            store.Write(JournalId, NextUsn + round, [State(FirstRoot, 1, entries.ToArray())]);
+            compacted = !File.ReadAllBytes(path).AsSpan().SequenceEqual(snapshot);
+        }
+
+        Assert.True(compacted);
+        Assert.False(File.Exists(path + ".delta"));
+        var restored = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(entries.Count, Assert.Single(restored.Roots).Directories.Count);
+    }
+
+    [Fact]
+    public void ADeltaLeftFromAnEarlierSnapshotIsIgnored()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "state.json");
+        var store = new UsnChangeFeedStateStore(path, cacheReads: true);
+        store.Write(JournalId, NextUsn, [State(FirstRoot, 1, Entry(10, "alt", 1))]);
+        store.Write(JournalId, NextUsn + 100, [State(FirstRoot, 1, Entry(10, "eski-delta", 1))]);
+        var staleDelta = File.ReadAllBytes(path + ".delta");
+
+        store.Write(JournalId, NextUsn + 200, [State(FirstRoot, 1, Entry(10, "yeni", 1)), State(SecondRoot, 2)]);
+        Assert.False(File.Exists(path + ".delta"));
+        File.WriteAllBytes(path + ".delta", staleDelta);
+
+        var restored = new UsnChangeFeedStateStore(path).Read()!;
+        Assert.Equal(NextUsn + 200, restored.NextUsn);
+        Assert.Equal("yeni", Assert.Single(restored.Roots[0].Directories).Name);
+        Assert.Equal(2, restored.Roots.Count);
+    }
+
+    [Fact]
     public void Read_ReturnsNullBeforeAnythingIsWritten()
     {
         using var directory = new TemporaryDirectory();

@@ -8,7 +8,10 @@ public sealed record NtfsMftEntry(
     FileAttributes Attributes,
     long SizeBytes,
     long CreatedTimeUtc,
-    long LastWriteTimeUtc);
+    long LastWriteTimeUtc)
+{
+    internal uint? ReparseTag { get; init; }
+}
 
 internal readonly record struct NtfsDataRun(long StartVcn, long ClusterCount, long? Lcn);
 
@@ -31,6 +34,7 @@ internal sealed class NtfsMftRecord
     public bool IsDirectory { get; init; }
     public NtfsBasicInformation? BasicInformation { get; set; }
     public long? SizeBytes { get; set; }
+    public uint? ReparseTag { get; set; }
     public List<NtfsFileName> Names { get; } = [];
     public List<NtfsDataExtent> DataExtents { get; } = [];
     public byte[]? ResidentAttributeList { get; set; }

@@ -22,7 +22,6 @@ internal static class ChangeFeedServiceHost
                 level => level >= EventLogMinimumLevel));
 
         services.AddHostedService<ChangeFeedAdmissionWorker>();
-        services.AddHostedService<ChangeFeedDrainWorker>();
 
         return services;
     }

@@ -34,6 +34,30 @@ public sealed class ChangeFeedBoundedReadTests
     }
 
     [Fact]
+    public void BoundedReadReportsTheWholeQueueBoundaryWithoutReadingTheTail()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = CreateStore(directory);
+        var sequences = Fill(store, 70);
+        using var locked = Lock(directory, sequences[^1]);
+
+        var slice = store.ReadPending(new ChangeFeedReadBudget(1, long.MaxValue));
+
+        Assert.Single(slice.Entries);
+        Assert.True(slice.HasMore);
+        Assert.Equal(sequences[^1], slice.AvailableThroughSequence);
+    }
+
+    [Fact]
+    public void EmptyQueueHasNoBoundary()
+    {
+        using var directory = new TemporaryDirectory();
+        var store = CreateStore(directory);
+
+        Assert.Equal(0, store.ReadPending().AvailableThroughSequence);
+    }
+
+    [Fact]
     public void OneRead_AlwaysFitsInOneResponse()
     {
         Assert.True(

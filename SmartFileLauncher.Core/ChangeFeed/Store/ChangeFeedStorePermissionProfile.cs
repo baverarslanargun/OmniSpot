@@ -65,6 +65,20 @@ internal sealed class ChangeFeedStorePermissionProfile
             new HashSet<SecurityIdentifier> { principal, LocalSystem, administrators });
     }
 
+    internal static ChangeFeedStorePermissionProfile ForSharedCatalog(string servicePrincipalSid, string ownerSid)
+    {
+        var service = new SecurityIdentifier(servicePrincipalSid);
+        var reader = new SecurityIdentifier(ownerSid);
+        var rights = new Dictionary<SecurityIdentifier, FileSystemRights>
+        {
+            [service] = FullRights,
+            [Administrators] = FullRights
+        };
+        if (!rights.ContainsKey(reader)) rights[reader] = FileSystemRights.ReadAndExecute | FileSystemRights.Synchronize;
+        return new("paylaşılan katalog", rights,
+            new HashSet<SecurityIdentifier> { service, LocalSystem, Administrators });
+    }
+
     private static SecurityIdentifier LocalSystem =>
         new(WellKnownSidType.LocalSystemSid, null);
 

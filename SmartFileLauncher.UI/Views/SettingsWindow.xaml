@@ -319,6 +319,206 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <SolidColorBrush x:Key="LineStrong" Color="#CBD5E1"/>
+        <SolidColorBrush x:Key="Fill" Color="#EDF1F7"/>
+        <SolidColorBrush x:Key="Hover" Color="#F1F5F9"/>
+        <SolidColorBrush x:Key="AccentSoft" Color="#EAF2FF"/>
+        <SolidColorBrush x:Key="Danger" Color="#B42318"/>
+        <Style x:Key="FocusRing">
+            <Setter Property="Control.Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Border Margin="-3" CornerRadius="10" BorderBrush="{StaticResource Accent}" BorderThickness="1.5" SnapsToDevicePixels="True"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="PillFocusRing">
+            <Setter Property="Control.Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Border Margin="-3" CornerRadius="14" BorderBrush="{StaticResource Accent}" BorderThickness="1.5" SnapsToDevicePixels="True"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="RemoveButton" TargetType="Button" BasedOn="{StaticResource SecondaryButton}">
+            <Setter Property="Content" Value="Kaldır"/>
+        </Style>
+        <Style x:Key="Validation" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource Danger}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,8,0,0"/>
+            <Style.Triggers>
+                <Trigger Property="Text" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="ValueText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Width" Value="56"/>
+            <Setter Property="Margin" Value="12,0,0,0"/>
+            <Setter Property="TextAlignment" Value="Right"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="Control" TargetType="FrameworkElement">
+            <Setter Property="Margin" Value="16,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+        <Style x:Key="SegmentTrack" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource Fill}"/>
+            <Setter Property="CornerRadius" Value="9"/>
+            <Setter Property="Padding" Value="2"/>
+            <Setter Property="Margin" Value="16,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Style.Triggers>
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.45"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="Select" TargetType="ComboBox">
+            <Setter Property="Width" Value="168"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="Margin" Value="16,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="MaxDropDownHeight" Value="240"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <Border x:Name="Surface" Background="White" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="8"/>
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent">
+                                            <Path x:Name="Chevron" Data="M 1,1 L 5,5 L 9,1" Stroke="{StaticResource Ink2}" StrokeThickness="1.4"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                                  Width="10" Height="6" Stretch="None" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                  Margin="0,1,12,0" RenderTransformOrigin="0.5,0.5"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="Chevron" Property="RenderTransform">
+                                                    <Setter.Value><RotateTransform Angle="180"/></Setter.Value>
+                                                </Setter>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <ContentPresenter IsHitTestVisible="False" Margin="12,0,32,0" HorizontalAlignment="Left" VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"/>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" HorizontalOffset="-8" AllowsTransparency="True" Focusable="False" PopupAnimation="None"
+                                   IsOpen="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <Border Margin="8,4,8,12" MinWidth="{TemplateBinding ActualWidth}" MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                        Background="White" BorderBrush="{StaticResource Line}" BorderThickness="1" CornerRadius="10" Padding="4">
+                                    <Border.Effect>
+                                        <DropShadowEffect BlurRadius="16" ShadowDepth="4" Direction="270" Opacity="0.12" Color="#0F172A"/>
+                                    </Border.Effect>
+                                    <ScrollViewer CanContentScroll="False" HorizontalScrollBarVisibility="Disabled" VerticalScrollBarVisibility="Auto">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+                            </Trigger>
+                            <Trigger Property="IsDropDownOpen" Value="True">
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="FolderItem" TargetType="ListBoxItem">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBoxItem">
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="6" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource Hover}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentSoft}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="FolderList" TargetType="ListBox">
+            <Setter Property="Background" Value="White"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Line}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="4"/>
+            <Setter Property="Margin" Value="0,8,0,0"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="ScrollViewer.CanContentScroll" Value="False"/>
+            <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource FolderItem}"/>
+            <Setter Property="ItemTemplate">
+                <Setter.Value>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" ToolTip="{Binding}" TextTrimming="CharacterEllipsis"/>
+                    </DataTemplate>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListBox">
+                        <Border x:Name="Surface" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8">
+                            <ScrollViewer Focusable="False" Padding="{TemplateBinding Padding}">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Surface" Property="Opacity" Value="0.45"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="EmptyListText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
+            <Setter Property="Margin" Value="15,8,15,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="IsHitTestVisible" Value="False"/>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -609,7 +809,40 @@
                                 <Button x:Name="RebuildIndexButton" Content="Yeniden oluştur" Style="{StaticResource SecondaryButton}" Click="RebuildIndex_Click"/>
                             </StackPanel>
                         </Grid>
-                        <TextBlock Text="Yeniden oluşturma uygulamayı yeniden başlatır ve standart klasörleri baştan tarar." Style="{StaticResource Hint}" Margin="0,10,0,0"/>
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="İndekslenecek konumlar" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Text="Klasör veya disk; birden fazlasını seçip kaldırabilirsiniz." Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                <Button Content="Ekle" Style="{StaticResource SecondaryButton}" Click="AddIndexedFolder_Click" Margin="0,0,8,0"/>
+                                <Button Click="RemoveIndexedFolder_Click">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource RemoveButton}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding SelectedItem, ElementName=IndexedFoldersList}" Value="{x:Null}">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                            </StackPanel>
+                        </Grid>
+                        <Grid>
+                            <ListBox x:Name="IndexedFoldersList" Style="{StaticResource FolderList}" SelectionMode="Extended" MinHeight="44" MaxHeight="168"
+                                     AutomationProperties.Name="İndekslenecek konumlar"/>
+                            <TextBlock Text="Henüz konum eklenmedi.">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyListText}">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers><DataTrigger Binding="{Binding HasItems, ElementName=IndexedFoldersList}" Value="False"><Setter Property="Visibility" Value="Visible"/></DataTrigger></Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                        </Grid>
+                        <TextBlock x:Name="IndexingValidation" Style="{StaticResource Validation}"/>
                         <Grid Style="{StaticResource Row}" Margin="0,12,0,0">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
@@ -621,16 +854,103 @@
                     </StackPanel>
                 </Border>
 
-                <Border Style="{StaticResource Card}" Margin="0">
-                    <Grid>
-                        <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                        <StackPanel VerticalAlignment="Center">
-                            <TextBlock Text="Uygulamayı yeniden başlat" Style="{StaticResource RowLabel}"/>
-                            <TextBlock Text="İndeks silinmez; kaydedilmemiş ayarlar uygulanmaz." Style="{StaticResource Hint}"/>
+                <Border Style="{StaticResource Card}">
+                    <StackPanel x:Name="IndexingScopePanel">
+                        <TextBlock Text="Tarama ve sıralama" Style="{StaticResource SectionHeader}"/>
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Tarama yöntemi" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Text="İkisi de yukarıdaki konumları tarar. MFT yerel NTFS disk ve OmniSpot hizmeti ister; geniş kapsamlarda daha hızlıdır." Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                            <Border Grid.Column="1" Style="{StaticResource SegmentTrack}">
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="IndexMethodFolders" Content="Klasör taraması" Style="{StaticResource Segment}" GroupName="IndexMethod"
+                                                 AutomationProperties.Name="Tarama yöntemi: klasör taraması"/>
+                                    <RadioButton x:Name="IndexMethodMft" Content="MFT" Style="{StaticResource Segment}" GroupName="IndexMethod"
+                                                 AutomationProperties.Name="Tarama yöntemi: MFT"/>
+                                </StackPanel>
+                            </Border>
+                        </Grid>
+                        <StackPanel Visibility="{Binding IsChecked, ElementName=IndexMethodMft, Converter={StaticResource BoolToVis}}">
+                            <Grid Style="{StaticResource Row}">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="MFT okuma ve işleme" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="Adaptif mod, kayıt işleme hızına göre 1–16 işçiyi dener." Style="{StaticResource Hint}"/>
+                                </StackPanel>
+                                <ComboBox Grid.Column="1" x:Name="MftWorkerMode" Style="{StaticResource Select}" AutomationProperties.Name="MFT işçi modu">
+                                    <ComboBoxItem Content="Tek işçi"/><ComboBoxItem Content="Adaptif"/><ComboBoxItem Content="Elle"/>
+                                </ComboBox>
+                            </Grid>
+                            <Grid>
+                                <Grid.Style>
+                                    <Style TargetType="Grid" BasedOn="{StaticResource Row}">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding SelectedIndex, ElementName=MftWorkerMode}" Value="2">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <StackPanel VerticalAlignment="Center">
+                                    <TextBlock Text="MFT işçi sayısı" Style="{StaticResource RowLabel}"/>
+                                    <TextBlock Text="Elle modda kullanılacak işçi sayısı." Style="{StaticResource Hint}"/>
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                    <Slider x:Name="MftWorkerCount" Minimum="1" Maximum="16" TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="1"
+                                            AutomationProperties.Name="MFT işçi sayısı"/>
+                                    <TextBlock Style="{StaticResource ValueText}" Text="{Binding Value, ElementName=MftWorkerCount, StringFormat={}{0:0} işçi}"/>
+                                </StackPanel>
+                            </Grid>
                         </StackPanel>
-                        <Button Grid.Column="1" x:Name="RestartApplicationButton" Content="Yeniden başlat" Style="{StaticResource SecondaryButton}" Click="RestartApplication_Click" VerticalAlignment="Center"/>
-                    </Grid>
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="İndeks sıralaması" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Text="Yalnız indeks oluşturmayı etkiler; seçtiğiniz sonuç sırası korunur." Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                            <ComboBox Grid.Column="1" x:Name="IndexSortAlgorithm" Style="{StaticResource Select}" AutomationProperties.Name="İndeks sıralama yöntemi">
+                                <ComboBoxItem Content="Pivot"/><ComboBoxItem Content="Birleştir"/>
+                            </ComboBox>
+                        </Grid>
+                        <Grid Style="{StaticResource Row}">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Sıralama işçisini otomatik seç" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Text="Kapalıyken işçi sayısını siz belirlersiniz." Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                            <CheckBox Grid.Column="1" x:Name="IndexSortAdaptive" Style="{StaticResource Switch}" AutomationProperties.Name="Sıralama işçisini otomatik seç"/>
+                        </Grid>
+                        <Grid>
+                            <Grid.Style>
+                                <Style TargetType="Grid" BasedOn="{StaticResource Row}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsChecked, ElementName=IndexSortAdaptive}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Grid.Style>
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock Text="Sıralama işçi sayısı" Style="{StaticResource RowLabel}"/>
+                                <TextBlock Text="İndeks sıralamasında aynı anda çalışacak işçi sayısı." Style="{StaticResource Hint}"/>
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
+                                <Slider x:Name="IndexSortWorkers" Minimum="1" Maximum="16" TickFrequency="1" IsSnapToTickEnabled="True" SmallChange="1" LargeChange="1"
+                                        AutomationProperties.Name="Sıralama işçi sayısı"/>
+                                <TextBlock Style="{StaticResource ValueText}" Text="{Binding Value, ElementName=IndexSortWorkers, StringFormat={}{0:0} işçi}"/>
+                            </StackPanel>
+                        </Grid>
+                        <TextBlock Text="Yöntem, konum ve sıralama değişiklikleri yeniden başlatınca, MFT işçi ayarları yeni taramada uygulanır. Hemen uygulamak için ‘Yeniden oluştur’u seçin."
+                                   Style="{StaticResource Hint}" Margin="0,16,0,0"/>
+                    </StackPanel>
                 </Border>
+
             </StackPanel>
         </ScrollViewer>
 

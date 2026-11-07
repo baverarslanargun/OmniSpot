@@ -10,6 +10,45 @@ namespace SmartFileLauncher.Core.Tests.ChangeFeed;
 public sealed class ChangeFeedInventoryTests
 {
     [Fact]
+    public void EncodedSizeBoundCoversMetadataExtremesAndUnpairedUnicodePaths()
+    {
+        var flags = Enum.GetValues<FileAttributes>();
+        var all = flags.Aggregate((FileAttributes)0, (combined, value) => combined | value);
+        foreach (var attributes in flags.Concat([all, (FileAttributes)int.MinValue, (FileAttributes)int.MaxValue]))
+        foreach (var directory in new[] { false, true })
+        {
+            var entry = new IndexInventoryEntry("C:\\日本語\\name\ud800" + new string('x', 1000), directory,
+                attributes, long.MinValue, long.MinValue, long.MinValue);
+            var dto = ChangeFeedInventoryEntryDto.FromEntry(entry);
+            Assert.True(ChangeFeedMessageChannel.MeasureResponse(dto) <= dto.EncodedSizeUpperBound);
+            Assert.Equal(entry, dto.ToEntry());
+        }
+    }
+
+    [Fact]
+    public async Task OversizedEntryFailsWithoutPublishingAPartialPage()
+    {
+        using var sessions = new ChangeFeedInventorySessions((_, _) => [Entry(@"C:\root\" + new string('x', 500000))]);
+        var binding = Binding();
+        var token = sessions.Start(binding, binding.Roots);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        while (true)
+        {
+            var response = sessions.Page(binding, token, _ => true, false, deadline.Token);
+            if (response.Status != ChangeFeedResponseStatus.Ok)
+            {
+                Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
+                Assert.Null(response.Inventory);
+                Assert.Null(sessions.Roots(binding.OwnerSid, token));
+                break;
+            }
+            Assert.Empty(response.Inventory!.Entries);
+            token = response.Inventory.Token;
+            await Task.Delay(10, deadline.Token);
+        }
+    }
+
+    [Fact]
     public async Task PagesAreBoundedAndApplyVisibilityBeforeEncoding()
     {
         using var sessions = new ChangeFeedInventorySessions((_, _) => Enumerable.Range(0, 1300)

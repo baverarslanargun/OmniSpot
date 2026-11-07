@@ -34,4 +34,6 @@ public sealed class ChangeFeedQueueSlice
     public IReadOnlyList<ChangeFeedQueueEntry> Entries { get; }
 
     public bool HasMore { get; }
+
+    internal long AvailableThroughSequence { get; init; }
 }

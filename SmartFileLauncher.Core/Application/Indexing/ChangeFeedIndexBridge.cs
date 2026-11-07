@@ -14,6 +14,9 @@ public interface IChangeFeedRequestChannel
 public interface IChangeFeedIndexTarget
 {
     Task CommitContinuousAsync(IReadOnlyList<ChangeFeedRootPageDto> roots, string deliveryId,
+        long completedThroughSequence, CancellationToken cancellationToken) =>
+        CommitContinuousAsync(roots, deliveryId, cancellationToken);
+    Task CommitContinuousAsync(IReadOnlyList<ChangeFeedRootPageDto> roots, string deliveryId,
         CancellationToken cancellationToken) => throw new NotSupportedException("Kalıcı teslim hedefi yok.");
     bool Apply(IReadOnlyList<FileChangeEvent> changes);
 

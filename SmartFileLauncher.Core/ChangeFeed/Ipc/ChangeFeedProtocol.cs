@@ -2,13 +2,15 @@ namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public static class ChangeFeedProtocol
 {
-    public const int Version = 5;
+    public const int Version = 9;
 
     public const string PipeName = "OmniSpot.ChangeFeed";
 
     public const int MaximumRequestBytes = 64 * 1024;
 
-    public const int MaximumResponseBytes = 1024 * 1024;
+    public const int MaximumResponseBytes = 16 * 1024 * 1024;
+
+    public const int MaximumPageBytes = 1024 * 1024;
 
     public const int PipeOutboundBufferBytes = 64 * 1024;
 
@@ -40,7 +42,16 @@ public enum ChangeFeedRequestKind
     CancelInventory,
     GetCapabilities,
     PrepareContinuousRoot,
-    DrainContinuous
+    DrainContinuous,
+    OpenCatalog,
+    PollCatalog,
+    RecordCatalogOpen,
+    RepairCatalog,
+    SynchronizeCatalog,
+    CloseCatalog,
+    IndexVolumeOpen,
+    IndexVolumeScan,
+    IndexVolumeChanges
 }
 
 public enum ChangeFeedResponseStatus
@@ -63,7 +74,13 @@ public sealed record ChangeFeedRequest(
     string? Token = null,
     int LeaseSeconds = 0,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    IReadOnlyList<string>? InventoryRoots = null);
+    IReadOnlyList<string>? InventoryRoots = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    SharedCatalogOptions? CatalogOptions = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IndexJournalPositionDto? Journal = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    SmartFileLauncher.Core.Application.Settings.IndexBuildOptions? IndexBuild = null);
 
 public sealed record ChangeFeedResponse(
     int Version,
@@ -72,7 +89,13 @@ public sealed record ChangeFeedResponse(
     IReadOnlyList<string>? Roots = null,
     ChangeFeedDeliveryDto? Delivery = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    ChangeFeedInventoryPageDto? Inventory = null)
+    ChangeFeedInventoryPageDto? Inventory = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    SharedCatalogStatus? Catalog = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IReadOnlyList<string>? Capabilities = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IndexVolumePageDto? Volume = null)
 {
     public static ChangeFeedResponse Ok(IReadOnlyList<string>? roots = null) =>
         new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, null, roots);

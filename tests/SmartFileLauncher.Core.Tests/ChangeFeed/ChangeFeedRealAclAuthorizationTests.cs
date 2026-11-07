@@ -14,6 +14,63 @@ public sealed class ChangeFeedRealAclAuthorizationTests : IDisposable
     private readonly TemporaryDirectory _workspace = new();
     private readonly List<string> _denied = new();
 
+    [Fact]
+    public void DenyingFileContentsDoesNotHideDirectoryEntryMetadata()
+    {
+        var root = _workspace.CreateDirectory("Listing");
+        var path = Path.Combine(root, "visible-name.txt");
+        File.WriteAllText(path, "private contents");
+        var file = new FileInfo(path);
+        var access = file.GetAccessControl();
+        var original = access.GetSecurityDescriptorBinaryForm();
+        try
+        {
+            access.AddAccessRule(new FileSystemAccessRule(CurrentSid(), FileSystemRights.ReadData, AccessControlType.Deny));
+            file.SetAccessControl(access);
+            var listed = Assert.Single(new DirectoryInfo(root).EnumerateFiles());
+            Assert.Equal("visible-name.txt", listed.Name);
+            Assert.Equal(16, listed.Length);
+            Assert.True(ChangeFeedPathAuthorizer.ForCurrentCaller(root).CanReturnExistingPath(path));
+            Assert.Throws<UnauthorizedAccessException>(() => File.ReadAllText(path));
+        }
+        finally
+        {
+            var restore = file.GetAccessControl();
+            restore.RemoveAccessRuleAll(new FileSystemAccessRule(CurrentSid(), FileSystemRights.ReadData, AccessControlType.Deny));
+            restore.SetSecurityDescriptorBinaryForm(original, AccessControlSections.Access);
+            file.SetAccessControl(restore);
+        }
+    }
+
+    [Fact]
+    public void ARegularFileCannotBeUsedAsAListableParent()
+    {
+        var root = _workspace.CreateDirectory("Kok");
+        var file = Path.Combine(root, "not-a-directory");
+        File.WriteAllText(file, "data");
+        var projection = ChangeFeedPathAuthorizer.ForCurrentCaller(root)
+            .Project([Created(Path.Combine(file, "secret.txt"))]);
+        Assert.Empty(projection.Events);
+        Assert.True(projection.Withheld);
+    }
+
+    [Fact]
+    public void AJunctionUsesTheTargetDirectoryListPermission()
+    {
+        var root = _workspace.CreateDirectory("Kok");
+        var target = _workspace.CreateDirectory("Target");
+        var link = Path.Combine(root, "link");
+        WindowsDirectoryLink.CreateJunction(link, target);
+        try
+        {
+            var change = Created(Path.Combine(link, "child.txt"));
+            Assert.Single(ChangeFeedPathAuthorizer.ForCurrentCaller(root).Project([change]).Events);
+            Deny(target);
+            Assert.Empty(ChangeFeedPathAuthorizer.ForCurrentCaller(root).Project([change]).Events);
+        }
+        finally { WindowsDirectoryLink.Delete(link); }
+    }
+
     public void Dispose()
     {
         foreach (var path in _denied)

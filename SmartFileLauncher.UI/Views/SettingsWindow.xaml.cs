@@ -61,6 +61,7 @@ public partial class SettingsWindow : Window
         NaturalLanguageDefaultCheckbox.IsChecked = _settings.NaturalLanguageModeEnabled;
         GridViewDefaultCheckbox.IsChecked = _settings.GridViewEnabled;
         CompactCatalogCheckbox.IsChecked = _settings.CompactSearchStateEnabled;
+        InitializeIndexingSettings();
         
         UpdateIndexStatus();
         InitializeThumbnailSettings();
@@ -91,8 +92,9 @@ public partial class SettingsWindow : Window
 
     private void RebuildIndex_Click(object sender, RoutedEventArgs e)
     {
+        if (!SaveIndexingSettings()) return;
         if (!ModernDialog.Confirm(this, "İndeks yeniden oluşturulsun mu?",
-                "Mevcut arama indeksi silinecek. OmniSpot yeniden başlatılacak ve standart klasörler tekrar taranacak.",
+                "Seçtiğiniz yöntem ve klasörler kaydedilecek. Mevcut arama indeksi yeniden oluşturulacak; kişisel dosyalarınız değişmez.",
                 "Yeniden oluştur", DialogKind.Warning))
         {
             return;
@@ -100,7 +102,7 @@ public partial class SettingsWindow : Window
 
         try
         {
-            _indexMaintenance.ScheduleRebuild();
+            ScheduleIndexRebuild();
             _log?.Invoke("🔄 İndeks yeniden oluşturuluyor...");
             Close();
             IndexRebuildRequested?.Invoke(this, EventArgs.Empty);
@@ -297,6 +299,7 @@ public partial class SettingsWindow : Window
 
     private void Save_Click(object sender, RoutedEventArgs e)
     {
+        if (!SaveIndexingSettings()) return;
         if (!SaveThumbnailSettings()) return;
         _settings.HotkeyModifiers = (uint)_pendingModifiers;
         _settings.HotkeyKey = _pendingKey;

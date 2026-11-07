@@ -42,11 +42,12 @@ public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
         var diagnostics = new List<SearchTokenDiagnostics>();
         if (_searchStateProvider != null)
         {
-            var searchState = _searchStateProvider(cancellationToken);
+            var searchState = _searchStateProvider(cancellationToken).ForQuery();
+            using var lease = searchState as IQuerySnapshotLease;
             foreach (var token in Tokenize(query))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var matches = searchState.Get(token);
+                var matches = searchState.Get(token, cancellationToken);
                 diagnostics.Add(new SearchTokenDiagnostics(
                     token,
                     matches.Count,

@@ -115,10 +115,7 @@ internal sealed partial class LiveCatalog : IDisposable
             AllocationCheckpoint?.Invoke(LiveBuildStage.Begin);
             var id = EnsurePath(record.Item.FullPath, record.Item.IsDirectory, out var lexicalDifference);
             if (Arrived(id, _stamp))
-            {
-                if (ReadRecord(id, _stamp) != Normalize(record)) throw new InvalidDataException("Live ilk edinimde çelişen aynı kayıt.");
                 return id;
-            }
             if (NodeDeleted(id)) { SetPackedState(_nodeState, id, 2); _deletedNodes--; }
             var canonicalParent = id == 1 ? ReadOnlySpan<char>.Empty : Parent(id) == 1 ? _root.AsSpan()
                 : record.Item.FullPath.AsSpan(0, record.Item.FullPath.LastIndexOf('\\'));

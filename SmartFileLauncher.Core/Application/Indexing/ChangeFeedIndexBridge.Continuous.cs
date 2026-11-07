@@ -3,7 +3,7 @@ using SmartFileLauncher.Core.ChangeFeed.Ipc;
 namespace SmartFileLauncher.Core.Application.Indexing;
 
 internal sealed record ContinuousPreparation(string[] ServiceRoots, string[] WatcherRoots, bool Available, string? Diagnostic);
-internal sealed record ContinuousConsumption(bool Available, bool CaughtUp, int Events, string? Diagnostic = null);
+internal sealed record ContinuousConsumption(bool Available, bool CaughtUp, int Events, string? Diagnostic = null, bool Retryable = false);
 
 public sealed partial class ChangeFeedIndexBridge
 {
@@ -60,14 +60,18 @@ public sealed partial class ChangeFeedIndexBridge
         return response?.Status == ChangeFeedResponseStatus.Ok;
     }
 
-    internal async Task<ContinuousConsumption> ConsumeContinuousAsync(CancellationToken ct, bool discardBeforeFreshScan = false)
+    internal async Task<ContinuousConsumption> ConsumeContinuousAsync(CancellationToken ct, bool discardBeforeFreshScan = false,
+        long? throughSequence = null)
     {
+        ct.ThrowIfCancellationRequested();
+        if (throughSequence == 0) return new(true, true, 0);
         var buffered = new List<ChangeFeedRootPageDto>(); string? continuation = null; var events = 0; var bufferedEvents = 0;
         for (var pageIndex = 0; pageIndex < MaximumPagesPerAdoption; pageIndex++)
         {
             var response = await SendAsync(new(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Pull, Token: continuation), ct).ConfigureAwait(false);
             if (response?.Status != ChangeFeedResponseStatus.Ok || response.Delivery is not { } page)
-                return new(false, false, events, $"USN teslimi bekleniyor: {response?.Status}; {response?.Message}");
+                return new(false, false, events, $"USN teslimi bekleniyor: {response?.Status}; {response?.Message}",
+                    response is null || response.Status is ChangeFeedResponseStatus.StaleChain or ChangeFeedResponseStatus.Unavailable);
             buffered.AddRange(page.Roots); bufferedEvents += page.Roots.Sum(root => root.Events.Count);
             if (bufferedEvents > 1_000_000) throw new InvalidDataException("USN teslim zinciri sınırı aşıldı.");
             continuation = page.Continuation;
@@ -77,16 +81,20 @@ public sealed partial class ChangeFeedIndexBridge
                 if (page.StableBatchId is not { Length: 64 } || page.CompletedThroughSequence <= 0)
                     return new(false, false, events, "USN tesliminin kalıcı kimliği eksik.");
                 if (!discardBeforeFreshScan)
-                    await _target.CommitContinuousAsync(buffered, page.StableBatchId, ct).ConfigureAwait(false);
+                    await _target.CommitContinuousAsync(buffered, page.StableBatchId, page.CompletedThroughSequence, ct).ConfigureAwait(false);
                 var ack = await SendAsync(new(ChangeFeedProtocol.Version, ChangeFeedRequestKind.Acknowledge, Token: page.Receipt), ct).ConfigureAwait(false);
-                if (ack?.Status != ChangeFeedResponseStatus.Ok) return new(false, false, events, "USN teslimi kaydedildi; onayı yeniden denenecek.");
+                if (ack?.Status != ChangeFeedResponseStatus.Ok) return new(false, false, events, "USN teslimi kaydedildi; onayı yeniden denenecek.", true);
                 events += bufferedEvents;
+                if (throughSequence is { } boundary && page.CompletedThroughSequence >= boundary)
+                    return new(true, true, events);
             }
             else if (bufferedEvents != 0 || buffered.Any(root => root.ProducerGap != ChangeFeed.ChangeFeedGapReason.None ||
                          root.ProducerFault != ChangeFeed.ChangeFeedFaultReason.None || root.AuthorizationGap || root.PayloadTooLarge))
                 return new(false, false, events, "USN teslim makbuzu eksik.");
             buffered.Clear(); bufferedEvents = 0;
-            if (!page.HasMore) return new(true, true, events);
+            if (!page.HasMore) return throughSequence is null
+                ? new(true, true, events)
+                : new(false, false, events, "USN başlangıç sınırına erişilemedi; teslim yeniden hazırlanacak.", true);
         }
         return new(true, false, events, "USN kuyruğunun kalan kısmı sonraki çevrimde işlenecek.");
     }

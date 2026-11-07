@@ -23,15 +23,17 @@ public sealed class NtfsRootInventoryTests
     }
 
     [Fact]
-    public void HiddenSubtreesAreExcludedButAnExplicitHiddenRootIsIncluded()
+    public void HiddenSubtreesRemainInTheInventoryWithTheirAttributes()
     {
         NtfsMftEntry[] entries = [Dir(5, 5, "."), Dir(10, 5, "root") with { Attributes = FileAttributes.Hidden },
             Dir(20, 10, "hidden") with { Attributes = FileAttributes.Hidden }, File(30, 20, "secret"),
             File(40, 10, "visible")];
         var reader = new NtfsRootInventory((_, _) => entries);
         var result = reader.Read([Root(10, @"C:\root")], default).ToArray();
-        Assert.Equal(2, result.Length);
+        Assert.Equal(4, result.Length);
         Assert.Contains(result, entry => entry.Path == @"C:\root\visible");
+        Assert.Contains(result, entry => entry.Path == @"C:\root\hidden\secret");
+        Assert.Contains(result, entry => entry.Path == @"C:\root\hidden" && (entry.Attributes & FileAttributes.Hidden) != 0);
     }
 
     [Fact]

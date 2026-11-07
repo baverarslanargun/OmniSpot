@@ -74,6 +74,22 @@ dotnet publish SmartFileLauncher.UI\SmartFileLauncher.UI.csproj -c Release -o .\
 
 Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 
+### İlk indeksleme ve işçi ayarları
+
+Ayarlar'daki **Tarama ve sıralama** bölümünden klasör taraması veya yerel NTFS
+diskler için MFT seçilebilir. MFT okuma ve işleme için tek işçi, adaptif seçim veya elle 1–16 işçi
+ayarlanabilir. İndeks sıralamasında Pivot ve Birleştir yöntemleri; otomatik veya
+elle 1–16 sıralama işçisi kullanılabilir. Bu ayarlar sonuçların filtre ve sıralama
+seçeneklerini değiştirmez.
+
+Token indeksi bu sürümde geçici olarak kapalıdır (`TokenIndexing.Enabled=false`).
+Token hazırlama altyapısının bulunması, bu sürümde arka planda token indeksi
+hazırlandığı anlamına gelmez.
+
+Tarama ayarları sonraki yeni taramada uygulanır; mevcut indeks korunur. Yeni
+ayarlarla baştan taramak için indeks bölümündeki yeniden oluşturma işlemini
+kullanın. Uygulama ve OmniSpot hizmeti aynı güncel sürümde olmalıdır.
+
 ### Küçük resim belleği
 
 Ayarlar → **Küçük resimler ve RAM** bölümünden önizlemeleri açıp kapatabilir,

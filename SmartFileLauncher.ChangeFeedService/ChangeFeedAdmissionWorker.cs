@@ -35,7 +35,9 @@ internal sealed class ChangeFeedAdmissionWorker : BackgroundService
             ownerSid => new FileSystemChangeFeedStore(
                 ChangeFeedStoreLayout.ForTrustedOwner(ownerSid)),
             handoffDrainer: ChangeFeedDrainWorker.DrainToCurrentBoundary,
-            inventory: new ChangeFeedInventorySessions(onInventoryFailure));
+            inventory: new ChangeFeedInventorySessions(onInventoryFailure),
+            sharedCatalogLayout: ChangeFeedStoreLayout.ForTrustedOwner,
+            catalogBootstrap: ChangeFeedDrainWorker.BeginCatalogBootstrap);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

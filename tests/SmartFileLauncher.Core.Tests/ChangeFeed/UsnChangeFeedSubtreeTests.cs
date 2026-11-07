@@ -17,6 +17,45 @@ public sealed class UsnChangeFeedSubtreeTests
     private const ulong NestedReference = 61;
     private const ulong DeeperReference = 62;
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void RepeatedRenamesPreserveEveryIntermediatePath(bool directory)
+    {
+        var attributes = directory ? FileAttributes.Directory : FileAttributes.Normal;
+        var reader = CreateReader().EnqueuePage(EndUsn, new UsnRecordBuffer()
+            .AddVersion2(110, MovedReference, RootReference, UsnReason.RenameOldName, "first", attributes)
+            .AddVersion2(111, MovedReference, RootReference, UsnReason.RenameNewName, "middle", attributes)
+            .AddVersion2(112, MovedReference, RootReference, UsnReason.RenameNewName | UsnReason.Close, "middle", attributes)
+            .AddVersion2(113, MovedReference, RootReference, UsnReason.RenameOldName, "middle", attributes)
+            .AddVersion2(114, MovedReference, RootReference, UsnReason.RenameNewName, "final", attributes).Build());
+        using var feed = CreateFeed(reader, directories: directory ? [Entry(MovedReference, "first", RootReference)] : []);
+        var changes = feed.Read().Events;
+        Assert.Equal(2, changes.Count);
+        Assert.All(changes, change => Assert.Equal(ChangeFeedEventKind.Renamed, change.Kind));
+        Assert.Equal(new[] { @"C:\Kok\first", @"C:\Kok\middle" }, changes.Select(change => change.OldPath));
+        Assert.Equal(new[] { @"C:\Kok\middle", @"C:\Kok\final" }, changes.Select(change => change.FullPath));
+        feed.Accept();
+        if (directory) Assert.Equal("final", Assert.Single(feed.CaptureState().Directories).Name);
+    }
+
+    [Fact]
+    public void InterleavedRenamePairsAndEarlierChildChangesKeepCompletionOrder()
+    {
+        var reader = CreateReader().EnqueuePage(EndUsn, new UsnRecordBuffer()
+            .AddVersion2(110, MovedReference, RootReference, UsnReason.RenameOldName, "first", FileAttributes.Directory)
+            .AddVersion2(111, 70, MovedReference, UsnReason.DataExtend, "child.txt")
+            .AddVersion2(112, 80, RootReference, UsnReason.RenameOldName, "other.txt")
+            .AddVersion2(113, MovedReference, RootReference, UsnReason.RenameNewName, "final", FileAttributes.Directory)
+            .AddVersion2(114, 80, RootReference, UsnReason.RenameNewName, "renamed.txt").Build());
+        using var feed = CreateFeed(reader, directories: [Entry(MovedReference, "first", RootReference)]);
+        var changes = feed.Read().Events;
+        Assert.Equal(new[] { ChangeFeedEventKind.Modified, ChangeFeedEventKind.Renamed, ChangeFeedEventKind.Renamed },
+            changes.Select(change => change.Kind));
+        Assert.Equal(new[] { @"C:\Kok\first\child.txt", @"C:\Kok\final", @"C:\Kok\renamed.txt" },
+            changes.Select(change => change.FullPath));
+    }
+
     [Fact]
     public void MoveInThenAccept_KeepsResolvingChangesInsideTheMovedSubtree()
     {

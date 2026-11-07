@@ -180,7 +180,7 @@ internal sealed class FileSystemPathGuard
         return information.NumberOfLinks > 1;
     }
 
-    internal FileIdentity GetFileIdentity(string path)
+    internal FileIdentity GetFileIdentity(string path, bool isDirectory = false)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -193,7 +193,7 @@ internal sealed class FileSystemPathGuard
             ShareRead | ShareWrite | ShareDelete,
             IntPtr.Zero,
             OpenExisting,
-            0,
+            isDirectory ? BackupSemantics : 0,
             IntPtr.Zero);
         if (handle.IsInvalid)
         {

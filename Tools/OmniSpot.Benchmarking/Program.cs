@@ -1,3 +1,5 @@
 using OmniSpot.Benchmarking;
+using System.Diagnostics;
 
-return await BenchmarkRootCommand.Create().Parse(args).InvokeAsync();
+var processEntryTimestamp = Stopwatch.GetTimestamp();
+return await BenchmarkRootCommand.Create(processEntryTimestamp).Parse(args).InvokeAsync();

@@ -243,7 +243,7 @@ public sealed class UsnChangeFeedTests
     }
 
     [Fact]
-    public void Read_IgnoresReasonsThatDoNotChangeTheIndex()
+    public void Read_SecurityChangeRequestsAVisibilityRefresh()
     {
         var reader = CreateReader().EnqueuePage(
             EndUsn,
@@ -252,7 +252,9 @@ public sealed class UsnChangeFeedTests
                 .Build());
         using var feed = CreateFeed(reader);
 
-        Assert.Empty(feed.Read().Events);
+        var change = Assert.Single(feed.Read().Events);
+        Assert.Equal(ChangeFeedEventKind.Modified, change.Kind);
+        Assert.True(change.RefreshSubtree);
     }
 
     [Fact]

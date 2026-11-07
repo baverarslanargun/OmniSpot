@@ -80,6 +80,8 @@ public class AdvancedSearchEngine
         var filter = view.Filter;
         cancellationToken.ThrowIfCancellationRequested();
         var state = _stateProvider(cancellationToken).ForQuery();
+        using var lease = state as IQuerySnapshotLease;
+        if (state is ITokenIndexSnapshot { IsTokenIndexReady: false }) throw new TokenIndexNotReadyException();
         if (state.ItemCount == 0 || maxResults <= 0)
         {
             return Array.Empty<SearchResult>();

@@ -2,6 +2,10 @@ using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.ChangeFeed;
 using SmartFileLauncher.Core.ChangeFeed.Ipc;
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Indexing;
+using SmartFileLauncher.Core.Indexing.Ntfs;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
 using SmartFileLauncher.Core.Tests.TestInfrastructure;
@@ -11,6 +15,147 @@ namespace SmartFileLauncher.Core.Tests.Services;
 
 public sealed class LiveIndexIntegrationTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [System.Runtime.Versioning.SupportedOSPlatform("windows")]
+    public async Task UnwatchableJunctionDoesNotAbortMftInventoryOrDisableOtherLinks(bool blockedFirst)
+    {
+        using var space = new TemporaryDirectory();
+        var root = space.CreateDirectory("files");
+        var denied = space.CreateDirectory("denied");
+        var readable = space.CreateDirectory("readable");
+        space.CreateFile(@"denied\private.txt", "private");
+        space.CreateFile(@"readable\visible.txt", "visible");
+        var blockedLink = Path.Combine(root, "blocked");
+        var healthyLink = Path.Combine(root, "healthy");
+        WindowsDirectoryLink.CreateJunction(blockedLink, denied);
+        WindowsDirectoryLink.CreateJunction(healthyLink, readable);
+        var target = new DirectoryInfo(denied);
+        var access = target.GetAccessControl();
+        var originalAccess = access.GetSecurityDescriptorBinaryForm();
+        using var identity = WindowsIdentity.GetCurrent();
+        try
+        {
+            access.AddAccessRule(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory, AccessControlType.Deny));
+            target.SetAccessControl(access);
+            using var manager = Create(Path.Combine(space.Path, "index.db"));
+            var source = new LinkInventory(blockedFirst ? [blockedLink, healthyLink] : [healthyLink, blockedLink]);
+            await manager.InitializeLiveAsync([root], source, new(new Channel(), new IndexManagerChangeFeedTarget(manager)), CancellationToken.None);
+            Assert.True(manager.IsInitialized);
+            Assert.True(manager.CurrentSearchState.ContainsPath(blockedLink));
+            Assert.False(manager.CurrentSearchState.ContainsPath(Path.Combine(blockedLink, "private.txt")));
+            Assert.True(manager.CurrentSearchState.ContainsPath(Path.Combine(healthyLink, "visible.txt")));
+            Assert.DoesNotContain(blockedLink, manager.LiveWatcherRoots);
+            Assert.Contains(healthyLink, manager.LiveWatcherRoots);
+            Assert.True(manager.IsWatching);
+        }
+        finally
+        {
+            var restore = target.GetAccessControl();
+            restore.RemoveAccessRuleAll(new FileSystemAccessRule(identity.User!, FileSystemRights.ListDirectory, AccessControlType.Deny));
+            restore.SetSecurityDescriptorBinaryForm(originalAccess, AccessControlSections.Access);
+            target.SetAccessControl(restore);
+            WindowsDirectoryLink.Delete(blockedLink);
+            WindowsDirectoryLink.Delete(healthyLink);
+        }
+    }
+
+    [Fact]
+    public async Task HiddenAndSystemSubtreesRemainVisibleThroughLiveUpdates()
+    {
+        using var space = new TemporaryDirectory();
+        var root = space.CreateDirectory("files");
+        var folder = space.CreateDirectory(@"files\hidden");
+        var file = space.CreateFile(@"files\hidden\system.txt", "initial");
+        File.SetAttributes(folder, FileAttributes.Directory | FileAttributes.Hidden);
+        File.SetAttributes(file, FileAttributes.System);
+        using var manager = Create(Path.Combine(space.Path, "index.db"));
+        await manager.InitializeLiveAsync([root], null, new(new Channel(), new IndexManagerChangeFeedTarget(manager)), CancellationToken.None);
+        Assert.True(manager.CurrentSearchState.ContainsPath(file));
+        File.AppendAllText(file, " updated contents");
+        await manager.CommitContinuousDeliveryAsync([Page(root, new ChangeFeedEventDto(ChangeFeedEventKind.Modified, file, false, null))], "hidden-change", CancellationToken.None);
+        Assert.Equal(new FileInfo(file).Length, manager.CurrentSearchState.Get("system").Single().SizeBytes);
+    }
+
+    [Fact]
+    public async Task HiddenJunctionCycleStopsAtTheAliasButSiblingAliasesRemainVisible()
+    {
+        using var space = new TemporaryDirectory();
+        var root = space.CreateDirectory("files");
+        var target = space.CreateDirectory("target");
+        space.CreateFile(@"target\child.txt", "contents");
+        var loop = Path.Combine(root, "loop");
+        var first = Path.Combine(root, "first");
+        var second = Path.Combine(root, "second");
+        WindowsDirectoryLink.CreateJunction(loop, root);
+        WindowsDirectoryLink.CreateJunction(first, target);
+        WindowsDirectoryLink.CreateJunction(second, target);
+        try
+        {
+            File.SetAttributes(loop, File.GetAttributes(loop) | FileAttributes.Hidden);
+            using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            using var manager = Create(Path.Combine(space.Path, "index.db"));
+            await manager.InitializeLiveAsync([root], null, new(new Channel(), new IndexManagerChangeFeedTarget(manager)), deadline.Token);
+            Assert.True(manager.CurrentSearchState.ContainsPath(loop));
+            Assert.False(manager.CurrentSearchState.ContainsPath(Path.Combine(loop, "loop")));
+            Assert.True(manager.CurrentSearchState.ContainsPath(Path.Combine(first, "child.txt")));
+            Assert.True(manager.CurrentSearchState.ContainsPath(Path.Combine(second, "child.txt")));
+            Assert.DoesNotContain(loop, manager.LiveWatcherRoots);
+        }
+        finally
+        {
+            WindowsDirectoryLink.Delete(loop);
+            WindowsDirectoryLink.Delete(first);
+            WindowsDirectoryLink.Delete(second);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task BootstrapDirectoryEventsDurablyRepairChildrenMissingFromTheInventory(bool renamed)
+    {
+        using var space = new TemporaryDirectory();
+        var root = Directory.CreateDirectory(Path.Combine(space.Path, "files")).FullName;
+        var folder = Directory.CreateDirectory(Path.Combine(root, "middle")).FullName;
+        File.WriteAllText(Path.Combine(folder, "known.txt"), "known");
+        File.WriteAllText(Path.Combine(folder, "ghost.txt"), "gone later");
+        var database = Path.Combine(space.Path, "index.db");
+        using var manager = Create(database);
+        await manager.InitializeLiveAsync([root], null,
+            new(new Channel { FailDrainAfter = 1 }, new IndexManagerChangeFeedTarget(manager)), CancellationToken.None);
+        File.WriteAllText(Path.Combine(folder, "missing.txt"), "missed by initial inventory");
+        File.Delete(Path.Combine(folder, "ghost.txt"));
+        var target = renamed ? Path.Combine(root, "final") : folder;
+        if (renamed) Directory.Move(folder, target);
+        var events = renamed
+            ? new[] { new ChangeFeedEventDto(ChangeFeedEventKind.Renamed, folder, true, Path.Combine(root, "first")),
+                new ChangeFeedEventDto(ChangeFeedEventKind.Renamed, target, true, folder) }
+            : [new ChangeFeedEventDto(ChangeFeedEventKind.Created, target, true, null)];
+        await manager.CommitContinuousDeliveryAsync([Page(root, events)], "bootstrap-churn", CancellationToken.None);
+        Assert.True(manager.PendingRepairCount > 0);
+        var store = Path.GetDirectoryName(Assert.Single(Directory.GetFiles(database + ".live", "head.bin", SearchOption.AllDirectories)))!;
+        Assert.NotEmpty(LiveCatalogStore.ReadHead(store).PendingRepairs ?? []);
+        manager.CompleteLiveBootstrap();
+        Assert.True(BootstrapPending(manager));
+        await manager.RetryLiveRepairsAsync(CancellationToken.None);
+        Assert.Equal(0, manager.PendingRepairCount);
+        Assert.True(manager.CurrentSearchState.ContainsPath(Path.Combine(target, "known.txt")));
+        Assert.True(manager.CurrentSearchState.ContainsPath(Path.Combine(target, "missing.txt")));
+        Assert.False(manager.CurrentSearchState.ContainsPath(Path.Combine(target, "ghost.txt")));
+        if (renamed) Assert.False(manager.CurrentSearchState.ContainsPath(folder));
+        manager.CompleteLiveBootstrap();
+        Assert.False(BootstrapPending(manager));
+    }
+
+    private static bool BootstrapPending(IndexManager manager)
+    {
+        var bytes = File.ReadAllBytes(manager.DatabasePath);
+        using var control = System.Text.Json.JsonDocument.Parse(bytes.AsMemory(0, bytes.Length - 32));
+        return control.RootElement.GetProperty("BootstrapPending").GetBoolean();
+    }
+
     [Fact]
     public void ModificationCoalescingPreservesStructuralEventBoundaries()
     {
@@ -154,8 +299,8 @@ public sealed class LiveIndexIntegrationTests
             var channel = new Channel(); var bridge = new ChangeFeedIndexBridge(channel, new IndexManagerChangeFeedTarget(manager));
             await manager.InitializeLiveAsync([root], null, bridge, CancellationToken.None);
             Assert.False(File.Exists(database)); Assert.False(manager.IsWatching);
-            Assert.Equal(1, manager.GetStats().FileCount); Assert.Equal(2, manager.GetStats().DirectoryCount);
-            Assert.False(manager.CurrentSearchState.ContainsPath(hidden));
+            Assert.Equal(2, manager.GetStats().FileCount); Assert.Equal(2, manager.GetStats().DirectoryCount);
+            Assert.True(manager.CurrentSearchState.ContainsPath(hidden));
             old = manager.CreateSearchState();
             Assert.Single(old.Get("istanbul")); Assert.Single(old.GetPartial("rap")); Assert.Single(old.GetFuzzy("rappr", 1));
             manager.IncrementOpenCount(original);
@@ -185,7 +330,7 @@ public sealed class LiveIndexIntegrationTests
             File.Delete(renamed);
             await reopened.CommitContinuousDeliveryAsync([Page(root, new ChangeFeedEventDto(ChangeFeedEventKind.Deleted, renamed, false, null))], "real-delete", CancellationToken.None);
             Assert.Empty(reopened.CurrentSearchState.Get("rapor"));
-            Assert.Equal(0, reopened.GetStats().FileCount);
+            Assert.Equal(1, reopened.GetStats().FileCount);
             Assert.Equal(0, reopened.PendingRepairCount);
             Assert.Equal(0, reopened.ReconciliationRunCount);
         }
@@ -217,6 +362,17 @@ public sealed class LiveIndexIntegrationTests
         manager.EnableLiveCatalog(); return manager;
     }
     private static ChangeFeedRootPageDto Page(string root, params ChangeFeedEventDto[] events) => new(root, events, ChangeFeedGapReason.None, ChangeFeedFaultReason.None, false, false);
+    private sealed class LinkInventory(string[] links) : IIndexInventorySource, IIndexInventorySession
+    {
+        public Task<IIndexInventorySession?> ReadAsync(IReadOnlyList<string> roots, Action<IndexInventoryEntry> receive, CancellationToken cancellationToken)
+        {
+            foreach (var root in roots) receive(new(root, true, FileAttributes.Directory, 0, DateTime.UtcNow.Ticks, DateTime.UtcNow.Ticks));
+            foreach (var link in links) receive(new(link, true, FileAttributes.Directory | FileAttributes.ReparsePoint, 0, DateTime.UtcNow.Ticks, DateTime.UtcNow.Ticks));
+            return Task.FromResult<IIndexInventorySession?>(this);
+        }
+        public Task<bool> ValidateAsync(CancellationToken cancellationToken) => Task.FromResult(true);
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
     private sealed class Channel : IChangeFeedRequestChannel
     {
         internal List<ChangeFeedRequest> Requests { get; } = [];

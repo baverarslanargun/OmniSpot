@@ -29,6 +29,7 @@ public partial class MainWindow : Window {
     private readonly ISettingsApplicationService _settingsApplication;
     private readonly IIndexMaintenanceService _indexMaintenance;
     private readonly IIndexLifecycleService _indexLifecycle;
+    private readonly IIndexedLocationProvider _indexedLocations;
     private readonly ISearchApplicationService _searchService;
     private readonly ISearchDiagnosticsService _searchDiagnostics;
     private readonly IThumbnailService _thumbnailService;
@@ -122,6 +123,7 @@ public partial class MainWindow : Window {
         ISettingsApplicationService settingsApplication,
         IIndexMaintenanceService indexMaintenance,
         IIndexLifecycleService indexLifecycle,
+        IIndexedLocationProvider indexedLocations,
         ISearchApplicationService searchService,
         ISearchDiagnosticsService searchDiagnostics,
         IThumbnailService thumbnailService,
@@ -137,6 +139,7 @@ public partial class MainWindow : Window {
         _settingsApplication = settingsApplication ?? throw new ArgumentNullException(nameof(settingsApplication));
         _indexMaintenance = indexMaintenance ?? throw new ArgumentNullException(nameof(indexMaintenance));
         _indexLifecycle = indexLifecycle ?? throw new ArgumentNullException(nameof(indexLifecycle));
+        _indexedLocations = indexedLocations ?? throw new ArgumentNullException(nameof(indexedLocations));
         _searchService = searchService ?? throw new ArgumentNullException(nameof(searchService));
         _searchDiagnostics = searchDiagnostics ?? throw new ArgumentNullException(nameof(searchDiagnostics));
         _thumbnailService = thumbnailService ?? throw new ArgumentNullException(nameof(thumbnailService));
@@ -151,7 +154,6 @@ public partial class MainWindow : Window {
         DataContext = _viewModel;
         InitializeComponent();
         TrackMoreOptionsMenuState();
-        SetLoadingIndeterminate(true);
         DesktopIcons.ItemsSource = _desktopRows;
         _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
         _folderLoadingDelay.Tick += (_, _) => ShowFolderLoadingBarNow();
@@ -197,10 +199,7 @@ public partial class MainWindow : Window {
         Loaded -= MainWindow_Loaded;
 
         try {
-            await InitializeConnectivityAsync();
-            if (!_isPreparedForShutdown) {
-                await InitializeAsync();
-            }
+            await Task.WhenAll(InitializeAsync(), InitializeConnectivityAsync());
         } catch (OperationCanceledException)
             when (_lifetimeCancellation.IsCancellationRequested) {
         }
@@ -403,13 +402,26 @@ public partial class MainWindow : Window {
     }
     
     private void UpdateAIButtonState(bool isConnected) {
-        NaturalLanguageToggle.IsEnabled = isConnected;
-        
-        if (!isConnected && _isNaturalLanguageMode) {
+        var tokenReady = _indexLifecycle.IsTokenIndexReady;
+        var available = _isIndexed && isConnected && tokenReady;
+        var tokensPreparing = _isIndexed && TokenIndexing.Enabled && !tokenReady;
+        var catalogPreparing = SearchWaitShimmer.Visibility == Visibility.Visible;
+        var preparing = catalogPreparing || (isConnected && tokensPreparing);
+
+        NaturalLanguageToggle.IsEnabled = available;
+        AiEffortButton.IsEnabled = available;
+        AiWaitShimmer.Visibility = preparing ? Visibility.Visible : Visibility.Collapsed;
+        BackgroundIndexStatus.Visibility = tokensPreparing ? Visibility.Visible : Visibility.Collapsed;
+        NaturalLanguageToggle.ToolTip = preparing ? "AI araması hazırlanıyor."
+            : !isConnected ? "İnternet bağlantısı yok."
+            : available ? "AI destekli doğal dil araması" : "AI araması şu anda kullanılamıyor.";
+
+        if (!available && !catalogPreparing && _isNaturalLanguageMode) {
             NaturalLanguageToggle.IsChecked = false;
             _isNaturalLanguageMode = false;
             SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
-            Log("⚠️ İnternet yok, AI modu kapatıldı");
+            Log(!isConnected ? "⚠️ İnternet yok, AI modu kapatıldı"
+                : TokenIndexing.Enabled ? "AI indeksi hazırlanıyor; standart arama etkin" : "AI araması geçici olarak kapalı; ad araması etkin");
         }
     }
     
@@ -428,6 +440,10 @@ public partial class MainWindow : Window {
 
         Dispatcher.BeginInvoke(new Action(() => {
             if (_isPreparedForShutdown) return;
+            if (progress.IsBackgroundPreparation) {
+                UpdateAIButtonState(_connectivityMonitor.IsConnected);
+                return;
+            }
             _latestIndexProgress = progress;
             if (progress.Phase is { } phase && phase != _lastIndexPhase) {
                 _lastIndexPhase = phase;
@@ -436,35 +452,13 @@ public partial class MainWindow : Window {
                 Log($"⏱️ İndeks aşaması: {phase} | {elapsed.TotalSeconds:F3} sn | UI gecikmesi {deliveryDelay.TotalMilliseconds:F0} ms");
             }
             UpdateIndexProgressText();
-            if (progress.IsCatalogBuild) {
-                EnterCatalogBuildStage();
-                return;
-            }
-
-            if (progress.IsIndeterminate) {
-                SetLoadingIndeterminate(true);
-                return;
-            }
-
-            SetLoadingIndeterminate(false);
-            if (progress.Percentage >= 0 && progress.Percentage <= 100) {
-                SetLoadingPercentage(progress.Percentage);
-            }
         }));
     }
 
     private void UpdateIndexProgressText() {
         if (_isPreparedForShutdown || _latestIndexProgress is not { } progress) return;
-        var text = IndexProgressPresentation.Format(progress, _indexProgressClock.ElapsedMilliseconds);
-        SetLoadingStatus(text);
-        CatalogBuildStatus.Text = text;
+        CatalogBuildStatus.Text = IndexProgressPresentation.Format(progress, _indexProgressClock.ElapsedMilliseconds);
     }
-
-    private const double LoadingTrackWidth = 240;
-    private const int SkeletonCardCount = 8;
-    private bool _loadingIndeterminate;
-    private bool _catalogBuildStageShown;
-    private string? _loadingStatusText;
 
     private static bool Animate => SystemParameters.ClientAreaAnimation;
 
@@ -482,114 +476,6 @@ public partial class MainWindow : Window {
 
     private static void StopPulse(System.Windows.Media.TranslateTransform shift) {
         shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
-    }
-
-    private void SetLoadingStatus(string status) {
-        if (string.Equals(_loadingStatusText, status, StringComparison.Ordinal)) return;
-        _loadingStatusText = status;
-        LoadingStatus.Text = status;
-    }
-
-    private void SetLoadingPercentage(int percentage) {
-        var width = LoadingTrackWidth * percentage / 100.0;
-        if (!Animate) {
-            LoadingProgressFill.Width = width;
-            return;
-        }
-        LoadingProgressFill.BeginAnimation(WidthProperty, new System.Windows.Media.Animation.DoubleAnimation(width, TimeSpan.FromMilliseconds(220)) {
-            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
-        });
-    }
-
-    private void SetLoadingIndeterminate(bool indeterminate) {
-        if (_loadingIndeterminate == indeterminate) return;
-        _loadingIndeterminate = indeterminate;
-        if (indeterminate) {
-            LoadingProgressFill.BeginAnimation(WidthProperty, null);
-            LoadingProgressFill.Width = 0;
-            LoadingProgressPulse.Visibility = Visibility.Visible;
-            StartPulse(LoadingProgressPulseShift, 96, LoadingTrackWidth);
-            return;
-        }
-        StopPulse(LoadingProgressPulseShift);
-        LoadingProgressPulse.Visibility = Visibility.Collapsed;
-    }
-
-    private void EnterCatalogBuildStage() {
-        if (_catalogBuildStageShown || _isPreparedForShutdown) return;
-        _catalogBuildStageShown = true;
-        SkeletonCards.ItemsSource ??= Enumerable.Range(0, SkeletonCardCount).ToList();
-        StartShimmer();
-        SkeletonPanel.Opacity = 1;
-        SkeletonPanel.Visibility = Visibility.Visible;
-        HideLoadingOverlay();
-        CatalogBuildPanel.Visibility = Visibility.Visible;
-        StartPulse(CatalogBuildPulseShift, 140, CatalogBuildPanel.ActualWidth > 0 ? CatalogBuildPanel.ActualWidth : 600);
-    }
-
-    private System.Windows.Media.TranslateTransform? _shimmerShift;
-
-    private void StartShimmer() {
-        if (!Animate || _shimmerShift != null) return;
-        var shift = new System.Windows.Media.TranslateTransform(-1, 0);
-        var brush = new System.Windows.Media.LinearGradientBrush {
-            StartPoint = new System.Windows.Point(0, 0),
-            EndPoint = new System.Windows.Point(1, 0),
-            MappingMode = System.Windows.Media.BrushMappingMode.RelativeToBoundingBox,
-            RelativeTransform = shift
-        };
-        brush.GradientStops.Add(new System.Windows.Media.GradientStop((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E6EBF3"), 0));
-        brush.GradientStops.Add(new System.Windows.Media.GradientStop((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#F9FBFE"), 0.5));
-        brush.GradientStops.Add(new System.Windows.Media.GradientStop((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#E6EBF3"), 1));
-        Resources["ShimmerBrush"] = brush;
-        _shimmerShift = shift;
-        shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, Loop(-1, 1, TimeSpan.FromSeconds(1.4),
-            new System.Windows.Media.Animation.SineEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseInOut }));
-    }
-
-    private void StopShimmer() {
-        _shimmerShift?.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
-        _shimmerShift = null;
-    }
-
-    private void LeaveCatalogBuildStage() {
-        StopPulse(CatalogBuildPulseShift);
-        CatalogBuildPanel.Visibility = Visibility.Collapsed;
-        if (SkeletonPanel.Visibility != Visibility.Visible) return;
-        if (!Animate) {
-            StopShimmer();
-            SkeletonPanel.Visibility = Visibility.Collapsed;
-            return;
-        }
-        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(320)) {
-            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
-        };
-        fade.Completed += (_, _) => {
-            StopShimmer();
-            SkeletonPanel.Visibility = Visibility.Collapsed;
-            SkeletonPanel.BeginAnimation(OpacityProperty, null);
-            SkeletonPanel.Opacity = 1;
-        };
-        SkeletonPanel.BeginAnimation(OpacityProperty, fade);
-    }
-
-    private void HideLoadingOverlay() {
-        if (LoadingOverlay.Visibility != Visibility.Visible) return;
-        StopPulse(LoadingProgressPulseShift);
-        if (!Animate) {
-            LoadingOverlay.Visibility = Visibility.Collapsed;
-            return;
-        }
-        LoadingOverlay.IsHitTestVisible = false;
-        var fade = new System.Windows.Media.Animation.DoubleAnimation(1, 0, TimeSpan.FromMilliseconds(220)) {
-            EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseIn }
-        };
-        fade.Completed += (_, _) => {
-            LoadingOverlay.Visibility = Visibility.Collapsed;
-            LoadingOverlay.BeginAnimation(OpacityProperty, null);
-            LoadingOverlay.Opacity = 1;
-        };
-        LoadingOverlay.BeginAnimation(OpacityProperty, fade);
     }
 
     private void HandleIndexError(string error) {
@@ -769,6 +655,16 @@ public partial class MainWindow : Window {
     
     private async Task InitializeAsync() {
         try {
+            var locations = _indexedLocations.Resolve();
+            _desktopPath = locations.DesktopPath;
+            _indexedRootPaths = locations.RootPaths.ToList();
+            LoadDesktopIcons();
+            ShowPanel(DesktopIconsScroll);
+
+            SearchWaitShimmer.Visibility = Visibility.Visible;
+            UpdateAIButtonState(_connectivityMonitor.IsConnected);
+            CatalogBuildPanel.Visibility = Visibility.Visible;
+            StartPulse(CatalogBuildPulseShift, 140, CatalogBuildPanel.ActualWidth > 0 ? CatalogBuildPanel.ActualWidth : 600);
             RecordMeasurementEvent(
                 "indeks başlatma başladı",
                 _startupOptions.ProfileName);
@@ -779,9 +675,12 @@ public partial class MainWindow : Window {
             _indexProgressClock.Restart();
             _indexProgressTimer.Start();
             var stopwatch = _indexProgressClock;
-            var startup = await _indexLifecycle.InitializeAsync(
-                _lifetimeCancellation.Token);
+            var cancellationToken = _lifetimeCancellation.Token;
+            var startup = await Task.Run(
+                () => _indexLifecycle.InitializeAsync(cancellationToken),
+                cancellationToken);
             stopwatch.Stop();
+            if (_isPreparedForShutdown) return;
 
             _desktopPath = startup.DesktopPath;
             _indexedRootPaths = startup.RootPaths.ToList();
@@ -791,30 +690,28 @@ public partial class MainWindow : Window {
             }
             Log($"📊 Toplam {startup.RootPaths.Count} dizin tarandı");
 
-            await Dispatcher.InvokeAsync(() =>
-                CompleteIndexInitialization(startup, stopwatch.ElapsedMilliseconds));
+            CompleteIndexInitialization(startup, stopwatch.ElapsedMilliseconds);
             RecordMeasurementEvent(
                 "indeks başlatma bitti",
                 $"{startup.Stats.FileCount} dosya · {startup.Stats.DirectoryCount} klasör",
                 stopwatch.ElapsedMilliseconds);
         } catch (OperationCanceledException) when (_isPreparedForShutdown) {
         } catch (Exception ex) {
-            _indexProgressTimer.Stop();
-            _indexProgressClock.Stop();
+            if (_isPreparedForShutdown) return;
+            SearchWaitShimmer.Visibility = Visibility.Collapsed;
+            UpdateAIButtonState(_connectivityMonitor.IsConnected);
             RecordMeasurementEvent(
                 "indeks başlatma başarısız",
                 ex.GetType().Name);
             Log($"❌ HATA: {ex.Message}");
             Log($"Stack trace: {ex.StackTrace}");
-            await Dispatcher.InvokeAsync(() => {
-                SetLoadingStatus($"Hata: {ex.Message}");
-                SetLoadingIndeterminate(false);
-                ModernDialog.Show(this, "İndeksleme başarısız",
-                    $"{ex.Message}{Environment.NewLine}{Environment.NewLine}Ayrıntılar için konsolu kontrol edin.", DialogKind.Danger);
-            });
+            ModernDialog.Show(this, "İndeksleme başarısız",
+                $"{ex.Message}{Environment.NewLine}{Environment.NewLine}Ayrıntılar için konsolu kontrol edin.", DialogKind.Danger);
         } finally {
             _indexProgressTimer.Stop();
             _indexProgressClock.Stop();
+            StopPulse(CatalogBuildPulseShift);
+            CatalogBuildPanel.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -822,9 +719,6 @@ public partial class MainWindow : Window {
         IndexStartupResult startup,
         long elapsedMilliseconds) {
         var stats = startup.Stats;
-        SetLoadingIndeterminate(false);
-        SetLoadingPercentage(100);
-        SetLoadingStatus($"{stats.FileCount} dosya, {stats.DirectoryCount} klasör indekslendi");
         Log($"✅ İndeksleme tamamlandı ({elapsedMilliseconds}ms)");
         Log($"   📄 Dosya sayısı: {stats.FileCount}");
         Log($"   📁 Klasör sayısı: {stats.DirectoryCount}");
@@ -834,8 +728,14 @@ public partial class MainWindow : Window {
         }
 
         Log("✅ Rule-based intent parser hazır");
-        LoadDesktopIcons();
         _isIndexed = true;
+        SearchBox.IsEnabled = true;
+        SearchWaitShimmer.Visibility = Visibility.Collapsed;
+        UpdateAIButtonState(_connectivityMonitor.IsConnected);
+        if (IsActive && (Keyboard.FocusedElement == null || ReferenceEquals(Keyboard.FocusedElement, this))) {
+            SearchBox.Focus();
+        }
+        LoadDesktopIcons();
         Log("✅ Arama motoru hazır");
 
         if (_indexLifecycle.ReconciliationStatus.IsRunning) {
@@ -844,19 +744,6 @@ public partial class MainWindow : Window {
         } else {
             Log("Dosya değişiklikleri otomatik izleniyor");
         }
-
-        var fromSkeleton = SkeletonPanel.Visibility == Visibility.Visible;
-        LeaveCatalogBuildStage();
-        HideLoadingOverlay();
-        if (fromSkeleton && Animate) {
-            DesktopIconsScroll.Visibility = Visibility.Visible;
-            DesktopIconsScroll.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(320)) {
-                EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
-            });
-        } else {
-            ShowPanel(DesktopIconsScroll);
-        }
-        SearchBox.Focus();
     }
 
     private void HandleFileSystemChange(FileChangeEvent evt)
@@ -1187,11 +1074,17 @@ public partial class MainWindow : Window {
     
     private void LoadDesktopIcons() {
         _desktopIcons.Clear();
-        var indexedRoots = _indexLifecycle.GetIndexedRoots();
+        var roots = _isIndexed
+            ? _indexLifecycle.GetIndexedRoots()
+            : _indexedRootPaths
+                .Select(path => new DirectoryInfo(path))
+                .Where(directory => directory.Exists)
+                .Select(directory => new FileSystemNode(directory.Name, directory.FullName, true))
+                .ToArray();
 
-        Log($"📸 Thumbnail yükleme başladı... ({indexedRoots.Count} öğe)");
+        Log($"📸 Thumbnail yükleme başladı... ({roots.Count} öğe)");
 
-        var sortedChildren = indexedRoots
+        var sortedChildren = roots
             .OrderBy(n => !n.IsDirectory)
             .ThenBy(n => n.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -1207,9 +1100,7 @@ public partial class MainWindow : Window {
         }
 
         RetargetThumbnailViewport(items);
-        if (entries.Count > 0) {
-            UpdateEmptyFolderState(null, items.Count, entries.Count, rootView.Filter);
-        }
+        UpdateEmptyFolderState(null, items.Count, entries.Count, rootView.Filter);
         RebuildDesktopRows();
         AnimateFolderSwap(items.Count);
 

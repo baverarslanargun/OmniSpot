@@ -9,11 +9,13 @@ public sealed class IndexMaintenanceService : IIndexMaintenanceService
     internal const string RebuildFailedArgument = "--index-rebuild-failed";
 
     private readonly string _indexPath;
+    private readonly Func<string?>? _catalogDirectory;
 
-    public IndexMaintenanceService(string indexPath)
+    public IndexMaintenanceService(string indexPath, Func<string?>? catalogDirectory = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(indexPath);
         _indexPath = indexPath;
+        _catalogDirectory = catalogDirectory;
     }
 
     public IndexStorageStatus GetStatus()
@@ -22,7 +24,7 @@ public sealed class IndexMaintenanceService : IIndexMaintenanceService
         {
             if (File.Exists(_indexPath))
             {
-                var bytes = IsLiveCatalog ? Directory.EnumerateFiles(Path.GetDirectoryName(_indexPath)!, "*", SearchOption.AllDirectories)
+                var bytes = IsLiveCatalog ? Directory.EnumerateFiles(_catalogDirectory?.Invoke() ?? Path.GetDirectoryName(_indexPath)!, "*", SearchOption.AllDirectories)
                     .Sum(path => new FileInfo(path).Length) : new FileInfo(_indexPath).Length;
                 return new IndexStorageStatus(
                     _indexPath,
@@ -39,7 +41,7 @@ public sealed class IndexMaintenanceService : IIndexMaintenanceService
 
     public bool OpenIndexFolder()
     {
-        var folderPath = Path.GetDirectoryName(_indexPath);
+        var folderPath = _catalogDirectory?.Invoke() ?? Path.GetDirectoryName(_indexPath);
         if (string.IsNullOrEmpty(folderPath) ||
             !Directory.Exists(folderPath))
         {

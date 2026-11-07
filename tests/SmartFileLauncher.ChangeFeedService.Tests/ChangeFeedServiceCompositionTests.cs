@@ -25,7 +25,7 @@ public sealed class ChangeFeedServiceCompositionTests
             .ToArray();
 
         Assert.Contains(typeof(ChangeFeedAdmissionWorker), hosted);
-        Assert.Contains(typeof(ChangeFeedDrainWorker), hosted);
+        Assert.DoesNotContain(typeof(ChangeFeedDrainWorker), hosted);
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class ChangeFeedServiceCompositionTests
             "_pageBudget",
             service);
 
-        Assert.Equal(ChangeFeedProtocol.MaximumResponseBytes, budget);
+        Assert.Equal(ChangeFeedProtocol.MaximumPageBytes, budget);
 
         var handoffDrainer = FieldValue<Func<string, CancellationToken, bool>>(
             typeof(ChangeFeedAdmissionService),

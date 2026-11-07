@@ -182,7 +182,8 @@ internal static class UsnRootScope
             return true;
         }
 
-        if (!resolved.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        var prefix = Path.EndsInDirectorySeparator(root) ? root : root + Path.DirectorySeparatorChar;
+        if (!resolved.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
         {
             return false;
         }
