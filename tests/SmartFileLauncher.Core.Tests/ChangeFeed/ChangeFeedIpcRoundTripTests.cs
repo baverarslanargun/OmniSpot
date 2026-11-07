@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
@@ -1555,35 +1556,45 @@ public sealed class ChangeFeedIpcRoundTripTests
 
         using var stop = new CancellationTokenSource();
         using var ready = new CountdownEvent(4);
+        using var firstReaderWork = new BlockingCollection<byte>();
+        using var secondReaderWork = new BlockingCollection<byte>();
+        using var thirdReaderWork = new BlockingCollection<byte>();
+        using var drainWork = new BlockingCollection<byte>();
+        var readerWork = new[] { firstReaderWork, secondReaderWork, thirdReaderWork };
+        var backgroundWork = readerWork.Append(drainWork).ToArray();
+        const int requestCount = 3 * 20 * 2;
         var readerPasses = new int[3];
         var readerFaults = new List<Exception>();
 
         var readers = Enumerable.Range(0, 3).Select(lane => Task.Factory.StartNew(() =>
         {
             ready.Signal();
-            while (!stop.IsCancellationRequested)
+            try
             {
-                try
+                foreach (var _ in readerWork[lane].GetConsumingEnumerable(stop.Token))
                 {
-                    var roots = harness.StoredRoots();
-                    if (!roots.Contains(kept))
+                    try
+                    {
+                        var roots = harness.StoredRoots();
+                        if (!roots.Contains(kept))
+                        {
+                            lock (readerFaults)
+                            {
+                                readerFaults.Add(new InvalidOperationException("Kalıcı kök snapshot'tan düştü."));
+                            }
+                        }
+                    }
+                    catch (Exception failure)
                     {
                         lock (readerFaults)
                         {
-                            readerFaults.Add(new InvalidOperationException("Kalıcı kök snapshot'tan düştü."));
+                            readerFaults.Add(failure);
                         }
                     }
+                    readerPasses[lane]++;
                 }
-                catch (Exception failure)
-                {
-                    lock (readerFaults)
-                    {
-                        readerFaults.Add(failure);
-                    }
-                }
-                readerPasses[lane]++;
-                Thread.Yield();
             }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default)).ToArray();
 
         var drainPasses = 0;
@@ -1598,28 +1609,30 @@ public sealed class ChangeFeedIpcRoundTripTests
                 new UsnFileSystemIdentityProbe());
 
             ready.Signal();
-            while (!stop.IsCancellationRequested)
+            try
             {
-                try
+                foreach (var _ in drainWork.GetConsumingEnumerable(stop.Token))
                 {
-                    runner.Run(stop.Token);
-                    drainPasses++;
-                }
-                catch (OperationCanceledException)
-                {
-                }
-                catch (Exception failure)
-                {
-                    lock (drainFaults)
+                    try
                     {
-                        drainFaults.Add(failure);
+                        runner.Run(stop.Token);
+                        drainPasses++;
+                    }
+                    catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+                    catch (Exception failure)
+                    {
+                        lock (drainFaults)
+                        {
+                            drainFaults.Add(failure);
+                        }
                     }
                 }
-                Thread.Yield();
             }
+            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
         }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
         var clientFaults = new List<string>();
+        var requestsCompleted = false;
 
         try
         {
@@ -1638,8 +1651,13 @@ public sealed class ChangeFeedIpcRoundTripTests
                     {
                         try
                         {
-                            var response = await harness.SendAsync(
+                            var pending = harness.SendAsync(
                                 new ChangeFeedRequest(ChangeFeedProtocol.Version, kind, mine));
+                            foreach (var work in backgroundWork)
+                            {
+                                work.Add(0, stop.Token);
+                            }
+                            var response = await pending;
 
                             if (response.Status != ChangeFeedResponseStatus.Ok)
                             {
@@ -1661,17 +1679,32 @@ public sealed class ChangeFeedIpcRoundTripTests
             })).ToArray();
 
             await Task.WhenAll(mutators);
+            requestsCompleted = true;
         }
         finally
         {
-            stop.Cancel();
-            await Task.WhenAll(readers.Append(draining));
+            foreach (var work in backgroundWork)
+            {
+                work.CompleteAdding();
+            }
+            if (!requestsCompleted) stop.Cancel();
+            try
+            {
+                await Task.WhenAll(readers.Append(draining));
+            }
+            finally
+            {
+                stop.Cancel();
+            }
         }
 
-        Assert.All(readerPasses, count => Assert.True(count > 0));
-        Assert.True(drainPasses > 0);
+        Assert.All(readerPasses, count => Assert.Equal(requestCount, count));
+        Assert.Equal(requestCount, drainPasses);
         Assert.Empty(drainFaults.Select(failure => failure.ToString()).ToArray());
-        Assert.Empty(harness.Faults.Select(failure => failure.ToString()).ToArray());
+        lock (harness.Faults)
+        {
+            Assert.True(harness.Faults.Count == 0, string.Join(Environment.NewLine, harness.Faults));
+        }
         Assert.Empty(clientFaults);
         Assert.Empty(readerFaults);
         Assert.Equal(new[] { kept }, harness.StoredRoots());
