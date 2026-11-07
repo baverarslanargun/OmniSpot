@@ -41,6 +41,7 @@ public partial class SettingsWindow : Window
         _log = log;
         
         LoadSettingsToUI();
+        InitializeAiCredentials();
         StartThumbnailPreview();
         MaxHeight = SystemParameters.WorkArea.Height;
         
@@ -186,6 +187,11 @@ public partial class SettingsWindow : Window
     {
         if (!_isRecordingHotkey)
         {
+            if (e.Key == Key.Escape && TryCancelAiKeyEdit()) {
+                e.Handled = true;
+                return;
+            }
+
             if (e.Key == Key.Escape && Keyboard.FocusedElement is not System.Windows.Controls.TextBox)
             {
                 Close();

@@ -34,15 +34,18 @@ Geçici 429 yanıtında `Retry-After` saniye veya tarih biçiminde okunur; sunuc
 
 ## API anahtarı
 
+OmniSpot ayarlarındaki **AI anahtarları** bölümünde sağlayıcıların kayıt durumu listelenir. **Değiştir** veya **Anahtar ekle** düğmesiyle ilgili giriş alanını açın; **Anahtarı kaydet** yalnız o sağlayıcının anahtarını mevcut DPAPI dosyasına kaydeder. **Vazgeç** veya giriş alanındaki `Esc`, mevcut anahtarı değiştirmeden düzenlemeyi kapatır; boş alan kayıtlı anahtarı silmez. Kaydettikten sonra görünen **Yeniden başlat** düğmesiyle yeni anahtarı kullanabilirsiniz. Mevcut anahtar yükleme sırası ve aşağıdaki script/ortam değişkeni yöntemleri korunur; ortam değişkenleri dosyalardan önce kullanılır. Ortam değişkeni varken **Yerel anahtar ekle** ile yapılan kayıt bu önceliği değiştirmez. Groq kaydındaki mevcut intent anahtarı korunur; ilk kayıtta eski başlatıcıyla uyumluluk için aynı Groq anahtarı intent alanına da yazılır.
+
 Önerilen yerel geliştirme akışı, anahtarları Windows DPAPI ile şifreleyip kullanıcı profili altında tutar. Bir kez çalıştırın:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-celeris.ps1
 ```
 
-Script intent ve keyword anahtarlarını görünmeden ister, `%LOCALAPPDATA%\OmniSpot\groq-keys.json` dosyasına DPAPI ile şifreli yazar ve Masaüstünde `OmniSpot AI` kısayolu oluşturur. Sonraki AI başlatmalarında yalnız bu kısayolu veya aynı işi yapan `scripts\start-with-ai.ps1` dosyasını kullanın.
+İlk script Groq anahtarlarını görünmeden ister, `%LOCALAPPDATA%\OmniSpot\groq-keys.json` dosyasına DPAPI ile şifreli yazar ve Masaüstünde `OmniSpot AI` kısayolu oluşturur. Mevcut dosyası olanların bunu tekrar çalıştırması gerekmez; hibrit akış bu dosyadaki keyword anahtarını kullanır. İkinci script Celeris anahtarını ayrı `%LOCALAPPDATA%\OmniSpot\celeris-key.json` dosyasına aynı Windows kullanıcısıyla çözülebilen DPAPI biçiminde kaydeder.
 
-Doğrudan `OmniSpot.exe`, `dotnet run` veya normal uygulama kısayolu ile başlatılan süreç, anahtarlar kullanıcı ya da makine ortamında ayrıca tanımlı değilse şifreli dosyadaki anahtarları kendiliğinden okuyamaz. Release çıktısını yenilemek bu durumu değiştirmez; anahtarlar yalnız AI başlatıcısı tarafından alt sürece aktarılır.
+Normal `OmniSpot.exe` ve Windows oturum açılışındaki uygulama artık bu iki şifreli dosyayı okuyabilir. Ortam değişkenleri varsa dosyalardan önce kullanılır. Ölçüm profilleri yerel anahtar dosyalarını otomatik yüklemez. Probe için `scripts\start-with-ai.ps1` anahtarları yalnız alt süreç ortamına aktarır.
 
 Kısayol:
 
@@ -51,18 +54,18 @@ Kısayol:
 - başlatıcı süreçteki geçici değerleri hemen temizler,
 - Release çıktısı yoksa uygulamayı bir kez derler.
 
-Anahtarları güncellemek için yapılandırma komutunu yeniden çalıştırın. Yerel anahtarları ve kısayolu kaldırmak için:
+Anahtarları güncellemek için ilgili yapılandırma komutunu yeniden çalıştırın. Groq anahtarlarını ve kısayolu kaldırmak için:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1 -Remove
 ```
 
-Şifreli dosya repo dışında kalır ve yalnız aynı Windows kullanıcısı tarafından aynı bilgisayarda çözülebilir. Anahtarları kaynak koda, `appsettings` dosyalarına, loglara veya Git geçmişine yazmayın. Yanlışlıkla paylaşılan anahtarları yalnız repodan silmek yeterli değildir; Groq tarafında iptal edip yenileyin.
+Celeris kaydı ayrı `celeris-key.json` dosyasındadır; yukarıdaki kaldırma komutu onu silmez. Şifreli dosyalar repo dışında kalır ve yalnız aynı Windows kullanıcısı tarafından aynı bilgisayarda çözülebilir. Anahtarları kaynak koda, `appsettings` dosyalarına, loglara veya Git geçmişine yazmayın.
 
 Geçici manuel başlatma gerektiğinde ortam değişkenleri hâlâ kullanılabilir:
 
 ```powershell
-$env:OMNISPOT_GROQ_INTENT_API_KEY = "gsk_..."
+$env:OMNISPOT_CELERIS_API_KEY = "ck_..."
 $env:OMNISPOT_GROQ_KEYWORD_API_KEY = "gsk_..."
 dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
 ```
@@ -91,7 +94,7 @@ Bu, provider'ın kendi retention/processing politikasını değerlendirme gereğ
 
 ### Sürekli fallback kullanılıyor
 
-1. Celeris intent anahtarını `OMNISPOT_CELERIS_API_KEY` veya `CELERIS_API_KEY` süreç ortamında tanımlayıp uygulamayı yeniden başlatın.
+1. `Celeris intent API anahtarı yapılandırılmamış` uyarısında `configure-celeris.ps1` ile şifreli anahtarı kaydedip uygulamayı yeniden başlatın. Anahtar dosyasının aynı Windows kullanıcısı tarafından oluşturulmuş olması gerekir.
 2. Geçici manuel başlatma kullanıyorsanız anahtarların uygulamayı başlatan PowerShell sürecinde göründüğünü doğrulayın:
 
    ```powershell

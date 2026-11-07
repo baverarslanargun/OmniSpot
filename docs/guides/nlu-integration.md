@@ -45,6 +45,7 @@ AI kısayolu daha önce hazırlanmadıysa bir kez yapılandırın:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-shortcut.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-celeris.ps1
 ```
 
 Önce çalışan tüm OmniSpot süreçlerini kapatın. Ardından Masaüstündeki `OmniSpot AI` kısayoluyla veya aşağıdaki eşdeğer komutla başlatın:
@@ -53,7 +54,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-short
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1
 ```
 
-Doğrudan Release exe'sini çalıştırmayın; bu yol şifreli anahtarları alt sürece aktarmaz. Efor seçimi yalnız Qwen keyword isteğini değiştirir; Celeris düşünme kapalı kalır.
+Güncel Release EXE de şifreli anahtarları doğrudan okuyabilir. Efor seçimi yalnız Qwen keyword isteğini değiştirir; Celeris düşünme kapalı kalır.
 
 UI testinden önce aynı sorgunun yapılandırılmış sonucunu terminalde görmek isterseniz [yapılandırma rehberindeki hızlı prompt probe](llm-setup.md#hızlı-prompt-probe) komutunu kullanabilirsiniz.
 
@@ -69,20 +70,15 @@ Model çıktısı deterministik olmadığı için token listesi veya skorlar bir
 
 ## Senaryo 3 — Rule-based fallback
 
-Aynı PowerShell oturumunda üç Groq değişkenini kaldırıp uygulamayı yeniden başlatın:
+Yerel anahtar dosyalarına dokunmadan anahtarsız parser yolunu probe ile kontrol edin. Probe, başlatıcı kullanılmadığında şifreli dosyaları otomatik okumaz:
 
 ```powershell
-Remove-Item Env:OMNISPOT_GROQ_API_KEY -ErrorAction SilentlyContinue
-Remove-Item Env:OMNISPOT_GROQ_INTENT_API_KEY -ErrorAction SilentlyContinue
-Remove-Item Env:OMNISPOT_GROQ_KEYWORD_API_KEY -ErrorAction SilentlyContinue
-dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
+Remove-Item Env:OMNISPOT_CELERIS_API_KEY -ErrorAction SilentlyContinue
+Remove-Item Env:CELERIS_API_KEY -ErrorAction SilentlyContinue
+dotnet run --project .\Tools\PromptProbe -- "excel budget"
 ```
 
-1. Doğal Dil modunu açın.
-2. `excel budget` sorgusunu çalıştırın.
-3. UI'da fallback uyarısının gösterildiğini doğrulayın.
-4. Logda Groq hatasının ardından rule-based parser'a geçildiğini kontrol edin.
-5. Temel keyword ve dosya türü eşleşmesinin sonuç üretmeye devam ettiğini doğrulayın.
+Çıktıda `used_fallback=true`, eksik Celeris anahtarı nedeni ve temel keyword/uzantıların korunduğunu doğrulayın. UI uyarısını denemek için geçici süreç ortamında geçersiz Celeris anahtarıyla güncel uygulamayı başlatabilirsiniz; kayıtlı DPAPI dosyasını değiştirmeyin. Bu UI senaryosu gerçek HTTP isteği üretir.
 
 Anahtar makine veya kullanıcı ortamında kalıcı tanımlıysa yeni PowerShell sürecine yeniden gelebilir. Bu durumda test için temiz bir süreç ortamı kullanın; kalıcı anahtarı silmeden önce nerede kullanıldığını kontrol edin.
 
@@ -109,7 +105,7 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 
 ## Otomasyon kapsamı
 
-Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. `IntentParserTests` mevcut Groq profillerini, rol ve anchor grubu eşlemesini, açık komut korumasını, HTTP retry ve kısmi fallback sözleşmelerini fake HTTP yanıtlarıyla doğrular. `HybridIntentParserTests` ayrı sağlayıcı/anahtar/endpoint, paralel başlangıç, yalnız Qwen eforu, yanlış filter düzeltmesi, eksik/yinelenmiş/yarım intent yanıtı, kısmi hata ve iptali kapsar. Gerçek sağlayıcı hesabı, model kalitesi, ağ kabulü ve uçtan uca UI davranışı ayrı manuel doğrulama gerektirir.
+Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. `IntentParserTests` mevcut Groq profillerini, rol ve anchor grubu eşlemesini, açık komut korumasını, HTTP retry ve kısmi fallback sözleşmelerini fake HTTP yanıtlarıyla doğrular. `HybridIntentParserTests` ayrı sağlayıcı/anahtar/endpoint, paralel başlangıç, yalnız Qwen eforu, yanlış filter düzeltmesi, eksik/yinelenmiş/yarım intent yanıtı, kısmi hata ve iptali kapsar. UI'daki `AiCredentialsTests` DPAPI okuma ve bozuk yapılandırmanın anahtar içeriğini loglamadan reddini sınar. Gerçek sağlayıcı hesabı, model kalitesi, ağ kabulü ve uçtan uca UI davranışı ayrı manuel doğrulama gerektirir.
 
 `IntentParserRateLimitTests` sentetik HTTP ve denetlenebilir saatle kalıcı/geçici 429 ayrımını, saniye/tarih `Retry-After` süresini, iptal sonrası sağlayıcı beklemesini, uzun beklemede erken retry yapılmamasını ve yarım keyword yanıtının reddini doğrular.
 
