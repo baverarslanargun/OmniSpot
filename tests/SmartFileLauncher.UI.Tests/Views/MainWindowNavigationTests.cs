@@ -178,7 +178,7 @@ public sealed class MainWindowNavigationTests
                     return Task.FromResult(new StructuredQuery { Keywords = [query] });
                 },
                 _ => throw new InvalidOperationException("Rule-based parser çağrılmamalı"));
-            var settings = new AppSettings { ThumbnailPreviewsEnabled = false };
+            var settings = new AppSettings { AnimationsEnabled = false, ThumbnailPreviewsEnabled = false };
             Window = new MainWindow(Model, settings,
                 Stub<ISettingsApplicationService>(), Stub<IIndexMaintenanceService>(),
                 Stub<IIndexLifecycleService>((method, _) => method.Name switch

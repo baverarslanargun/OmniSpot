@@ -406,6 +406,7 @@ public partial class MainWindow : Window {
     private async Task InitializeConnectivityAsync() {
         var isConnected = await _connectivityMonitor.CheckNowAsync(
             _lifetimeCancellation.Token);
+        if (_isPreparedForShutdown) return;
         UpdateAIButtonState(isConnected);
         _connectivityMonitor.ConnectivityChanged += HandleConnectivityChanged;
         _connectivityMonitor.Start();
