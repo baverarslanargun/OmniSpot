@@ -7,7 +7,8 @@ public sealed record ChangeFeedEventDto(
     ChangeFeedEventKind Kind,
     string Path,
     bool IsDirectory,
-    string? OldPath);
+    string? OldPath,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)] bool RefreshSubtree = false);
 
 public sealed record ChangeFeedRootPageDto(
     string RootPath,
@@ -76,6 +77,7 @@ public static class ChangeFeedDeliveryContract
             change.Kind,
             change.FullPath,
             change.IsDirectory,
-            change.OldPath);
+            change.OldPath,
+            change.RefreshSubtree);
     }
 }

@@ -9,6 +9,8 @@ public class FileChangeEvent
     public string? OldPath { get; set; }
     
     public bool IsDirectory { get; set; }
+
+    public IReadOnlyList<string>? AffectedNames { get; init; }
     
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
     

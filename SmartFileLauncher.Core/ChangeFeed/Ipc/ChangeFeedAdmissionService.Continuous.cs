@@ -4,7 +4,7 @@ namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public sealed partial class ChangeFeedAdmissionService
 {
-    private ChangeFeedResponse PrepareContinuousRoot(NamedPipeServerStream pipe, string? path, CancellationToken ct)
+    private ChangeFeedResponse PrepareContinuousRoot(ChangeFeedCaller pipe, string? path, CancellationToken ct)
     {
         if (path is not null && Path.IsPathFullyQualified(path) && path.StartsWith(@"\\", StringComparison.Ordinal))
             return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.UnsupportedFileSystem, "Ağ konumunda USN desteklenmiyor.");
@@ -21,18 +21,19 @@ public sealed partial class ChangeFeedAdmissionService
         return AddRoot(pipe, decision.CanonicalPath, ct);
     }
 
-    private ChangeFeedResponse DrainContinuous(NamedPipeServerStream pipe, CancellationToken ct)
+    private ChangeFeedResponse DrainContinuous(ChangeFeedCaller pipe, CancellationToken ct)
     {
         var caller = ChangeFeedCallerIdentity.RunAsVerifiedCaller(pipe, sid => sid);
         var store = _storeFactory(caller.Value);
-        using var owner = store.EnterOwnerScope(ct);
-        store.ReleaseLease();
         if (_handoffDrainer is null)
             return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.Unavailable, "USN boşaltıcısı hazır değil.");
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(_handoffDrainBudget);
         try
         {
+            using var owner = store.EnterOwnerScope(budget.Token);
+            budget.Token.ThrowIfCancellationRequested();
+            store.ReleaseLease();
             return _handoffDrainer(caller.Value, budget.Token)
                 ? ChangeFeedResponse.Ok()
                 : ChangeFeedResponse.Failed(ChangeFeedResponseStatus.Unavailable, "USN boşaltması sürecek.");

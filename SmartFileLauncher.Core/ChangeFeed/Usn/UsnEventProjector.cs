@@ -6,7 +6,8 @@ internal sealed record UsnProjectionContext(
     UsnProjectionScope Scope,
     IUsnSubtreeReader SubtreeReader,
     ulong VolumeSerialNumber,
-    CancellationToken CancellationToken);
+    CancellationToken CancellationToken,
+    Func<string, bool>? IsExcluded = null);
 
 internal sealed record UsnProjectionResult(
     IReadOnlyList<ChangeFeedEvent> Events,
@@ -23,7 +24,7 @@ internal static class UsnEventProjector
         UsnReason.NamedDataOverwrite |
         UsnReason.NamedDataExtend |
         UsnReason.NamedDataTruncation |
-        UsnReason.BasicInfoChange;
+        UsnReason.BasicInfoChange | UsnReason.SecurityChange | UsnReason.ReparsePointChange;
 
     private const UsnReason SecurityReasons =
         UsnReason.SecurityChange | UsnReason.ReparsePointChange;
@@ -36,15 +37,27 @@ internal static class UsnEventProjector
         IReadOnlyList<UsnRecord> records)
     {
         var aggregates = new Dictionary<UsnFileReference, Aggregate>();
+        var completed = new List<Aggregate>();
+        var lastRenames = new Dictionary<UsnFileReference, (UsnFileReference Parent, string Name, bool Directory)>();
+        var ordinal = 0;
+        void Complete(UsnFileReference reference)
+        {
+            if (aggregates.Remove(reference, out var aggregate)) completed.Add(aggregate);
+        }
         var scope = context.Scope;
         var skippedSubtreeDirectories = 0;
-        var securityChanged = records.Any(
-            record => (record.Reason & SecurityReasons) != 0);
+        var securityChanged = records.Any(record => (record.Reason & SecurityReasons) != 0 &&
+            (context.IsExcluded is null ||
+             !scope.TryResolve(record.ParentFileReference, out var securityParent) ||
+             !UsnDirectoryNames.IsSingleSegment(record.Name) ||
+             !context.IsExcluded(Path.Combine(securityParent, record.Name))));
 
         foreach (var record in records)
         {
+            ordinal++;
             if (record.FileReference == scope.RootReference)
             {
+                securityChanged |= (record.Reason & SecurityReasons) != 0 && context.IsExcluded?.Invoke(scope.RootPath) != true;
                 if ((record.Reason & RootBreakingReasons) != 0)
                 {
                     return new UsnProjectionResult(
@@ -53,6 +66,16 @@ internal static class UsnEventProjector
                         SecurityChanged: securityChanged);
                 }
 
+                if ((record.Reason & SecurityReasons) != 0 && context.IsExcluded?.Invoke(scope.RootPath) != true)
+                {
+                    Accumulate(aggregates, record, scope.RootPath, record.Reason, ordinal);
+                    if ((record.Reason & UsnReason.ReparsePointChange) != 0)
+                    {
+                        var subtree = context.SubtreeReader.ReadSubtree(scope.RootPath, scope.RootReference, context.VolumeSerialNumber, context.CancellationToken);
+                        foreach (var entry in subtree.Directories) scope.Set(entry.Reference, entry.Name, entry.ParentReference);
+                        skippedSubtreeDirectories += subtree.SkippedDirectoryCount;
+                    }
+                }
                 continue;
             }
 
@@ -72,7 +95,46 @@ internal static class UsnEventProjector
                     return Invalid(securityChanged);
                 }
 
-                Accumulate(aggregates, record, recordPath);
+            }
+
+            if ((record.Reason & SecurityReasons) != 0 &&
+                (recordPath is null || context.IsExcluded?.Invoke(recordPath) != true)) securityChanged = true;
+
+            var oldOnly = IsOldNameOnly(record.Reason);
+            var hasNewName = (record.Reason & UsnReason.RenameNewName) != 0;
+            var pendingRename = aggregates.TryGetValue(record.FileReference, out var pending) && pending.RenameStarted;
+            if (oldOnly)
+            {
+                if (pendingRename) return Invalid(securityChanged);
+                Complete(record.FileReference);
+                lastRenames.Remove(record.FileReference);
+                aggregates[record.FileReference] = new Aggregate
+                {
+                    RenameStarted = true, RenamedFrom = recordPath, IsDirectory = record.IsDirectory,
+                    RefreshSubtree = (record.Reason & SecurityReasons) != 0,
+                    LastUsn = record.Usn, LastOrdinal = ordinal
+                };
+            }
+            else
+            {
+                var duplicateClose = hasNewName && !pendingRename && (record.Reason & UsnReason.Close) != 0 &&
+                    lastRenames.TryGetValue(record.FileReference, out var lastRename) &&
+                    lastRename == (record.ParentFileReference, record.Name, record.IsDirectory);
+                var reason = duplicateClose ? record.Reason & ~(UsnReason.RenameOldName | UsnReason.RenameNewName | UsnReason.Close)
+                    : record.Reason;
+                if (recordPath is not null && reason != 0)
+                    Accumulate(aggregates, record, recordPath, reason, ordinal);
+                if (hasNewName && !duplicateClose)
+                {
+                    if (aggregates.TryGetValue(record.FileReference, out var aggregate))
+                    {
+                        aggregate.Path = recordPath;
+                        aggregate.LastUsn = record.Usn;
+                        aggregate.LastOrdinal = ordinal;
+                    }
+                    Complete(record.FileReference);
+                    lastRenames[record.FileReference] = (record.ParentFileReference, record.Name, record.IsDirectory);
+                }
             }
 
             if (record.IsDirectory)
@@ -87,8 +149,9 @@ internal static class UsnEventProjector
             }
         }
 
+        completed.AddRange(aggregates.Values);
         return new UsnProjectionResult(
-            Emit(aggregates),
+            Emit(completed),
             ChangeFeedGapReason.None,
             skippedSubtreeDirectories,
             securityChanged);
@@ -103,40 +166,39 @@ internal static class UsnEventProjector
     private static void Accumulate(
         Dictionary<UsnFileReference, Aggregate> aggregates,
         UsnRecord record,
-        string path)
+        string path,
+        UsnReason reason,
+        int ordinal)
     {
         if (!aggregates.TryGetValue(record.FileReference, out var aggregate))
         {
-            aggregate = new Aggregate { FirstUsn = record.Usn };
+            aggregate = new Aggregate();
             aggregates[record.FileReference] = aggregate;
         }
 
         aggregate.IsDirectory = record.IsDirectory;
-
-        if (IsOldNameOnly(record.Reason))
-        {
-            aggregate.RenamedFrom ??= path;
-            return;
-        }
+        aggregate.RefreshSubtree |= (reason & SecurityReasons) != 0;
+        aggregate.LastUsn = record.Usn;
+        aggregate.LastOrdinal = ordinal;
 
         aggregate.Path = path;
 
-        if ((record.Reason & UsnReason.RenameNewName) != 0)
+        if ((reason & UsnReason.RenameNewName) != 0)
         {
             aggregate.HasNewName = true;
         }
 
-        if ((record.Reason & UsnReason.FileCreate) != 0)
+        if ((reason & UsnReason.FileCreate) != 0)
         {
             aggregate.Created = true;
         }
 
-        if ((record.Reason & UsnReason.FileDelete) != 0)
+        if ((reason & UsnReason.FileDelete) != 0)
         {
             aggregate.Deleted = true;
         }
 
-        if ((record.Reason & ModifyReasons) != 0)
+        if ((reason & ModifyReasons) != 0)
         {
             aggregate.Modified = true;
         }
@@ -174,9 +236,16 @@ internal static class UsnEventProjector
             (record.Reason & UsnReason.RenameNewName) != 0 &&
             !scope.Contains(record.FileReference);
 
+        if ((record.Reason & UsnReason.ReparsePointChange) != 0 && (record.Attributes & FileAttributes.ReparsePoint) != 0 &&
+            UsnDirectoryWalk.IsNameSurrogate(recordPath))
+        {
+            scope.Remove(record.FileReference);
+            return 0;
+        }
+
         scope.Set(record.FileReference, record.Name, record.ParentFileReference);
 
-        if (!entersRoot)
+        if (!entersRoot && ((record.Reason & UsnReason.ReparsePointChange) == 0 || context.IsExcluded?.Invoke(recordPath) == true))
         {
             return 0;
         }
@@ -204,11 +273,11 @@ internal static class UsnEventProjector
         (reason & UsnReason.RenameOldName) != 0 &&
         (reason & UsnReason.RenameNewName) == 0;
 
-    private static List<ChangeFeedEvent> Emit(Dictionary<UsnFileReference, Aggregate> aggregates)
+    private static List<ChangeFeedEvent> Emit(IEnumerable<Aggregate> aggregates)
     {
         var events = new List<ChangeFeedEvent>();
 
-        foreach (var aggregate in aggregates.Values.OrderBy(item => item.FirstUsn))
+        foreach (var aggregate in aggregates.OrderBy(item => item.LastUsn).ThenBy(item => item.LastOrdinal))
         {
             var renamed =
                 aggregate.RenamedFrom is not null &&
@@ -221,7 +290,7 @@ internal static class UsnEventProjector
                     ChangeFeedEventKind.Renamed,
                     aggregate.Path!,
                     aggregate.IsDirectory,
-                    aggregate.RenamedFrom));
+                    aggregate.RenamedFrom, aggregate.RefreshSubtree));
             }
 
             if (aggregate.Deleted)
@@ -261,14 +330,14 @@ internal static class UsnEventProjector
                 events.Add(new ChangeFeedEvent(
                     ChangeFeedEventKind.Created,
                     aggregate.Path,
-                    aggregate.IsDirectory));
+                    aggregate.IsDirectory, RefreshSubtree: aggregate.RefreshSubtree));
             }
             else if (aggregate.Modified)
             {
                 events.Add(new ChangeFeedEvent(
                     ChangeFeedEventKind.Modified,
                     aggregate.Path,
-                    aggregate.IsDirectory));
+                    aggregate.IsDirectory, RefreshSubtree: aggregate.RefreshSubtree));
             }
         }
 
@@ -280,7 +349,11 @@ internal static class UsnEventProjector
 
     private sealed class Aggregate
     {
-        public long FirstUsn { get; init; }
+        public long LastUsn { get; set; }
+
+        public int LastOrdinal { get; set; }
+
+        public bool RenameStarted { get; init; }
 
         public string? Path { get; set; }
 
@@ -293,6 +366,7 @@ internal static class UsnEventProjector
         public bool Deleted { get; set; }
 
         public bool Modified { get; set; }
+        public bool RefreshSubtree { get; set; }
 
         public bool HasNewName { get; set; }
     }

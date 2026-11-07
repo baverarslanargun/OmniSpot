@@ -8,15 +8,18 @@ public sealed class UsnRootProjection
     private UsnProjectionScope? _pendingScope;
     private UsnChangeFeedState _snapshot;
     private long _snapshotVersion;
+    private readonly string? _excludedPath;
 
     public UsnRootProjection(
         UsnChangeFeedState state,
         IUsnIdentityProbe identityProbe,
-        IUsnSubtreeReader? subtreeReader = null)
+        IUsnSubtreeReader? subtreeReader = null,
+        string? excludedPath = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         _identityProbe = identityProbe ?? throw new ArgumentNullException(nameof(identityProbe));
         _subtreeReader = subtreeReader ?? new UsnFileSystemSubtreeReader(_identityProbe);
+        _excludedPath = excludedPath;
 
         SynchronizedFromUsn = state.SynchronizedFromUsn;
         RootPath = state.RootPath;
@@ -80,7 +83,8 @@ public sealed class UsnRootProjection
                 scope,
                 _subtreeReader,
                 VolumeSerialNumber,
-                cancellationToken),
+                cancellationToken,
+                IsExcluded),
             visible);
 
         LastSecurityChanged = projection.SecurityChanged;
@@ -92,7 +96,30 @@ public sealed class UsnRootProjection
 
         LastSkippedSubtreeDirectoryCount = projection.SkippedSubtreeDirectoryCount;
         _pendingScope = scope;
-        return ChangeFeedBatch.Ok(projection.Events);
+        return ChangeFeedBatch.Ok(ExcludePrivateEvents(projection.Events));
+    }
+
+    private bool IsExcluded(string path) => _excludedPath is not null &&
+        UsnRootScope.TryCanonicalize(_excludedPath, path, out _);
+
+    private IReadOnlyList<ChangeFeedEvent> ExcludePrivateEvents(IReadOnlyList<ChangeFeedEvent> events)
+    {
+        if (_excludedPath is null) return events;
+        var result = new List<ChangeFeedEvent>(events.Count);
+        foreach (var change in events)
+        {
+            var hidden = IsExcluded(change.FullPath);
+            if (change.Kind != ChangeFeedEventKind.Renamed || change.OldPath is null)
+            {
+                if (!hidden) result.Add(change);
+                continue;
+            }
+            var oldHidden = IsExcluded(change.OldPath);
+            if (!hidden && !oldHidden) result.Add(change);
+            else if (!hidden) result.Add(new(ChangeFeedEventKind.Created, change.FullPath, change.IsDirectory));
+            else if (!oldHidden) result.Add(new(ChangeFeedEventKind.Deleted, change.OldPath, change.IsDirectory));
+        }
+        return result;
     }
 
     public void Discard() => _pendingScope = null;

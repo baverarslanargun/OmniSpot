@@ -226,6 +226,8 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
     private ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget limits, bool repaired)
     {
         var files = QueueFiles();
+        var availableThrough = files.Length == 0 ? 0 :
+            SequenceOf(files[^1]) ?? throw new InvalidDataException("Kuyruk sıra numarası geçersiz.");
         var entries = new List<ChangeFeedQueueEntry>();
         var bytes = 0L;
 
@@ -237,7 +239,7 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
                 (entries.Count >= limits.MaximumEntries ||
                  bytes + size > limits.MaximumBytes))
             {
-                return new ChangeFeedQueueSlice(entries, true);
+                return new ChangeFeedQueueSlice(entries, true) { AvailableThroughSequence = availableThrough };
             }
 
             ChangeFeedQueueEntry entry;
@@ -265,7 +267,7 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
             bytes += payload.Length;
         }
 
-        return new ChangeFeedQueueSlice(entries, false);
+        return new ChangeFeedQueueSlice(entries, false) { AvailableThroughSequence = availableThrough };
     }
 
     public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
@@ -664,7 +666,8 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
                         item.Kind,
                         item.FullPath,
                         item.IsDirectory,
-                        item.OldPath))
+                        item.OldPath,
+                        item.RefreshSubtree))
                     .ToArray()),
             ChangeFeedStatus.Gap => ChangeFeedBatch.Gap(document.GapReason),
             ChangeFeedStatus.Faulted => ChangeFeedBatch.Faulted(
@@ -709,7 +712,8 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
             Kind = change.Kind,
             FullPath = change.FullPath,
             IsDirectory = change.IsDirectory,
-            OldPath = change.OldPath
+            OldPath = change.OldPath,
+            RefreshSubtree = change.RefreshSubtree
         };
 
     private static bool IsUnreadable(Exception failure) =>
@@ -852,5 +856,7 @@ public sealed class FileSystemChangeFeedStore : IChangeFeedStore
         public bool IsDirectory { get; set; }
 
         public string? OldPath { get; set; }
+        [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+        public bool RefreshSubtree { get; set; }
     }
 }

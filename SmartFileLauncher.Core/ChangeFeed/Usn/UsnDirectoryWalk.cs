@@ -46,7 +46,7 @@ internal static class UsnDirectoryWalk
             {
                 cancellationToken.ThrowIfCancellationRequested();
 
-                if (IsReparsePoint(childPath) ||
+                if (IsNameSurrogate(childPath) ||
                     !identityProbe.TryReadIdentity(childPath, out var childIdentity) ||
                     childIdentity.VolumeSerialNumber != volumeSerialNumber)
                 {
@@ -71,10 +71,16 @@ internal static class UsnDirectoryWalk
         UsnFileReference reference,
         ulong volumeSerialNumber,
         IUsnIdentityProbe identityProbe) =>
-        !IsReparsePoint(path) &&
+        !IsNameSurrogate(path) &&
         identityProbe.TryReadIdentity(path, out var identity) &&
         identity.FileReference == reference &&
         identity.VolumeSerialNumber == volumeSerialNumber;
+
+    internal static bool IsNameSurrogate(string path)
+    {
+        try { return IsReparsePoint(path) && Indexing.Ntfs.NtfsDirectoryReader.IsNameSurrogate(path); }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { return true; }
+    }
 
     public static bool IsReparsePoint(string path)
     {

@@ -9,6 +9,30 @@ namespace SmartFileLauncher.Core.Tests.Search;
 public sealed class LiveCatalogTests
 {
     [Fact]
+    public void DuplicatePathDuringBuildKeepsFirstRecordInsteadOfThrowing()
+    {
+        using var workspace = new TemporaryDirectory();
+        var path = Path.Combine(workspace.Path, "dup");
+        using var live = new LiveCatalog(path, @"C:\Root");
+        var first = new PackedRecord(
+            new SearchItem("gunluk.wal", @"C:\Root\gunluk.wal", false, 100,
+                new DateTime(638000000000000001, DateTimeKind.Utc),
+                new DateTime(638000000000000002, DateTimeKind.Utc), 0, @"C:\Root"),
+            638000000000000010, 637000000000000010, false, false, 638100000000000010);
+        var second = new PackedRecord(
+            new SearchItem("gunluk.wal", @"C:\Root\gunluk.wal", false, 999,
+                new DateTime(638000000000009991, DateTimeKind.Utc),
+                new DateTime(638000000000009992, DateTimeKind.Utc), 3, @"C:\Root"),
+            638000000000009999, 637000000000009999, true, true, 638100000000009999);
+
+        var id = live.Add(first);
+        var again = live.Add(second);
+
+        Assert.Equal(id, again);
+        Assert.Equal(first, live.Snapshot().FindRecord(@"C:\Root\gunluk.wal"));
+    }
+
+    [Fact]
     public void FilesAreSearchableBeforeDirectoriesAndOldViewsStayUnchanged()
     {
         using var workspace = new TemporaryDirectory();

@@ -1,22 +1,26 @@
 namespace SmartFileLauncher.Core.Indexing.Ntfs;
 
-public sealed class NtfsMftReader : IDisposable
+public sealed partial class NtfsMftReader : IDisposable
 {
     private const ulong SegmentMask = 0x0000FFFFFFFFFFFF;
     private const int MaxAttributeListBytes = 16 * 1024 * 1024;
     private readonly INtfsVolumeSource _source;
+    private readonly Func<INtfsVolumeSource>? _parallelSourceFactory;
     private readonly NtfsDataExtent _mft;
     private bool _disposed;
     private int _enumerating;
 
     public NtfsMftReader(string volumeRootPath)
-        : this(new WindowsNtfsVolumeSource(volumeRootPath))
+        : this(new WindowsNtfsVolumeSource(volumeRootPath),
+            () => new WindowsNtfsVolumeSource(volumeRootPath))
     {
     }
 
-    internal NtfsMftReader(INtfsVolumeSource source)
+    internal NtfsMftReader(INtfsVolumeSource source,
+        Func<INtfsVolumeSource>? parallelSourceFactory = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
+        _parallelSourceFactory = parallelSourceFactory;
         try
         {
             var record = ReadFileRecord(0, includeDataRuns: true);
@@ -56,35 +60,46 @@ public sealed class NtfsMftReader : IDisposable
                 ObjectDisposedException.ThrowIf(_disposed, this);
                 var count = (int)Math.Min(buffer.Length, _mft.Length - position);
                 ReadMapped(_mft.Runs, position, buffer.AsSpan(0, count), cancellationToken);
-                for (var offset = 0; offset < count; offset += recordSize)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var record = ReadRawRecord(buffer, offset, recordSize,
-                        (ulong)((position + offset) / recordSize));
-                    if (record is null || record.BaseReference != 0)
-                        continue;
-                    CompleteRecord(record, includeDataRuns: false, cancellationToken);
-                    if (record.Names.Count == 0)
-                        continue;
-                    var metadata = record.BasicInformation ??
-                        throw new InvalidDataException("MFT kaydının temel dosya bilgileri bulunamadı.");
-                    foreach (var name in record.Names.Where(name => name.Namespace != 2)
-                                 .DistinctBy(name => (name.ParentReference, name.Name)))
-                    {
-                        yield return new NtfsMftEntry(
-                            record.Reference, name.ParentReference, name.Name,
-                            record.IsDirectory,
-                            metadata.Attributes | (record.IsDirectory ? FileAttributes.Directory : 0),
-                            record.IsDirectory ? 0 : record.SizeBytes ?? 0,
-                            metadata.CreatedTimeUtc, metadata.LastWriteTimeUtc);
-                    }
-                }
+                foreach (var entry in ReadEntriesFromChunk(buffer, position, count, cancellationToken))
+                    yield return entry;
                 position += count;
             }
         }
         finally
         {
             Volatile.Write(ref _enumerating, 0);
+        }
+    }
+
+    private IEnumerable<NtfsMftEntry> ReadEntriesFromChunk(
+        byte[] buffer, long position, int count, CancellationToken cancellationToken)
+    {
+        var recordSize = _source.Geometry.BytesPerRecord;
+        if (position < 0 || position % recordSize != 0 || count < 0 ||
+            count % recordSize != 0 || count > buffer.Length || position > _mft.Length - count)
+            throw new ArgumentOutOfRangeException(nameof(position));
+        for (var offset = 0; offset < count; offset += recordSize)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var record = ReadRawRecord(buffer, offset, recordSize,
+                (ulong)((position + offset) / recordSize));
+            if (record is null || record.BaseReference != 0)
+                continue;
+            record = CompleteCurrentRecord(record, cancellationToken);
+            if (record is null || record.Names.Count == 0)
+                continue;
+            var metadata = record.BasicInformation ??
+                throw new InvalidDataException("MFT kaydının temel dosya bilgileri bulunamadı.");
+            foreach (var name in record.Names.Where(name => name.Namespace != 2)
+                         .DistinctBy(name => (name.ParentReference, name.Name)))
+            {
+                yield return new NtfsMftEntry(
+                    record.Reference, name.ParentReference, name.Name,
+                    record.IsDirectory,
+                    metadata.Attributes | (record.IsDirectory ? FileAttributes.Directory : 0),
+                    record.IsDirectory ? 0 : record.SizeBytes ?? 0,
+                    metadata.CreatedTimeUtc, metadata.LastWriteTimeUtc) { ReparseTag = record.ReparseTag };
+            }
         }
     }
 
@@ -96,16 +111,56 @@ public sealed class NtfsMftReader : IDisposable
         _source.Dispose();
     }
 
+    internal IReadOnlyList<NtfsMftEntry> ReadCurrent(ulong reference, CancellationToken cancellationToken)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        cancellationToken.ThrowIfCancellationRequested();
+        NtfsMftRecord? record;
+        try { record = CompleteCurrentRecord(ReadFileRecord(reference, false), cancellationToken); }
+        catch (NtfsSegmentReleasedException) { return []; }
+        if (record is null) return [];
+        if (record.BaseReference != 0) throw new InvalidDataException("MFT kimliği ana dosya kaydı değil.");
+        var metadata = record.BasicInformation ?? throw new InvalidDataException("MFT dosya bilgileri eksik.");
+        return record.Names.Where(name => name.Namespace != 2)
+            .DistinctBy(name => (name.ParentReference, name.Name))
+            .Select(name => new NtfsMftEntry(record.Reference, name.ParentReference, name.Name, record.IsDirectory,
+                metadata.Attributes | (record.IsDirectory ? FileAttributes.Directory : 0),
+                record.IsDirectory ? 0 : record.SizeBytes ?? 0, metadata.CreatedTimeUtc, metadata.LastWriteTimeUtc)
+                { ReparseTag = record.ReparseTag }).ToArray();
+    }
+
     private NtfsMftRecord ReadFileRecord(ulong reference, bool includeDataRuns)
     {
         var bytes = _source.ReadFileRecord(reference);
         if (bytes is null)
-            throw new InvalidDataException("MFT segmenti artık kullanımda değil.");
+            throw new NtfsSegmentReleasedException("MFT segmenti artık kullanımda değil.");
         var record = NtfsMftRecordParser.Parse(bytes, reference & SegmentMask,
             restoreSectorTails: false, includeDataRuns: includeDataRuns);
         if (record is null || (reference >> 48 != 0 && record.Reference != reference))
-            throw new InvalidDataException("MFT segmenti silinmiş veya yeniden kullanılmış.");
+            throw new NtfsSegmentReleasedException("MFT segmenti silinmiş veya yeniden kullanılmış.");
         return record;
+    }
+
+    private NtfsMftRecord? CompleteCurrentRecord(NtfsMftRecord record, CancellationToken cancellationToken)
+    {
+        try
+        {
+            CompleteRecord(record, includeDataRuns: false, cancellationToken);
+            return record;
+        }
+        catch (NtfsSegmentReleasedException)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            NtfsMftRecord current;
+            try { current = ReadFileRecord(record.Reference, includeDataRuns: false); }
+            catch (NtfsSegmentReleasedException) { return null; }
+            if (current.BaseReference != 0)
+                throw new InvalidDataException("MFT ana kaydı artık farklı bir dosyanın uzantısı.");
+            try { CompleteRecord(current, includeDataRuns: false, cancellationToken); }
+            catch (NtfsSegmentReleasedException error)
+            { throw new InvalidDataException("MFT kaydının taze okumasında da uzantı kimliği geçersiz.", error); }
+            return current;
+        }
     }
 
     private NtfsMftRecord? ReadRawRecord(byte[] buffer, int offset, int size, ulong segment)
@@ -146,6 +201,7 @@ public sealed class NtfsMftReader : IDisposable
                 if (extension.BaseReference != record.Reference)
                     throw new InvalidDataException("MFT uzantısı farklı bir dosyaya ait.");
                 record.Names.AddRange(extension.Names);
+                if (extension.ReparseTag is { } reparseTag) record.ReparseTag = reparseTag;
                 record.DataExtents.AddRange(extension.DataExtents);
                 if (extension.BasicInformation is not null)
                 {
@@ -232,6 +288,13 @@ public sealed class NtfsMftReader : IDisposable
             destination = destination[count..];
             position += count;
         }
+    }
+}
+
+internal sealed class NtfsSegmentReleasedException : IOException
+{
+    public NtfsSegmentReleasedException(string message) : base(message)
+    {
     }
 }
 

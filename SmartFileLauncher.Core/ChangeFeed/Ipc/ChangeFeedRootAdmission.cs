@@ -26,6 +26,10 @@ public sealed class ChangeFeedRootAdmission
     public (SecurityIdentifier Caller, ChangeFeedRootDecision Decision) Evaluate(
         NamedPipeServerStream pipe,
         string? requestedRoot)
+        => Evaluate(ChangeFeedCaller.FromPipe(pipe), requestedRoot);
+
+    internal (SecurityIdentifier Caller, ChangeFeedRootDecision Decision) Evaluate(
+        ChangeFeedCaller pipe, string? requestedRoot)
     {
         ArgumentNullException.ThrowIfNull(pipe);
 

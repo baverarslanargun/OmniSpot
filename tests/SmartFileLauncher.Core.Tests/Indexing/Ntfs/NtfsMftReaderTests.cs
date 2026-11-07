@@ -7,6 +7,20 @@ namespace SmartFileLauncher.Core.Tests.Indexing.Ntfs;
 public sealed class NtfsMftReaderTests
 {
     [Fact]
+    public void CurrentReferenceRejectsReusedSequenceAndReadsReparseTag()
+    {
+        var source = LinearSource();
+        var value = new byte[8];
+        Write32(value, 0, 0xA0000003);
+        source.Add(1, Record(true, 0, Basic(FileAttributes.Directory | FileAttributes.ReparsePoint),
+            Name("junction"), Resident(0xC0, value)), 5120);
+        using var reader = new NtfsMftReader(source);
+        Assert.Empty(reader.ReadCurrent(Reference(1, 2), default));
+        Assert.Equal(0xA0000003u, Assert.Single(reader.ReadCurrent(Reference(1), default)).ReparseTag);
+        Assert.Equal(0xA0000003u, Assert.Single(reader.ReadEntries(), item => item.Name == "junction").ReparseTag);
+    }
+
+    [Fact]
     public void ReadsFragmentedMftUsingItsExtensionRecord()
     {
         var source = new FakeNtfsVolumeSource();
@@ -82,6 +96,7 @@ public sealed class NtfsMftReaderTests
         using var reader = new NtfsMftReader(source);
 
         Assert.Throws<InvalidDataException>(() => reader.ReadEntries().ToArray());
+        Assert.DoesNotContain(Reference(1), source.RecordReads);
     }
 
     [Fact]
@@ -94,6 +109,80 @@ public sealed class NtfsMftReaderTests
         using var reader = new NtfsMftReader(source);
 
         Assert.Throws<InvalidDataException>(() => reader.ReadEntries().ToArray());
+        Assert.Single(source.RecordReads, reference => reference == Reference(1));
+        Assert.Equal(2, source.RecordReads.Count(reference => reference == Reference(2, 5)));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReleasedOrReusedExtensionRefreshesTheBaseOnce(bool reused)
+    {
+        var source = LinearSource();
+        source.Add(1, Record(Basic(), Name("eski.txt"), Resident(0x80, [1]),
+            AttributeList((0x30, Reference(3)), (0x30, Reference(2, 5)))), 5120);
+        source.Add(3, Record(false, Reference(1), Name("eski-ek.txt")), 7168);
+        if (reused) source.Add(2, Record(false, Reference(3), Name("baska.txt")), 6144);
+        using var reader = new NtfsMftReader(source);
+        using var entries = reader.ReadEntries().GetEnumerator();
+        Assert.True(entries.MoveNext());
+        Assert.Equal("$MFT", entries.Current.Name);
+        source.Add(1, Record(Basic(), Name("guncel.txt"), Resident(0x80, [1, 2, 3])), 5120);
+
+        Assert.True(entries.MoveNext());
+        Assert.Equal("guncel.txt", entries.Current.Name);
+        Assert.Equal(3, entries.Current.SizeBytes);
+        Assert.False(entries.MoveNext());
+        Assert.Single(source.RecordReads, reference => reference == Reference(1));
+        Assert.Single(source.RecordReads, reference => reference == Reference(2, 5));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BaseDeletedOrReusedDuringExtensionReadDoesNotStopTheNextFile(bool reused)
+    {
+        var source = LinearSource();
+        source.Add(1, Record(Basic(), Name("silinen.txt"), AttributeList((0x30, Reference(2)))), 5120);
+        source.Add(3, Record(Basic(), Name("kalan.txt"), Resident(0x80, [1])), 7168);
+        using var reader = new NtfsMftReader(source);
+        using var entries = reader.ReadEntries().GetEnumerator();
+        Assert.True(entries.MoveNext());
+        if (reused)
+        {
+            var replacement = Record(Basic(), Name("yeni-kimlik.txt"));
+            Write16(replacement, 16, 2);
+            source.Add(1, replacement, 5120);
+        }
+        else source.RemoveKernelRecord(1);
+
+        Assert.True(entries.MoveNext());
+        Assert.Equal("kalan.txt", entries.Current.Name);
+        Assert.False(entries.MoveNext());
+        Assert.Single(source.RecordReads, reference => reference == Reference(1));
+    }
+
+    [Fact]
+    public void AStableBaseWithAMissingExtensionCannotBeSilentlyDropped()
+    {
+        var source = LinearSource();
+        source.Add(1, Record(Basic(), Name("tutarsiz.txt"), AttributeList((0x30, Reference(2)))), 5120);
+        using var reader = new NtfsMftReader(source);
+        Assert.Throws<InvalidDataException>(() => reader.ReadEntries().ToArray());
+        Assert.Single(source.RecordReads, reference => reference == Reference(1));
+        Assert.Equal(2, source.RecordReads.Count(reference => reference == Reference(2)));
+    }
+
+    [Fact]
+    public void RefreshedBaseCannotBecomeAnExtensionOfAnotherFile()
+    {
+        var source = LinearSource();
+        source.Add(1, Record(Basic(), Name("eski.txt"), AttributeList((0x30, Reference(2)))), 5120);
+        using var reader = new NtfsMftReader(source);
+        using var entries = reader.ReadEntries().GetEnumerator();
+        Assert.True(entries.MoveNext());
+        source.Add(1, Record(false, Reference(3), Name("baska.txt")), 5120);
+        Assert.Throws<InvalidDataException>(() => entries.MoveNext());
     }
 
     [Fact]
@@ -143,6 +232,21 @@ public sealed class NtfsMftReaderTests
 
         Assert.True(source.Disposed);
         Assert.Throws<ObjectDisposedException>(() => reader.ReadEntries().ToArray());
+    }
+
+    [Fact]
+    public void RecordWhoseExtensionSegmentWasFreedMidScanIsSkippedNotFatal()
+    {
+        var source = LinearSource();
+        source.Add(1, Record(Basic(), Name("kalan.txt"), Resident(0x80, [1, 2, 3])), 5120);
+        source.Add(2, Record(Basic(), Name("silinen.txt"), Resident(0x80, [4]),
+            AttributeList((0x30, Reference(2)), (0x30, Reference(3)))), 6144);
+        source.RemoveKernelRecord(2);
+        using var reader = new NtfsMftReader(source);
+
+        var entries = reader.ReadEntries().ToArray();
+
+        Assert.Equal(new[] { "$MFT", "kalan.txt" }, entries.Select(entry => entry.Name));
     }
 
     private static FakeNtfsVolumeSource LinearSource()

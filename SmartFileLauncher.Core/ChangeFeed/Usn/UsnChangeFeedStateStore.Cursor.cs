@@ -9,13 +9,9 @@ public sealed partial class UsnChangeFeedStateStore
     private Cursor? _persistedCursor;
     private bool CanWriteCursor(ulong journalId, IReadOnlyList<UsnChangeFeedState> roots)
     {
-        if (_cachedBase is null || _snapshotId == Guid.Empty || _cachedBase.JournalId != journalId || _cachedBase.Roots.Count != roots.Count) return false;
+        if (!SameRoots(journalId, roots)) return false;
         for (var index = 0; index < roots.Count; index++)
-        {
-            var old = _cachedBase.Roots[index]; var next = roots[index];
-            if (old.RootPath != next.RootPath || old.RootIdentity != next.RootIdentity || old.SynchronizedFromUsn != next.SynchronizedFromUsn ||
-                !ReferenceEquals(old.Directories, next.Directories)) return false;
-        }
+            if (!ReferenceEquals(_cachedBase!.Roots[index].Directories, roots[index].Directories)) return false;
         return true;
     }
     private UsnVolumeFeedState ApplyCursor(UsnVolumeFeedState baseline)

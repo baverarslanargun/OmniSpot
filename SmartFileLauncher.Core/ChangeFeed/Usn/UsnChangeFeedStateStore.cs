@@ -38,12 +38,13 @@ public sealed partial class UsnChangeFeedStateStore
         _persistedCursor = null;
         if (!File.Exists(_filePath))
         {
-            _cachedBase = null; _snapshotId = Guid.Empty;
+            _cachedBase = null; _snapshotId = Guid.Empty; _deltaBytes = 0; _deltaFileLength = 0;
             return null;
         }
         var file = new FileInfo(_filePath);
-        if (_cacheReads && _cachedBase is not null && file.Length == _baseLength && file.LastWriteTimeUtc.Ticks == _baseModified)
-            return ApplyCursor(_cachedBase);
+        if (_cacheReads && _cachedBase is not null && file.Length == _baseLength && file.LastWriteTimeUtc.Ticks == _baseModified &&
+            DeltaFileLength() == _deltaFileLength)
+            return _deltaBytes == 0 ? ApplyCursor(_cachedBase) : RememberPosition(_cachedBase);
 
         VolumeDocument? document;
         try
@@ -101,13 +102,14 @@ public sealed partial class UsnChangeFeedStateStore
                     root.SynchronizedFromUsn))
                 .ToArray();
 
-            _cachedBase = new UsnVolumeFeedState(
+            var baseline = new UsnVolumeFeedState(
                 document.JournalId,
                 document.NextUsn,
                 roots,
                 document.PendingSecurityChange);
             _snapshotId = document.SnapshotId; _baseLength = file.Length; _baseModified = file.LastWriteTimeUtc.Ticks;
-            return ApplyCursor(_cachedBase);
+            _cachedBase = ApplyDelta(baseline);
+            return _deltaBytes == 0 ? ApplyCursor(_cachedBase) : RememberPosition(_cachedBase);
         }
         catch (ArgumentException failure)
         {
@@ -123,6 +125,7 @@ public sealed partial class UsnChangeFeedStateStore
             File.Delete(_filePath);
         }
         File.Delete(_filePath + ".cursor"); _cachedBase = null; _snapshotId = Guid.Empty;
+        File.Delete(DeltaPath); _deltaBytes = 0; _deltaFileLength = 0;
     }
 
     public void Write(
@@ -140,7 +143,16 @@ public sealed partial class UsnChangeFeedStateStore
         }
 
         if (_cacheReads && CanWriteCursor(journalId, roots))
-        { WriteCursor(new(_snapshotId, journalId, nextUsn, pendingSecurityChange)); return; }
+        {
+            var cursor = new Cursor(_snapshotId, journalId, nextUsn, pendingSecurityChange);
+            if (_deltaBytes == 0) { WriteCursor(cursor); return; }
+            if (cursor == _persistedCursor || TryAppendDelta(cursor, roots, [])) return;
+        }
+        else if (_cacheReads && CanWriteDelta(journalId, roots) &&
+            TryAppendDelta(new(_snapshotId, journalId, nextUsn, pendingSecurityChange), roots, Diff(_cachedBase!.Roots, roots)))
+        {
+            return;
+        }
 
         var document = new VolumeDocument
         {
@@ -185,6 +197,7 @@ public sealed partial class UsnChangeFeedStateStore
         _cachedBase = new(journalId, nextUsn, roots, pendingSecurityChange);
         var file = new FileInfo(_filePath); _baseLength = file.Length; _baseModified = file.LastWriteTimeUtc.Ticks;
         File.Delete(_filePath + ".cursor");
+        File.Delete(DeltaPath); _deltaBytes = 0; _deltaFileLength = 0;
         _persistedCursor = new(_snapshotId, journalId, nextUsn, pendingSecurityChange);
     }
 

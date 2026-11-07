@@ -17,6 +17,9 @@ public sealed class AppSettings
     public string DiagnosticsLogDirectory { get; set; } = string.Empty;
     public bool RememberDiagnosticsLogDirectory { get; set; } = true;
     public bool CompactSearchStateEnabled { get; set; } = true;
+    public IndexScanMethod IndexingMethod { get; set; } = IndexScanMethod.SelectedFolders;
+    public IndexBuildOptions IndexBuild { get; set; } = new();
+    public List<string>? IndexedFolders { get; set; }
     public bool ThumbnailPreviewsEnabled { get; set; } = true;
     public bool ThumbnailCacheUseRamRatio { get; set; }
     public int ThumbnailCacheMaxCount { get; set; } = 1000;
@@ -42,6 +45,9 @@ public sealed class AppSettings
         DiagnosticsLogDirectory = string.Empty;
         RememberDiagnosticsLogDirectory = true;
         CompactSearchStateEnabled = true;
+        IndexingMethod = IndexScanMethod.SelectedFolders;
+        IndexBuild = new();
+        IndexedFolders = null;
         ThumbnailPreviewsEnabled = true;
         ThumbnailCacheUseRamRatio = false;
         ThumbnailCacheMaxCount = 1000;

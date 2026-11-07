@@ -17,6 +17,7 @@ internal sealed class ChangeFeedDrainWorker : BackgroundService
     public const string ServiceName = ChangeFeedServiceIdentity.ServiceName;
 
     public static TimeSpan DefaultDrainPeriod => TimeSpan.FromSeconds(15);
+    internal static UsnDrainRunner.BootstrapLease BeginCatalogBootstrap(string ownerSid, CancellationToken ct) => Coordinator(ownerSid).BeginBootstrap(ct);
 
     private readonly ILogger<ChangeFeedDrainWorker> _logger;
     private readonly TimeSpan _drainPeriod;

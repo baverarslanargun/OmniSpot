@@ -4,7 +4,8 @@ public sealed record ChangeFeedEvent(
     ChangeFeedEventKind Kind,
     string FullPath,
     bool IsDirectory,
-    string? OldPath = null)
+    string? OldPath = null,
+    bool RefreshSubtree = false)
 {
     public override string ToString() =>
         OldPath is null

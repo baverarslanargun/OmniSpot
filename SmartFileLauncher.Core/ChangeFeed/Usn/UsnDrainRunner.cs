@@ -12,7 +12,8 @@ public enum UsnDrainOutcome
     LeasePreempted,
     NoSubscription,
     SubscriptionRejected,
-    Faulted
+    Faulted,
+    Busy
 }
 
 public sealed record UsnDrainResult(
@@ -33,8 +34,10 @@ public sealed class UsnDrainRunner
     private readonly IUsnSubtreeReader? _subtreeReader;
     private readonly Func<DateTime> _utcNow;
     private readonly bool _cacheState;
+    private readonly SemaphoreSlim _runGate = new(1, 1);
     private readonly Dictionary<string, UsnChangeFeedStateStore> _stateStores = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, UsnRootProjection> _projections = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, (ulong JournalId, long Cursor)> _cleanQueue = new(StringComparer.OrdinalIgnoreCase);
 
     public UsnDrainRunner(
         ChangeFeedStoreLayout layout,
@@ -56,13 +59,62 @@ public sealed class UsnDrainRunner
 
     public UsnDrainResult Run(CancellationToken cancellationToken = default)
     {
+        if (!_runGate.Wait(0, cancellationToken)) return new(UsnDrainOutcome.Busy, 0, 0, 0, 0, 0);
+        try { return RunCore(cancellationToken); }
+        finally { _runGate.Release(); }
+    }
+
+    public BootstrapLease BeginBootstrap(CancellationToken cancellationToken = default)
+    {
+        _runGate.Wait(cancellationToken);
+        return new(this);
+    }
+
+    public sealed class BootstrapLease : IDisposable
+    {
+        private UsnDrainRunner? _runner;
+        internal BootstrapLease(UsnDrainRunner runner) => _runner = runner;
+        internal void DiscardPending(CancellationToken ct)
+        {
+            var runner = _runner ?? throw new ObjectDisposedException(nameof(BootstrapLease));
+            using var held = runner._store.EnterOwnerScope(ct);
+            var throughSequence = runner._store.ReadPending().AvailableThroughSequence;
+            ct.ThrowIfCancellationRequested();
+            runner._store.Acknowledge(throughSequence);
+        }
+        public void Install(IReadOnlyList<UsnChangeFeedState> states, CancellationToken ct)
+        {
+            var runner = _runner ?? throw new ObjectDisposedException(nameof(BootstrapLease));
+            using var held = runner._store.EnterOwnerScope(ct);
+            var subscription = runner._store.ReadSubscription() ?? throw new InvalidDataException("USN aboneliği yok.");
+            foreach (var state in states)
+            {
+                if (!subscription.Roots.Any(root => root.RootPath.Equals(state.RootPath, StringComparison.OrdinalIgnoreCase) && root.Identity == state.ToChangeFeedRootIdentity()))
+                    throw new InvalidDataException("USN başlangıç kök kimliği değişti.");
+            }
+            foreach (var volume in states.GroupBy(state => UsnVolumeJournalReader.ResolveVolumeRoot(state.RootPath), StringComparer.OrdinalIgnoreCase))
+            {
+                ct.ThrowIfCancellationRequested();
+                if (volume.Any(state => state.JournalId != volume.First().JournalId)) throw new InvalidDataException("USN başlangıç günlüğü farklı.");
+                new UsnChangeFeedStateStore(runner.StatePath(volume.Key)).Write(volume.First().JournalId,
+                    volume.Min(state => state.NextUsn), volume.ToArray());
+            }
+            runner._stateStores.Clear();
+            runner._projections.Clear();
+            runner._cleanQueue.Clear();
+        }
+        public void Dispose() => Interlocked.Exchange(ref _runner, null)?._runGate.Release();
+    }
+
+    private UsnDrainResult RunCore(CancellationToken cancellationToken)
+    {
         using var ownerScope = _cacheState ? _store.EnterOwnerScope(cancellationToken) : null;
         var following = _store.ReadLease().IsHeld(_utcNow());
 
         var subscription = _store.ReadSubscription();
         if (subscription is null)
         {
-            _stateStores.Clear(); _projections.Clear();
+            _stateStores.Clear(); _projections.Clear(); _cleanQueue.Clear();
             return new UsnDrainResult(UsnDrainOutcome.NoSubscription, 0, 0, 0, 0, 0);
         }
 
@@ -83,7 +135,11 @@ public sealed class UsnDrainRunner
 
         var partition = PartitionByVolume(subscription.Roots);
         foreach (var path in _projections.Keys.Where(path => !subscription.Roots.Any(root => root.RootPath.Equals(path, StringComparison.OrdinalIgnoreCase))).ToArray()) _projections.Remove(path);
-        foreach (var volume in _stateStores.Keys.Where(volume => !partition.Groups.Any(group => group.VolumeRoot.Equals(volume, StringComparison.OrdinalIgnoreCase))).ToArray()) _stateStores.Remove(volume);
+        foreach (var volume in _stateStores.Keys.Where(volume => !partition.Groups.Any(group => group.VolumeRoot.Equals(volume, StringComparison.OrdinalIgnoreCase))).ToArray())
+        {
+            _stateStores.Remove(volume);
+            _cleanQueue.Remove(volume);
+        }
 
         var drained = 0;
         var faulted = 0;
@@ -209,7 +265,7 @@ public sealed class UsnDrainRunner
         {
             return following
                 ? new VolumeDrain(0, 0, 0, false, "takip durdu: hiçbir kök kabul edilmedi")
-                : Announce(admission, descriptor, state, cancellationToken);
+                : Announce(volumeRoot, admission, descriptor, state, cancellationToken);
         }
 
         var journalId = descriptor.JournalId;
@@ -259,7 +315,7 @@ public sealed class UsnDrainRunner
             return VolumeDrain.LeaseTaken;
         }
 
-        Discard(state);
+        var clean = Discard(volumeRoot, state);
 
         if (securityChanged || (state?.PendingSecurityChange ?? false))
         {
@@ -269,6 +325,7 @@ public sealed class UsnDrainRunner
         var entries = 0;
         if (deliveries.Count > 0)
         {
+            _cleanQueue.Remove(volumeRoot);
             entries = _store.Enqueue(
                 VolumeIdOf(admission.States),
                 journalId,
@@ -282,11 +339,17 @@ public sealed class UsnDrainRunner
         var resynchronized = Capture(feed, batch, rebuilt);
         if (resynchronized.Count == 0)
         {
+            _cleanQueue.Remove(volumeRoot);
             stateStore.Delete();
         }
         else
         {
-            stateStore.Write(journalId, CursorOf(resynchronized), resynchronized);
+            var committed = CursorOf(resynchronized);
+            stateStore.Write(journalId, committed, resynchronized);
+            if (clean && (deliveries.Count == 0 || batch.NextUsn <= committed))
+            {
+                _cleanQueue[volumeRoot] = (journalId, committed);
+            }
         }
 
         return new VolumeDrain(
@@ -443,20 +506,30 @@ public sealed class UsnDrainRunner
             .Select(root => root.Root.RootPath)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-    private void Discard(UsnVolumeFeedState? state)
+    private bool Discard(string volumeRoot, UsnVolumeFeedState? state)
     {
         if (state is null)
         {
-            return;
+            return false;
+        }
+
+        if (_cleanQueue.TryGetValue(volumeRoot, out var clean) &&
+            clean.JournalId == state.JournalId &&
+            clean.Cursor == state.NextUsn)
+        {
+            return true;
         }
 
         _store.DiscardUncommitted(
             VolumeIdOf(state.Roots),
             state.JournalId,
             state.NextUsn);
+        _cleanQueue[volumeRoot] = (state.JournalId, state.NextUsn);
+        return true;
     }
 
     private VolumeDrain Announce(
+        string volumeRoot,
         Admission admission,
         UsnJournalDescriptor descriptor,
         UsnVolumeFeedState? state,
@@ -469,7 +542,7 @@ public sealed class UsnDrainRunner
             return VolumeDrain.LeaseTaken;
         }
 
-        Discard(state);
+        Discard(volumeRoot, state);
 
         if (admission.Deliveries.Count == 0)
         {
@@ -491,7 +564,7 @@ public sealed class UsnDrainRunner
     private UsnRootProjection ProjectionFor(UsnChangeFeedState state)
     {
         if (_cacheState && _projections.TryGetValue(state.RootPath, out var previous) && previous.MatchesState(state)) return previous;
-        var projection = new UsnRootProjection(state, _identityProbe, _subtreeReader);
+        var projection = new UsnRootProjection(state, _identityProbe, _subtreeReader, _layout.StoreRoot);
         if (_cacheState) _projections[state.RootPath] = projection;
         return projection;
     }

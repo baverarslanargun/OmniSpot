@@ -5,7 +5,7 @@ namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public sealed partial class ChangeFeedAdmissionService
 {
-    private ChangeFeedResponse Inventory(NamedPipeServerStream pipe, ChangeFeedRequest request,
+    private ChangeFeedResponse Inventory(ChangeFeedCaller pipe, ChangeFeedRequest request,
         CancellationToken cancellationToken)
     {
         if (_inventory is null)

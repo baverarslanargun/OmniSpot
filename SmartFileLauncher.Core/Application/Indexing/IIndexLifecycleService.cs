@@ -14,6 +14,7 @@ public interface IIndexLifecycleService : IDisposable
     event Action<bool>? ReconciliationStateChanged;
 
     bool IsInitialized { get; }
+    bool IsTokenIndexReady => IsInitialized;
     string DatabasePath { get; }
     IndexReconciliationStatus ReconciliationStatus { get; }
 

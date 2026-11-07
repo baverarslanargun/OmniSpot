@@ -400,6 +400,36 @@ public sealed class ChangeFeedIpcRoundTripTests
     }
 
     [Fact]
+    public async Task DrainContinuous_BudgetIncludesWaitingForOwnerGate()
+    {
+        using var harness = new Harness(handoffDrainBudget: TimeSpan.FromMilliseconds(100));
+        await harness.ReadyAsync();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var blocker = Task.Run(() =>
+        {
+            using var owner = harness.OwnerStore().EnterOwnerScope();
+            entered.Set();
+            release.Wait();
+        });
+        try
+        {
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
+            var pending = harness.SendAsync(new ChangeFeedRequest(
+                ChangeFeedProtocol.Version, ChangeFeedRequestKind.DrainContinuous));
+            var completed = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(1)));
+            Assert.Same(pending, completed);
+            Assert.Equal(ChangeFeedResponseStatus.Unavailable, (await pending).Status);
+            Assert.Equal(0, harness.HandoffDrainCount);
+        }
+        finally
+        {
+            release.Set();
+            await blocker;
+        }
+    }
+
+    [Fact]
     public async Task DrainAndHoldLease_HoldsTheLeaseOnlyAfterTheFinalDrainSucceeds()
     {
         using var harness = new Harness(handoffDrainer: (_, _) => true);
@@ -978,7 +1008,7 @@ public sealed class ChangeFeedIpcRoundTripTests
             .ToArray();
 
         Assert.Equal(
-            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds", "InventoryRoots" },
+            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds", "InventoryRoots", "CatalogOptions", "Journal", "IndexBuild" },
             members);
     }
 

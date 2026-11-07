@@ -1,17 +1,25 @@
 using SmartFileLauncher.Core.ChangeFeed.Ipc;
 using SmartFileLauncher.Core.Indexing;
 using SmartFileLauncher.Core.Indexing.Ntfs;
+using System.Diagnostics;
+using System.Text.Json;
 
 namespace SmartFileLauncher.Core.Application.Indexing;
 
 public sealed class ChangeFeedInventorySource(
     IChangeFeedRequestChannel channel, Action<string>? diagnostic = null) : IIndexInventorySource
 {
+    private const int MaxStartAttempts = 12;
+    private static readonly TimeSpan StartRetryDelay = TimeSpan.FromSeconds(2);
+
     public async Task<IIndexInventorySession?> ReadAsync(IReadOnlyList<string> roots,
         Action<IndexInventoryEntry> receive, CancellationToken cancellationToken)
     {
         var session = new Session(channel, diagnostic);
         var entries = 0;
+        var startAttempts = 0;
+        long requestTicks = 0, processingTicks = 0;
+        var pages = 0;
         try
         {
             foreach (var root in roots)
@@ -26,17 +34,29 @@ public sealed class ChangeFeedInventorySource(
             }
             while (true)
             {
+                var requestStarted = Stopwatch.GetTimestamp();
                 var response = await channel.SendAsync(new ChangeFeedRequest(ChangeFeedProtocol.Version,
                     ChangeFeedRequestKind.Inventory, Token: session.Token,
                     InventoryRoots: session.Token is null ? roots : null), cancellationToken).ConfigureAwait(false);
+                requestTicks += Stopwatch.GetTimestamp() - requestStarted;
+                pages++;
                 if (response.Version != ChangeFeedProtocol.Version ||
                     response.Status != ChangeFeedResponseStatus.Ok || response.Inventory is not { } page ||
                     string.IsNullOrWhiteSpace(page.Token))
                 {
+                    if (response.Status == ChangeFeedResponseStatus.Unavailable &&
+                        session.Token is null && entries == 0 && startAttempts < MaxStartAttempts)
+                    {
+                        startAttempts++;
+                        diagnostic?.Invoke($"MFT envanteri geçici olarak yanıt vermedi; yeniden deneniyor ({startAttempts}/{MaxStartAttempts}); kayıt={entries}: {response.Status}; {response.Message}");
+                        await Task.Delay(StartRetryDelay, cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
                     diagnostic?.Invoke($"MFT aktarımı başarısız: {response.Status}; sürüm={response.Version}; kayıt={entries}; {response.Message}");
                     return null;
                 }
                 session.Token = page.Token;
+                var processingStarted = Stopwatch.GetTimestamp();
                 foreach (var dto in page.Entries)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -50,6 +70,7 @@ public sealed class ChangeFeedInventorySource(
                     receive(entry);
                     entries++;
                 }
+                processingTicks += Stopwatch.GetTimestamp() - processingStarted;
                 if (page.Completed)
                 {
                     session.Keep = true;
@@ -68,6 +89,12 @@ public sealed class ChangeFeedInventorySource(
         }
         finally
         {
+            diagnostic?.Invoke("MFT ölçümü: " + JsonSerializer.Serialize(new
+            {
+                Entries = entries, Pages = pages, Completed = session.Keep,
+                RequestMilliseconds = requestTicks * 1000.0 / Stopwatch.Frequency,
+                ProcessingMilliseconds = processingTicks * 1000.0 / Stopwatch.Frequency
+            }));
             if (!session.Keep) await session.DisposeAsync().ConfigureAwait(false);
         }
     }

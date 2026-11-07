@@ -10,6 +10,8 @@ public class SearchEngine
     private readonly Func<CancellationToken, ISearchStateReader>? _searchStateProvider;
     private readonly ITokenizer _tokenizer;
     private readonly IScoringStrategy _scoring;
+    private readonly bool _literalNamesOnly =
+        Environment.GetEnvironmentVariable("OMNISPOT_LITERAL_NAME_SEARCH") == "1";
 
     public SearchEngine(InvertedIndex invertedIndex, ITokenizer tokenizer, IScoringStrategy scoring)
     {
@@ -34,8 +36,9 @@ public class SearchEngine
     public SearchEngine(
         Func<CancellationToken, ISearchStateReader> searchStateProvider,
         ITokenizer tokenizer,
-        IScoringStrategy scoring)
+        IScoringStrategy scoring, bool literalNamesOnly = false)
     {
+        _literalNamesOnly |= literalNamesOnly;
         _searchStateProvider = searchStateProvider ??
             throw new ArgumentNullException(nameof(searchStateProvider));
         _tokenizer = tokenizer ?? throw new ArgumentNullException(nameof(tokenizer));
@@ -59,6 +62,18 @@ public class SearchEngine
     {
         ArgumentNullException.ThrowIfNull(view);
         cancellationToken.ThrowIfCancellationRequested();
+        if (_literalNamesOnly)
+        {
+            if (string.IsNullOrWhiteSpace(query) || maxResults <= 0)
+                return Array.Empty<SearchResult>();
+            if (_searchStateProvider == null)
+                throw new NotSupportedException("Ad içinde arama deneyi ortak servis kataloğu gerektiriyor.");
+            var literalState = _searchStateProvider(cancellationToken).ForQuery();
+            using var literalLease = literalState as IQuerySnapshotLease;
+            if (literalState is ILiteralNameQuerySnapshot literal)
+                return literal.SearchLiteralNames(query, maxResults, view, cancellationToken);
+            throw new NotSupportedException("Ad içinde arama deneyi ortak servis kataloğu gerektiriyor.");
+        }
         var tokens = _tokenizer.Tokenize(query).ToArray();
         cancellationToken.ThrowIfCancellationRequested();
         if (tokens.Length == 0 || maxResults <= 0)
@@ -68,7 +83,12 @@ public class SearchEngine
 
         if (_searchStateProvider != null)
         {
-            return Search(_searchStateProvider(cancellationToken).ForQuery(), query, tokens, maxResults, view, cancellationToken);
+            var state = _searchStateProvider(cancellationToken).ForQuery();
+            using var lease = state as IQuerySnapshotLease;
+            if (tokens.Length <= 63 && state is IStandardQuerySnapshot optimized &&
+                _tokenizer.GetType() == typeof(BasicTokenizer) && _scoring.GetType() == typeof(BasicScoringStrategy))
+                return optimized.SearchStandard(query, maxResults, view, cancellationToken);
+            return Search(state, query, tokens, maxResults, view, cancellationToken);
         }
 
         return Search(

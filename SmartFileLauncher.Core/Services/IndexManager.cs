@@ -1674,7 +1674,7 @@ public partial class IndexManager : IDisposable
                     continue;
                 }
 
-                if (!string.Equals(
+                if (!_useLiveCatalog && !string.Equals(
                         directoryPath,
                         rootPath,
                         StringComparison.OrdinalIgnoreCase) &&
@@ -1691,6 +1691,13 @@ public partial class IndexManager : IDisposable
                     directoryInfo.LastWriteTimeUtc.Ticks,
                     SizeBytes: 0,
                     attributes));
+
+                var traversalRoot = _activeRootPaths.FirstOrDefault(root => IsSameOrDescendantPath(directoryPath, root)) ?? rootPath;
+                if ((attributes & FileAttributes.ReparsePoint) != 0 && IsDirectoryLinkCycle(directoryPath, traversalRoot))
+                {
+                    snapshot.ProtectedScopes.Add(directoryPath);
+                    continue;
+                }
 
                 if (!followReparsePoints && (attributes & FileAttributes.ReparsePoint) != 0)
                 {
@@ -1744,7 +1751,7 @@ public partial class IndexManager : IDisposable
                             continue;
                         }
 
-                        if (IsHiddenOrSystem(entry.Attributes))
+                        if (!_useLiveCatalog && IsHiddenOrSystem(entry.Attributes))
                         {
                             snapshot.ExcludedScopes.Add(path);
                             continue;
@@ -1828,6 +1835,26 @@ public partial class IndexManager : IDisposable
 
     private static bool IsHiddenOrSystem(FileAttributes attributes) =>
         (attributes & (FileAttributes.Hidden | FileAttributes.System)) != 0;
+
+    private static bool IsDirectoryLinkCycle(string path, string root)
+    {
+        if (!OperatingSystem.IsWindows() || string.Equals(path, root, StringComparison.OrdinalIgnoreCase)) return false;
+        try
+        {
+            var target = FileSystemPathGuard.Default.GetFileIdentity(path, isDirectory: true);
+            for (var parent = Path.GetDirectoryName(path); parent is not null && IsSameOrDescendantPath(parent, root); parent = Path.GetDirectoryName(parent))
+            {
+                var ancestor = FileSystemPathGuard.Default.GetFileIdentity(parent, isDirectory: true);
+                if (target.VolumeSerialNumber == ancestor.VolumeSerialNumber &&
+                    target.FileIndexHigh == ancestor.FileIndexHigh && target.FileIndexLow == ancestor.FileIndexLow) return true;
+            }
+            return false;
+        }
+        catch (System.ComponentModel.Win32Exception error)
+        {
+            throw new IOException("Bağlantı hedefinin kimliği okunamadı: " + path, error);
+        }
+    }
 
     private sealed record ReconciliationEntry(
         string Path,
@@ -2801,6 +2828,7 @@ public class IndexProgress
     public long ElapsedMs { get; set; }
     public bool IsIndeterminate { get; set; }
     public bool IsCatalogBuild { get; set; }
+    public bool IsBackgroundPreparation { get; set; }
     public string? Phase { get; set; }
     public int TotalItemCount { get; set; }
 }

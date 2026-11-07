@@ -1,4 +1,6 @@
 using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
@@ -79,7 +81,7 @@ public sealed class ChangeFeedPathAuthorizer
         {
             return next && change.OldPath is null
                 ? new ChangeFeedEventProjection(
-                    new ChangeFeedEvent(change.Kind, change.FullPath, change.IsDirectory),
+                    new ChangeFeedEvent(change.Kind, change.FullPath, change.IsDirectory, RefreshSubtree: change.RefreshSubtree),
                     false)
                 : change.OldPath is null ? Withheld(null, change.FullPath) : new(null, true);
         }
@@ -93,7 +95,7 @@ public sealed class ChangeFeedPathAuthorizer
                     ChangeFeedEventKind.Renamed,
                     change.FullPath,
                     change.IsDirectory,
-                    change.OldPath),
+                    change.OldPath, change.RefreshSubtree),
                 false);
         }
 
@@ -113,7 +115,7 @@ public sealed class ChangeFeedPathAuthorizer
                 new ChangeFeedEvent(
                     ChangeFeedEventKind.Created,
                     change.FullPath,
-                    change.IsDirectory),
+                    change.IsDirectory, RefreshSubtree: change.RefreshSubtree),
                 change.OldPath);
         }
 
@@ -240,6 +242,12 @@ public sealed class ChangeFeedPathAuthorizer
     {
         try
         {
+            if (OperatingSystem.IsWindows())
+            {
+                using var handle = CreateFile(directory, 1, 7, IntPtr.Zero, 3, 0x02000000, IntPtr.Zero);
+                return !handle.IsInvalid && GetFileInformationByHandleEx(handle, 9, out var information, 8) &&
+                    (information.Attributes & FileAttributes.Directory) != 0;
+            }
             using var entries = Directory.EnumerateFileSystemEntries(directory).GetEnumerator();
             entries.MoveNext();
             return true;
@@ -249,4 +257,20 @@ public sealed class ChangeFeedPathAuthorizer
             return false;
         }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct FileAttributeTagInfo
+    {
+        public FileAttributes Attributes;
+        public uint ReparseTag;
+    }
+
+    [DllImport("kernel32.dll", EntryPoint = "CreateFileW", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern SafeFileHandle CreateFile(string path, uint access, uint share, IntPtr security,
+        uint disposition, uint flags, IntPtr template);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetFileInformationByHandleEx(SafeFileHandle handle, int infoClass,
+        out FileAttributeTagInfo information, uint size);
 }

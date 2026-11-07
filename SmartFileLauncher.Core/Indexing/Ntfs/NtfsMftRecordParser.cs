@@ -131,7 +131,7 @@ internal static class NtfsMftRecordParser
                 (nameLength > 0 && (nameOffset < 26 || nameOffset + nameLength * 2 > length)))
                 throw Invalid("Öznitelik listesi girdisi geçersiz.");
             var type = Read32(entry, 0);
-            if (nameLength == 0 && type is 0x10 or 0x20 or 0x30 or 0x80)
+            if (nameLength == 0 && type is 0x10 or 0x20 or 0x30 or 0x80 or 0xC0)
                 references.Add(Read64(entry, 16));
             offset += length;
         }
@@ -184,6 +184,10 @@ internal static class NtfsMftRecordParser
                     break;
                 case 0x80:
                     result.SizeBytes = valueLength;
+                    break;
+                case 0xC0:
+                    if (value.Length < 8) throw Invalid("REPARSE_POINT tamamlanmadı.");
+                    result.ReparseTag = Read32(value, 0);
                     break;
             }
             return;

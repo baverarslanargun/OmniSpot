@@ -20,6 +20,9 @@ public sealed class ChangeFeedImpersonationException : Exception
 [SupportedOSPlatform("windows")]
 public static class ChangeFeedCallerIdentity
 {
+    internal static TResult RunAsVerifiedCaller<TResult>(ChangeFeedCaller caller,
+        Func<SecurityIdentifier, TResult> work) => caller.Run(work);
+
     public static TResult RunAsVerifiedCaller<TResult>(
         NamedPipeServerStream pipe,
         Func<SecurityIdentifier, TResult> work)

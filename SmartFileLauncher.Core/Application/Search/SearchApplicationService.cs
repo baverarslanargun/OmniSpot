@@ -1,5 +1,6 @@
 using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Search;
 
 namespace SmartFileLauncher.Core.Application.Search;
 
@@ -92,14 +93,23 @@ public sealed class SearchApplicationService : ISearchApplicationService
         cancellationToken.ThrowIfCancellationRequested();
         structuredQuery ??= CreateDefaultQuery(request.Query);
 
-        var results = await Task.Run(
-                () => _advancedSearch(
-                    structuredQuery,
-                    request.MaxResults,
-                    request.View,
-                    cancellationToken),
-                cancellationToken)
-            .ConfigureAwait(false);
+        IReadOnlyList<SearchResult> results;
+        try
+        {
+            results = await Task.Run(
+                    () => _advancedSearch(
+                        structuredQuery,
+                        request.MaxResults,
+                        request.View,
+                        cancellationToken),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TokenIndexNotReadyException failure)
+        {
+            var fallback = await RunStandardSearchAsync(request, cancellationToken).ConfigureAwait(false);
+            return new(fallback, SearchExecutionMode.Standard, true, failure.Message, null, null, null);
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var autoOpenPath = ResolveAutoOpenPath(structuredQuery, results);

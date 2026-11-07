@@ -949,6 +949,107 @@ public sealed class UsnDrainRunnerTests : IDisposable
             _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
     }
 
+    [Fact]
+    public void ARunnerScansTheQueueForOrphansOnlyUntilItHasCommittedItsOwnCursor()
+    {
+        var inner = CreateStore();
+        Subscribe(inner, _firstRoot.Path);
+        var store = new DiscardCountingStore(inner);
+        var reader = CreateReader();
+        var runner = CreateRunner(store, reader);
+        runner.Run();
+        inner.Acknowledge(long.MaxValue);
+
+        for (var usn = 2000; usn <= 4000; usn += 1000)
+        {
+            reader.Descriptor = Descriptor(nextUsn: usn);
+            reader.EnqueuePage(usn, new UsnRecordBuffer()
+                .AddVersion2(usn - 500, (ulong)(50 + usn / 1000), RootReference(_firstRoot), UsnReason.FileCreate, $"r{usn}.txt")
+                .Build());
+            Assert.Equal(1, runner.Run().EventsWritten);
+            inner.Acknowledge(long.MaxValue);
+        }
+
+        Assert.Equal(1, store.Discards);
+
+        store.FailAfterEnqueue = true;
+        reader.Descriptor = Descriptor(nextUsn: 5000);
+        reader.EnqueuePage(5000, new UsnRecordBuffer()
+            .AddVersion2(4500, 60, RootReference(_firstRoot), UsnReason.FileCreate, "yetim.txt")
+            .Build());
+        Assert.Throws<InvalidOperationException>(() => runner.Run());
+        var orphan = Assert.Single(inner.ReadPending().Entries);
+
+        store.FailAfterEnqueue = false;
+        reader.EnqueuePage(5000, new UsnRecordBuffer()
+            .AddVersion2(4500, 60, RootReference(_firstRoot), UsnReason.FileCreate, "yetim.txt")
+            .Build());
+        Assert.Equal(1, runner.Run().EventsWritten);
+
+        Assert.Equal(2, store.Discards);
+        var replayed = Assert.Single(inner.ReadPending().Entries);
+        Assert.NotEqual(orphan.Sequence, replayed.Sequence);
+        Assert.Equal(5000, ReadState()!.NextUsn);
+    }
+
+    private sealed class DiscardCountingStore : IChangeFeedStore
+    {
+        private readonly IChangeFeedStore _inner;
+
+        public DiscardCountingStore(IChangeFeedStore inner) => _inner = inner;
+
+        public int Discards { get; private set; }
+
+        public bool FailAfterEnqueue { get; set; }
+
+        public IDisposable EnterOwnerScope(CancellationToken cancellationToken = default) =>
+            _inner.EnterOwnerScope(cancellationToken);
+
+        public ChangeFeedSubscription? ReadSubscription() => _inner.ReadSubscription();
+
+        public void WriteSubscription(ChangeFeedSubscription subscription) =>
+            _inner.WriteSubscription(subscription);
+
+        public void DeleteSubscription() => _inner.DeleteSubscription();
+
+        public ChangeFeedQueueEpoch ReadEpoch() => _inner.ReadEpoch();
+
+        public ChangeFeedSecurityStamp ReadSecurityStamp() => _inner.ReadSecurityStamp();
+
+        public void NoteSecurityChange() => _inner.NoteSecurityChange();
+
+        public ChangeFeedWatcherLease ReadLease() => _inner.ReadLease();
+
+        public ChangeFeedWatcherLease HoldLease(TimeSpan duration) =>
+            _inner.HoldLease(duration);
+
+        public void ReleaseLease() => _inner.ReleaseLease();
+
+        public ChangeFeedQueueSlice ReadPending(ChangeFeedReadBudget? budget = null) =>
+            _inner.ReadPending(budget);
+
+        public IReadOnlyList<ChangeFeedQueueEntry> Enqueue(
+            string volumeId,
+            ulong journalId,
+            long fromUsn,
+            long toUsn,
+            IReadOnlyList<ChangeFeedRootDelivery> roots)
+        {
+            var written = _inner.Enqueue(volumeId, journalId, fromUsn, toUsn, roots);
+            return FailAfterEnqueue
+                ? throw new InvalidOperationException("Test: imleç yazılmadan çöktü.")
+                : written;
+        }
+
+        public void Acknowledge(long sequence) => _inner.Acknowledge(sequence);
+
+        public int DiscardUncommitted(string volumeId, ulong journalId, long committedUsn)
+        {
+            Discards++;
+            return _inner.DiscardUncommitted(volumeId, journalId, committedUsn);
+        }
+    }
+
     private ChangeFeedStoreLayout Layout() =>
         ChangeFeedStoreLayout.ForOwner(_storeRoot.Path, OwnerSid);
 
@@ -1057,7 +1158,95 @@ public sealed class UsnDrainRunnerTests : IDisposable
         Assert.Equal(3000, new UsnChangeFeedStateStore(checkpoint).Read()!.NextUsn);
     }
 
+    [Fact]
+    public void CachedRunnerRecordsDirectoryChangesWithoutRewritingTheMapCheckpoint()
+    {
+        var store = CreateStore(); Subscribe(store, _firstRoot.Path);
+        var reader = CreateReader();
+        var runner = new UsnDrainRunner(Layout(), store, new SingleReaderFactory(reader), _probe,
+            new FakeUsnSubtreeReader(), cacheState: true);
+        runner.Run(); store.Acknowledge(long.MaxValue);
+        var checkpoint = Directory.GetFiles(Layout().StateDirectory, "*.json").Single();
+        var baseline = File.ReadAllBytes(checkpoint);
+
+        reader.Descriptor = Descriptor(nextUsn: 2000);
+        reader.EnqueuePage(2000, new UsnRecordBuffer()
+            .AddVersion2(1500, 70, RootReference(_firstRoot), UsnReason.FileCreate, "yeni-klasor", FileAttributes.Directory)
+            .Build());
+        Assert.Equal(1, runner.Run().EventsWritten);
+        store.Acknowledge(long.MaxValue);
+        reader.Descriptor = Descriptor(nextUsn: 3000);
+        reader.EnqueuePage(3000, new UsnRecordBuffer()
+            .AddVersion2(2500, 71, 70, UsnReason.FileCreate, "ic-klasor", FileAttributes.Directory)
+            .Build());
+        Assert.Equal(1, runner.Run().EventsWritten);
+
+        Assert.Equal(baseline, File.ReadAllBytes(checkpoint));
+        Assert.True(File.Exists(checkpoint + ".delta"));
+        var restored = new UsnChangeFeedStateStore(checkpoint).Read()!;
+        Assert.Equal(3000, restored.NextUsn);
+        Assert.Equal(
+            new[] { "ic-klasor", "yeni-klasor" },
+            Assert.Single(restored.Roots).Directories.Select(entry => entry.Name).Order());
+    }
+
     private FileSystemChangeFeedStore CreateStore() => new(Layout());
+
+    [Fact]
+    public void CatalogBootstrapUsesItsDirectoryMapAndReplaysFromTheScanBoundary()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        Assert.True(_probe.TryReadIdentity(_firstRoot.Path, out var rootIdentity));
+        var reader = CreateReader();
+        var runner = CreateRunner(store, reader);
+        using (var bootstrap = runner.BeginBootstrap())
+        {
+            Assert.Equal(UsnDrainOutcome.Busy, runner.Run().Outcome);
+            bootstrap.Install([new(_firstRoot.Path, rootIdentity, JournalId, BootstrapUsn,
+                [new(UsnFileReference.FromNtfs(50), "seeded", rootIdentity.FileReference)], BootstrapUsn)], default);
+        }
+        reader.Descriptor = Descriptor(2000);
+        reader.EnqueuePage(2000, new UsnRecordBuffer().AddVersion2(1500, 60, 50, UsnReason.FileCreate, "new.txt").Build());
+        var result = runner.Run();
+        Assert.Equal(UsnDrainOutcome.Completed, result.Outcome);
+        Assert.Equal(0, result.RootsGapped);
+        Assert.Equal(1, result.EventsWritten);
+        var change = Assert.Single(Assert.Single(Assert.Single(store.ReadPending().Entries).Roots).Batch.Events);
+        Assert.Equal(Path.Combine(_firstRoot.Path, "seeded", "new.txt"), change.FullPath);
+        Assert.Equal(2000, ReadState()!.NextUsn);
+    }
+
+    [Fact]
+    public void FreshCatalogDropsQueuedHistoryButReplaysChangesAfterTheScanBoundary()
+    {
+        var store = CreateStore();
+        Subscribe(store, _firstRoot.Path);
+        var subscribed = Assert.Single(store.ReadSubscription()!.Roots);
+        for (var index = 0; index < 70; index++)
+            store.Enqueue(subscribed.Identity.VolumeId, JournalId, 1, 2,
+                [new(_firstRoot.Path, ChangeFeedBatch.Gap(ChangeFeedGapReason.NotYetSynchronized), subscribed.Generation)]);
+        Assert.True(store.ReadPending().HasMore);
+        Assert.True(_probe.TryReadIdentity(_firstRoot.Path, out var rootIdentity));
+        var reader = CreateReader();
+        var runner = CreateRunner(store, reader);
+        var bootstrap = runner.BeginBootstrap();
+        using (bootstrap)
+        {
+            bootstrap.DiscardPending(default);
+            Assert.Empty(store.ReadPending().Entries);
+            Assert.Equal(UsnDrainOutcome.Busy, runner.Run().Outcome);
+            bootstrap.Install([new(_firstRoot.Path, rootIdentity, JournalId, BootstrapUsn,
+                [new(UsnFileReference.FromNtfs(50), "seeded", rootIdentity.FileReference)], BootstrapUsn)], default);
+        }
+        Assert.Throws<ObjectDisposedException>(() => bootstrap.DiscardPending(default));
+        reader.Descriptor = Descriptor(2000);
+        reader.EnqueuePage(2000, new UsnRecordBuffer().AddVersion2(1500, 60, 50, UsnReason.FileCreate, "new.txt").Build());
+        Assert.Equal(1, runner.Run().EventsWritten);
+        var change = Assert.Single(Assert.Single(Assert.Single(store.ReadPending().Entries).Roots).Batch.Events);
+        Assert.Equal(Path.Combine(_firstRoot.Path, "seeded", "new.txt"), change.FullPath);
+        Assert.Equal(2000, ReadState()!.NextUsn);
+    }
 
     private UsnDrainRunner CreateRunner(
         IChangeFeedStore store,

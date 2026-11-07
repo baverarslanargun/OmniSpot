@@ -97,6 +97,9 @@ public partial class IndexManager
         var oldPath = change.OldPath is null ? null : NormalizeIndexedPath(change.OldPath);
         var oldInside = oldPath is not null && IsSameOrDescendantPath(oldPath, candidate.RootPath);
         PackedRecord? record = inside ? ReadLiveFile(path, candidate.RootPath, candidate.FindCurrentRecord(path)?.Item.OpenCount ?? 0) : null;
+        if (_liveControl is { BootstrapPending: true } && inside && record is { Item.IsDirectory: true } &&
+            change.ChangeType is FileChangeType.Created or FileChangeType.Renamed)
+            repairs.Add(path);
         if (change.ChangeType == FileChangeType.Renamed && oldInside && oldPath is not null && !string.Equals(path, oldPath, StringComparison.OrdinalIgnoreCase))
         {
             var oldCurrent = ReadLiveFile(oldPath, candidate.RootPath, 0);
