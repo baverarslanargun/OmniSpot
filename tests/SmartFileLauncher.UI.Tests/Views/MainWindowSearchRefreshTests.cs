@@ -232,6 +232,24 @@ public sealed class MainWindowSearchRefreshTests
         Assert.Equal(0, fixture.LocalCalls);
     });
 
+    [Fact]
+    public Task ShutdownDoesNotRestartConnectivityAfterTheInitialProbeCompletes() => RunSta(async () =>
+    {
+        var probe = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var connectivity = new ConnectivityMonitor(_ => probe.Task, TimeSpan.FromHours(1));
+        using var fixture = new Fixture(connectivity);
+        var initialization = (Task)typeof(MainWindow)
+            .GetMethod("InitializeConnectivityAsync", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(fixture.Window, null)!;
+        Assert.False(initialization.IsCompleted);
+
+        fixture.Window.PrepareForShutdown();
+        connectivity.Dispose();
+        probe.SetResult(true);
+
+        await initialization.WaitAsync(TimeSpan.FromSeconds(5));
+    });
+
     private static Task RunSta(Func<Task> action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -268,7 +286,7 @@ public sealed class MainWindowSearchRefreshTests
         internal bool FailRefresh;
         internal MainWindow Window { get; }
 
-        internal Fixture()
+        internal Fixture(IConnectivityMonitor? connectivity = null)
         {
             var search = new SearchApplicationService(
                 (_, _, _, _) => { Interlocked.Increment(ref StandardCalls); return [Result("ilk-fatura")]; },
@@ -288,7 +306,7 @@ public sealed class MainWindowSearchRefreshTests
                     return new StructuredQuery { Keywords = [query] };
                 },
                 _ => throw new InvalidOperationException("Rule-based parser çağrılmamalı"));
-            var settings = new AppSettings { ThumbnailPreviewsEnabled = false };
+            var settings = new AppSettings { AnimationsEnabled = false, ThumbnailPreviewsEnabled = false };
             Window = new MainWindow(Model, settings,
                 Stub<ISettingsApplicationService>(), Stub<IIndexMaintenanceService>(),
                 Stub<IIndexLifecycleService>(method => method.Name switch
@@ -302,7 +320,7 @@ public sealed class MainWindowSearchRefreshTests
                 Stub<ISearchDiagnosticsService>(method => method.Name == "Tokenize"
                     ? Array.Empty<string>() : throw new NotSupportedException(method.Name)),
                 Stub<IThumbnailService>(), Stub<IFolderNavigationService>(),
-                Stub<IConnectivityMonitor>(method => method.Name == "get_IsConnected"
+                connectivity ?? Stub<IConnectivityMonitor>(method => method.Name == "get_IsConnected"
                     ? true : throw new NotSupportedException(method.Name)),
                 Stub<IFileOperationService>(), Stub<IApplicationShellService>(), Log,
                 ApplicationStartupOptions.Default, null) { SearchTimeProvider = Clock };

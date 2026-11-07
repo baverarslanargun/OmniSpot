@@ -11,6 +11,10 @@ using Xunit;
 
 namespace SmartFileLauncher.UI.Tests.Views;
 
+[CollectionDefinition("Settings windows", DisableParallelization = true)]
+public sealed class SettingsWindowCollection { }
+
+[Collection("Settings windows")]
 public sealed class ThumbnailSettingsWindowTests
 {
     [Fact]

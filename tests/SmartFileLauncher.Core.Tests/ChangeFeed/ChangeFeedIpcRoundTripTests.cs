@@ -146,50 +146,55 @@ public sealed class ChangeFeedIpcRoundTripTests
         var root = harness.Workspace.CreateDirectory("Projeler");
         var order = new List<string>();
 
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var release = new ManualResetEventSlim();
 
-        var blocker = Task.Run(() =>
+        var blocker = Task.Factory.StartNew(() =>
         {
             using var scope = harness.OwnerStore().EnterOwnerScope();
-            entered.Set();
-            release.Wait(TimeSpan.FromSeconds(5));
+            entered.SetResult();
+            release.Wait();
             lock (order)
             {
                 order.Add("rakip");
             }
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "Rakip kapıyı tutamadı.");
-
-        var admission = Task.Run(async () =>
+        Task<ChangeFeedResponse>? admission = null;
+        ChangeFeedResponse? result = null;
+        try
         {
-            var response = await harness.SendAsync(
-                new ChangeFeedRequest(
-                    ChangeFeedProtocol.Version,
-                    ChangeFeedRequestKind.AddRoot,
-                    root));
-
-            lock (order)
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            admission = Task.Run(async () =>
             {
-                order.Add("kabul");
-            }
+                var response = await harness.SendAsync(
+                    new ChangeFeedRequest(
+                        ChangeFeedProtocol.Version,
+                        ChangeFeedRequestKind.AddRoot,
+                        root));
 
-            return response;
-        });
+                lock (order)
+                {
+                    order.Add("kabul");
+                }
 
-        var raced = await Task.WhenAny(admission, Task.Delay(TimeSpan.FromMilliseconds(400)));
-        Assert.NotSame(admission, raced);
-        Assert.False(
-            File.Exists(harness.SubscriptionPath()),
-            "Kabul yolu kapı tutulurken abonelik yazdı.");
+                return response;
+            });
 
-        release.Set();
+            var raced = await Task.WhenAny(admission, Task.Delay(TimeSpan.FromMilliseconds(400)));
+            Assert.NotSame(admission, raced);
+            Assert.False(
+                File.Exists(harness.SubscriptionPath()),
+                "Kabul yolu kapı tutulurken abonelik yazdı.");
+        }
+        finally
+        {
+            release.Set();
+            await blocker;
+            if (admission != null) result = await admission;
+        }
 
-        var result = await admission;
-        await blocker;
-
-        Assert.Equal(ChangeFeedResponseStatus.Ok, result.Status);
+        Assert.Equal(ChangeFeedResponseStatus.Ok, result!.Status);
         Assert.Equal(new[] { "rakip", "kabul" }, order);
         Assert.Single(harness.StoredRoots());
     }
@@ -203,31 +208,38 @@ public sealed class ChangeFeedIpcRoundTripTests
         await harness.SendAsync(
             new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
 
-        using var entered = new ManualResetEventSlim();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var release = new ManualResetEventSlim();
 
-        var blocker = Task.Run(() =>
+        var blocker = Task.Factory.StartNew(() =>
         {
             using var scope = harness.OwnerStore().EnterOwnerScope();
-            entered.Set();
-            release.Wait(TimeSpan.FromSeconds(5));
-        });
+            entered.SetResult();
+            release.Wait();
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
 
-        Assert.True(entered.Wait(TimeSpan.FromSeconds(5)), "Rakip kapıyı tutamadı.");
+        Task<ChangeFeedResponse>? removal = null;
+        ChangeFeedResponse? result = null;
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            removal = Task.Run(() => harness.SendAsync(
+                new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.RemoveRoot, root)));
 
-        var removal = Task.Run(() => harness.SendAsync(
-            new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.RemoveRoot, root)));
+            var raced = await Task.WhenAny(removal, Task.Delay(TimeSpan.FromMilliseconds(400)));
+            Assert.NotSame(removal, raced);
+            Assert.True(
+                File.Exists(harness.SubscriptionPath()),
+                "Kaldırma kapı tutulurken aboneliği sildi.");
+        }
+        finally
+        {
+            release.Set();
+            await blocker;
+            if (removal != null) result = await removal;
+        }
 
-        var raced = await Task.WhenAny(removal, Task.Delay(TimeSpan.FromMilliseconds(400)));
-        Assert.NotSame(removal, raced);
-        Assert.True(
-            File.Exists(harness.SubscriptionPath()),
-            "Kaldırma kapı tutulurken aboneliği sildi.");
-
-        release.Set();
-        await removal;
-        await blocker;
-
+        Assert.Equal(ChangeFeedResponseStatus.Ok, result!.Status);
         Assert.Empty(harness.StoredRoots());
     }
 
