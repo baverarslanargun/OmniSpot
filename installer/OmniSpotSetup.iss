@@ -8,7 +8,7 @@
   #define ServicePublishDir "..\artifacts\demo-installer\service"
 #endif
 
-#define MyAppName "OmniSpot Demo"
+#define MyAppName "OmniSpot"
 #define MyAppPublisher "OmniSpot"
 #define MyAppURL "https://github.com/baverarslanargun/OmniSpot"
 #define MyAppExeName "OmniSpot.exe"
@@ -28,7 +28,7 @@ DisableDirPage=yes
 DefaultGroupName={#MyAppName}
 AllowNoIcons=yes
 OutputDir=output
-OutputBaseFilename=OmniSpot-{#MyAppVersion}-Demo-Setup
+OutputBaseFilename=OmniSpot-{#MyAppVersion}-Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 SetupIconFile=..\SmartFileLauncher.UI\Resources\app.ico
@@ -44,7 +44,7 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 UninstallDisplayName={#MyAppName}
 VersionInfoVersion={#MyAppVersion}.0
 VersionInfoCompany={#MyAppPublisher}
-VersionInfoDescription=OmniSpot geçici demo kurulumu
+VersionInfoDescription=OmniSpot kurulumu
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -128,17 +128,18 @@ begin
 
   if not IsWin64 then
   begin
-    MsgBox('OmniSpot yalnızca 64-bit Windows üzerinde kurulabilir.', mbCriticalError, MB_OK);
+    SuppressibleMsgBox('OmniSpot yalnızca 64-bit Windows üzerinde kurulabilir.', mbCriticalError, MB_OK, IDOK);
     Exit;
   end;
 
   if ServiceExists() then
   begin
-    MsgBox(
-      ServiceName + ' adlı servis zaten kurulu. Geçici installer mevcut servisi ' +
+    SuppressibleMsgBox(
+      ServiceName + ' adlı servis zaten kurulu. Bu installer mevcut servisi ' +
       'devralmaz. Önce servisin ait olduğu kurulumu kaldırın.',
       mbCriticalError,
-      MB_OK);
+      MB_OK,
+      IDOK);
     Exit;
   end;
 

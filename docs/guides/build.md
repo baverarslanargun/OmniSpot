@@ -57,11 +57,13 @@ installer ile SHA-256 dosyasını üretir.
 
 Çıktılar:
 
-- `installer\output\OmniSpot-1.0.0-Demo-Setup.exe`
-- `installer\output\OmniSpot-1.0.0-Demo-Setup.exe.sha256`
+- `installer\output\OmniSpot-1.0.0-Setup.exe`
+- `installer\output\OmniSpot-1.0.0-Setup.exe.sha256`
 
 Installer yükseltilmiş per-machine kurulum yapar. Aynı adlı
 `OmniSpotChangeFeed` servisi zaten varsa mevcut kaydı devralmadan durur.
+Sessiz kurulumda (`/VERYSILENT /SUPPRESSMSGBOXES`) aynı korumalar uygulanır;
+uyarı penceresi beklenmeden kurulum hata koduyla sonlanır.
 
 ## 📁 Proje Yapısı
 
