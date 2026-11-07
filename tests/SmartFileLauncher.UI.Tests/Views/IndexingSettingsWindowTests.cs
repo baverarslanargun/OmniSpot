@@ -11,6 +11,7 @@ using Xunit;
 
 namespace SmartFileLauncher.UI.Tests.Views;
 
+[Collection("Settings windows")]
 public sealed class IndexingSettingsWindowTests
 {
     [Fact]
