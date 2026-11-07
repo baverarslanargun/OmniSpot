@@ -1,5 +1,7 @@
+using Microsoft.Win32.SafeHandles;
 using System.ComponentModel;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -122,14 +124,20 @@ public sealed class ChangeFeedIpcTests
         var name = UniqueName();
         using var server = ChangeFeedPipeFactory.CreateFirstInstance(name);
 
-        using var client = new NamedPipeClientStream(
-            ".",
-            name,
-            PipeDirection.InOut,
-            PipeOptions.None,
-            TokenImpersonationLevel.Impersonation);
+        RunWithoutAdministrator(() =>
+        {
+            using var client = new NamedPipeClientStream(
+                ".",
+                name,
+                PipeDirection.InOut,
+                PipeOptions.None,
+                TokenImpersonationLevel.Impersonation);
 
-        Assert.Throws<UnauthorizedAccessException>(() => client.Connect(2000));
+            var failure = Assert.Throws<UnauthorizedAccessException>(() => client.Connect(2000));
+            using var allowed = ChangeFeedPipeFactory.Connect(name, TokenImpersonationLevel.Impersonation);
+            Assert.True(allowed.IsConnected);
+            return failure;
+        });
     }
 
     [Fact]
@@ -147,13 +155,11 @@ public sealed class ChangeFeedIpcTests
     [Fact]
     public void PipeFactory_RefusesAnUnprivilegedSecondServerInstance()
     {
-        Assert.False(HoldsPrivilegedGroup());
-
         var name = UniqueName();
         using var first = ChangeFeedPipeFactory.CreateFirstInstance(name);
 
-        var failure = Assert.Throws<ChangeFeedPipeException>(
-            () => ChangeFeedPipeFactory.Create(name, firstInstance: false));
+        var failure = RunWithoutAdministrator(() => Assert.Throws<ChangeFeedPipeException>(
+            () => ChangeFeedPipeFactory.Create(name, firstInstance: false)));
 
         Assert.Equal(5, ((Win32Exception)failure.InnerException!).NativeErrorCode);
     }
@@ -228,12 +234,61 @@ public sealed class ChangeFeedIpcTests
         ChangeFeedCallerIdentity.EnsureNotImpersonating();
     }
 
-    private static bool HoldsPrivilegedGroup()
+    private static T RunWithoutAdministrator<T>(Func<T> action)
     {
-        using var identity = WindowsIdentity.GetCurrent();
-        return identity.Groups?.Contains(
-            new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null)) == true;
+        const uint disableMaxPrivilege = 0x1;
+        var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+        var sidBytes = new byte[administrators.BinaryLength];
+        administrators.GetBinaryForm(sidBytes, 0);
+        var pinned = GCHandle.Alloc(sidBytes, GCHandleType.Pinned);
+        try
+        {
+            var disabled = new SidAndAttributes { Sid = pinned.AddrOfPinnedObject(), Attributes = 0 };
+            using var current = WindowsIdentity.GetCurrent(
+                TokenAccessLevels.Query | TokenAccessLevels.Duplicate | TokenAccessLevels.Impersonate);
+            if (!CreateRestrictedToken(current.AccessToken, disableMaxPrivilege, 1, ref disabled,
+                    0, IntPtr.Zero, 0, IntPtr.Zero, out var restricted))
+            {
+                var error = Marshal.GetLastWin32Error();
+                restricted.Dispose();
+                throw new Win32Exception(error, "Kısıtlı test token'ı oluşturulamadı.");
+            }
+
+            using (restricted)
+            {
+                return WindowsIdentity.RunImpersonated(restricted, () =>
+                {
+                    using var identity = WindowsIdentity.GetCurrent();
+                    Assert.False(new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator));
+                    return action();
+                });
+            }
+        }
+        finally
+        {
+            pinned.Free();
+        }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SidAndAttributes
+    {
+        public IntPtr Sid;
+        public uint Attributes;
+    }
+
+    [DllImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CreateRestrictedToken(
+        SafeAccessTokenHandle existingToken,
+        uint flags,
+        uint disableSidCount,
+        ref SidAndAttributes sidsToDisable,
+        uint deletePrivilegeCount,
+        IntPtr privilegesToDelete,
+        uint restrictedSidCount,
+        IntPtr sidsToRestrict,
+        out SafeAccessTokenHandle restrictedToken);
 
     [Fact]
     public async Task CallerIdentity_ReturnsTheConnectionSidAndReverts()

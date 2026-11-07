@@ -103,6 +103,8 @@ public sealed class ChangeFeedStoreSecurityTests
 
         var inherit = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
         var squatted = new DirectorySecurity();
+        using var self = WindowsIdentity.GetCurrent();
+        squatted.SetOwner(self.User!);
         squatted.SetAccessRuleProtection(true, false);
         squatted.AddAccessRule(new FileSystemAccessRule(
             System, FileSystemRights.FullControl, inherit, PropagationFlags.None, AccessControlType.Allow));
