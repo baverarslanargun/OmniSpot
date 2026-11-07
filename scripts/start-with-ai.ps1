@@ -1,10 +1,11 @@
 [CmdletBinding()]
 param(
     [string]$ConfigPath = (Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OmniSpot\groq-keys.json"),
+    [string]$CelerisConfigPath = (Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "OmniSpot\celeris-key.json"),
     [string]$ExecutablePath,
     [string]$ProbeQuery,
-    [ValidateSet("qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "llama-3.3-70b-versatile")]
-    [string]$ProbeModel = "qwen/qwen3.8-27b",
+    [ValidateSet("celeris-1", "qwen/qwen3.8-27b", "openai/gpt-oss-20b", "openai/gpt-oss-120b", "groq/compound", "llama-3.3-70b-versatile")]
+    [string]$ProbeModel = "celeris-1",
     [ValidateSet("none", "default", "low", "medium", "high")]
     [string]$ProbeReasoningEffort = "medium",
     [switch]$ValidateOnly
@@ -50,6 +51,7 @@ $intentPlain = $null
 $keywordPlain = $null
 
 try {
+    $useCeleris = [string]::IsNullOrWhiteSpace($ProbeQuery) -or $ProbeModel -eq "celeris-1"
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         throw "AI anahtarlari yapilandirilmadi. scripts\configure-ai-shortcut.ps1 dosyasini bir kez calistirin."
     }
@@ -62,7 +64,19 @@ try {
         throw "AI anahtar dosyasi gecersiz veya desteklenmeyen bir surumde."
     }
 
-    $intentSecure = ConvertTo-SecureString ([string]$config.intentApiKey)
+    if ($useCeleris) {
+        if (-not (Test-Path -LiteralPath $CelerisConfigPath)) {
+            throw "Celeris anahtari yapilandirilmadi. scripts\configure-celeris.ps1 dosyasini bir kez calistirin."
+        }
+        $celerisConfig = Get-Content -Raw -Encoding UTF8 -LiteralPath $CelerisConfigPath | ConvertFrom-Json
+        if ($celerisConfig.version -ne 1 -or @($celerisConfig.PSObject.Properties.Name) -notcontains "apiKey") {
+            throw "Celeris anahtar dosyasi gecersiz veya desteklenmeyen bir surumde."
+        }
+        $intentSecure = ConvertTo-SecureString ([string]$celerisConfig.apiKey)
+    }
+    else {
+        $intentSecure = ConvertTo-SecureString ([string]$config.intentApiKey)
+    }
     $keywordSecure = ConvertTo-SecureString ([string]$config.keywordApiKey)
     $intentPlain = [Net.NetworkCredential]::new("", $intentSecure).Password
     $keywordPlain = [Net.NetworkCredential]::new("", $keywordSecure).Password
@@ -109,7 +123,7 @@ try {
         }
     }
 
-    $intentName = "OMNISPOT_GROQ_INTENT_API_KEY"
+    $intentName = if ($useCeleris) { "OMNISPOT_CELERIS_API_KEY" } else { "OMNISPOT_GROQ_INTENT_API_KEY" }
     $keywordName = "OMNISPOT_GROQ_KEYWORD_API_KEY"
     $hadIntent = Test-Path "Env:$intentName"
     $hadKeyword = Test-Path "Env:$keywordName"

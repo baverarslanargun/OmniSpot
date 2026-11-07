@@ -17,7 +17,7 @@ public sealed class IntentParserTests
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var intent = new GatedHttpMessageHandler("""{"mode":"keyword","target":"file","open":false}""", gate.Task);
         var keyword = new GatedHttpMessageHandler("""{"anchors":[{"primary":"rapor","variants":[],"translations":[]}],"phrases":[],"context":[]}""", gate.Task);
-        var parser = new IntentParser(new HttpClient(intent), new HttpClient(keyword));
+        var parser = new IntentParser(new HttpClient(intent), new HttpClient(keyword), model: "qwen/qwen3.8-27b");
 
         var low = parser.ParseWithGroqEffortAsync("low-query", "low");
         var high = parser.ParseWithGroqEffortAsync("high-query", "high");
@@ -105,7 +105,7 @@ public sealed class IntentParserTests
     }
 
     [Fact]
-    public async Task ProductionDefaultsUseQwenMediumForBothRequests()
+    public async Task ExplicitQwenProfileUsesMediumForBothRequests()
     {
         var intentHandler = new QueueHttpMessageHandler(
             () => Completion("""
@@ -132,7 +132,8 @@ public sealed class IntentParserTests
             new HttpClient(intentHandler),
             new HttpClient(keywordHandler),
             nowProvider: () => new DateTimeOffset(2026, 7, 31, 12, 0, 0, TimeSpan.Zero),
-            timeZone: TimeZoneInfo.Utc);
+            timeZone: TimeZoneInfo.Utc,
+            model: "qwen/qwen3.8-27b");
 
         await parser.ParseWithGroqAsync("bu yaza ait biletler");
 
@@ -164,8 +165,9 @@ public sealed class IntentParserTests
             Assert.Equal(
                 schema.GetProperty("properties").EnumerateObject().Select(p => p.Name).Order(),
                 schema.GetProperty("required").EnumerateArray().Select(p => p.GetString()).Order());
-            Assert.Equal(2048, root.GetProperty("max_completion_tokens").GetInt32());
         }
+        Assert.Equal(2048, intentDocument.RootElement.GetProperty("max_completion_tokens").GetInt32());
+        Assert.Equal(768, keywordDocument.RootElement.GetProperty("max_completion_tokens").GetInt32());
         var intentProperties = intentDocument.RootElement.GetProperty("response_format").GetProperty("json_schema").GetProperty("schema").GetProperty("properties");
         Assert.Equal(12, intentProperties.EnumerateObject().Count());
         foreach (var field in new[] { "created_from", "created_to_exclusive", "modified_from", "modified_to_exclusive", "min_mb", "max_mb" })

@@ -296,7 +296,7 @@ public sealed class IntentSearchLayoutContractTests
         using var keywordClient = new HttpClient(new CompletionHandler(keywords));
         var parser = new IntentParser(intentClient, keywordClient,
             nowProvider: () => new DateTimeOffset(2026, 7, 31, 12, 0, 0, TimeSpan.Zero),
-            timeZone: TimeZoneInfo.Utc);
+            timeZone: TimeZoneInfo.Utc, model: "qwen/qwen3.8-27b");
         var tokenizer = new BasicTokenizer();
         var scoring = new BasicScoringStrategy();
         var standard = new SearchEngine(_ => state, tokenizer, scoring);

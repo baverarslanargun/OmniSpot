@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SmartFileLauncher.UI.Services;
 using SmartFileLauncher.UI.ViewModels;
 
@@ -112,11 +113,25 @@ public partial class MainWindow
     private void HandleThumbnailCacheTrimmed()
     {
         if (_isPreparedForShutdown || Interlocked.Exchange(ref _thumbnailTrimPending, 1) != 0) return;
-        _ = Dispatcher.InvokeAsync(() =>
+        _ = Dispatcher.InvokeAsync(ReleaseTrimmedThumbnailsAsync, DispatcherPriority.ApplicationIdle);
+    }
+
+    private async Task ReleaseTrimmedThumbnailsAsync()
+    {
+        try
+        {
+            if (_isPreparedForShutdown) return;
+            await WaitForSearchPresentationAsync(_lifetimeCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+        finally
         {
             Interlocked.Exchange(ref _thumbnailTrimPending, 0);
-            if (!_isPreparedForShutdown) ReleaseUnretainedThumbnails();
-        });
+        }
+        if (!_isPreparedForShutdown) ReleaseUnretainedThumbnails();
     }
 
     private void ReleaseUnretainedThumbnails()

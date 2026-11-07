@@ -5,7 +5,7 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
         Title="OmniSpot" 
-        Icon="/Resources/app.ico"
+        Icon="/OmniSpot;component/Resources/app.ico"
         WindowStyle="None" 
         ResizeMode="NoResize" 
         Topmost="False"
@@ -19,6 +19,7 @@
         MaxHeight="700"
         WindowStartupLocation="CenterScreen" 
         KeyDown="Window_KeyDown"
+        xmlns:services="clr-namespace:SmartFileLauncher.UI.Services"
         xmlns:converters="clr-namespace:SmartFileLauncher.UI.Converters">
     
     <Window.Resources>
@@ -28,6 +29,7 @@
         </Style>
         <Style x:Key="SearchWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}"/>
         <Style x:Key="AiWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}"/>
+        <converters:NotNullConverter x:Key="NotNullConverter"/>
         <Style x:Key="ToolbarButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="#F1F5F9"/>
             <Setter Property="BorderBrush" Value="#E2E8F0"/>
@@ -80,7 +82,7 @@
             </Viewbox>
         </DataTemplate>
         <DataTemplate x:Key="FileIconTemplate">
-            <Grid>
+            <Grid x:Name="IconRoot">
                 <Viewbox x:Name="Vector" Stretch="Uniform" Margin="2" Visibility="Collapsed">
                     <Grid Width="24" Height="24">
                         <Path Fill="{Binding Icon, Converter={StaticResource IconTint}}" Data="{StaticResource PageGeometry}"/>
@@ -109,14 +111,18 @@
                 <DataTrigger Binding="{Binding Thumbnail}" Value="{x:Null}">
                     <Setter TargetName="Img" Property="Visibility" Value="Collapsed"/>
                     <Setter TargetName="Vector" Property="Visibility" Value="Visible"/>
-                    <DataTrigger.ExitActions>
-                        <BeginStoryboard>
-                            <Storyboard>
-                                <DoubleAnimation Storyboard.TargetName="Img" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.18"/>
-                            </Storyboard>
-                        </BeginStoryboard>
-                    </DataTrigger.ExitActions>
                 </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding Thumbnail, Converter={StaticResource NotNullConverter}}" Value="True"/>
+                        <Condition Binding="{Binding ElementName=IconRoot, Path=(services:UiAnimationScope.ThumbnailFadeEnabled)}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <MultiDataTrigger.EnterActions>
+                        <BeginStoryboard><Storyboard>
+                            <DoubleAnimation Storyboard.TargetName="Img" Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.18"/>
+                        </Storyboard></BeginStoryboard>
+                    </MultiDataTrigger.EnterActions>
+                </MultiDataTrigger>
             </DataTemplate.Triggers>
         </DataTemplate>
         <converters:ItemIconTemplateSelector x:Key="ItemIconSelector" Folder="{StaticResource FolderIconTemplate}" File="{StaticResource FileIconTemplate}"/>
@@ -991,10 +997,18 @@
                                          Padding="0"/>
                             </Grid>
 
-                            <TextBlock x:Name="BackgroundIndexStatus" Grid.Column="2" Text="AI hazırlanıyor"
-                                       FontSize="9" Foreground="#64748B" TextAlignment="Right" VerticalAlignment="Center"
+                            <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                            <TextBlock x:Name="SearchLatencyText"
+                                       Text="— ms" FontFamily="Consolas" FontSize="10"
+                                       Foreground="#64748B" VerticalAlignment="Center"
+                                       TextAlignment="Right" MinWidth="48" Margin="10,0,0,0"
+                                       Visibility="Collapsed"
+                                       AutomationProperties.Name="Arama süresi"/>
+                            <TextBlock x:Name="BackgroundIndexStatus" Text="AI hazırlanıyor"
+                                       FontSize="9" Foreground="#64748B" TextAlignment="Right"
                                        Margin="10,2,0,0" Visibility="Collapsed"
                                        ToolTip="Dosya araması hazır. AI ve gelişmiş arama indeksi arka planda hazırlanıyor."/>
+                            </StackPanel>
                             <Grid Grid.Column="3">
                                 <Border x:Name="FilterBadge"
                                         Visibility="Collapsed"
@@ -1436,7 +1450,7 @@
                 </Border>
 
                 <!-- Search Results List -->
-                <Border x:Name="ResultsContainer" 
+                <Border x:Name="ResultsContainer" services:UiAnimationScope.ThumbnailFadeEnabled="False"
                         Background="Transparent"
                         CornerRadius="0,0,8,8"
                         Visibility="Collapsed">

@@ -4,9 +4,7 @@ using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Services;
 
 const string qwenModel = "qwen/qwen3.8-27b";
-const string keywordReasoningEffort = "medium";
-
-var model = qwenModel;
+var model = "celeris-1";
 var reasoningEffort = "medium";
 var queryArguments = new List<string>();
 for (var index = 0; index < args.Length; index++)
@@ -42,8 +40,10 @@ if (input.Length == 0)
 }
 
 var stopwatch = Stopwatch.StartNew();
+var intentReasoningEffort = model == "celeris-1" ? "none" : reasoningEffort;
+var keywordReasoningEffort = model == "celeris-1" ? reasoningEffort : "medium";
 var parser = new IntentParser(
-    reasoningEffort: reasoningEffort,
+    reasoningEffort: intentReasoningEffort,
     keywordReasoningEffort: keywordReasoningEffort,
     model: model,
     keywordModel: qwenModel);
@@ -68,7 +68,7 @@ var output = new
     },
     reasoning_effort = new
     {
-        intent = reasoningEffort,
+        intent = intentReasoningEffort,
         keyword = keywordReasoningEffort
     },
     elapsed_ms = stopwatch.ElapsedMilliseconds,

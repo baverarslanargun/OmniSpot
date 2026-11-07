@@ -349,7 +349,7 @@ public partial class MainWindow
             SyncViewMenus();
             if (!string.IsNullOrWhiteSpace(SearchBox.Text))
             {
-                BeginSearch(SearchBox.Text, debounce: false);
+                BeginSearch(SearchBox.Text);
             }
 
             return;

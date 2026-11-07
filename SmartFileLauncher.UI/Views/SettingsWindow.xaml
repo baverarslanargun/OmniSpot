@@ -23,6 +23,8 @@
         <SolidColorBrush x:Key="Line" Color="#E2E8F0"/>
         <SolidColorBrush x:Key="Ground" Color="#F6F8FC"/>
         <SolidColorBrush x:Key="Accent" Color="#007AFF"/>
+        <SolidColorBrush x:Key="AccentPressed" Color="#0055BB"/>
+        <SolidColorBrush x:Key="AccentHover" Color="#0066DD"/>
 
         <Style x:Key="ModernButton" TargetType="Button">
             <Setter Property="Background" Value="{StaticResource Accent}"/>
@@ -519,6 +521,33 @@
             <Setter Property="VerticalAlignment" Value="Center"/>
             <Setter Property="IsHitTestVisible" Value="False"/>
         </Style>
+        <Style x:Key="ApiKeyInput" TargetType="PasswordBox">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{StaticResource Ink}"/>
+            <Setter Property="Background" Value="{StaticResource Ground}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource LineStrong}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Padding" Value="10,0"/>
+            <Setter Property="Height" Value="32"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="VerticalContentAlignment" Value="Center"/>
+            <Setter Property="FocusVisualStyle" Value="{StaticResource FocusRing}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="PasswordBox">
+                        <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center"/>
+                        </Border>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                    <Setter Property="BorderBrush" Value="{StaticResource Accent}"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
     <Grid>
@@ -648,6 +677,74 @@
                             </StackPanel>
                             <CheckBox Grid.Column="1" x:Name="GridViewDefaultCheckbox" Style="{StaticResource Switch}"/>
                         </Grid>
+                    </StackPanel>
+                </Border>
+
+                <Border x:Name="AiKeysCard" Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="AI anahtarları" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="Doğal dil araması için sağlayıcı anahtarlarını yönetin."
+                                   Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                        <Border BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Margin="0,16,0,0" Padding="0,16,0,16">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Celeris" Style="{StaticResource RowLabel}" FontSize="14"/>
+                                        <TextBlock x:Name="CelerisKeyStatus" Style="{StaticResource Hint}" AutomationProperties.LiveSetting="Polite"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="CelerisChangeKeyButton" Content="Değiştir" Style="{StaticResource SecondaryButton}" Margin="16,0,0,0"
+                                            Click="ChangeCelerisKey_Click" AutomationProperties.Name="Celeris anahtarını değiştir"/>
+                                </Grid>
+                                <StackPanel x:Name="CelerisKeyEditor" Visibility="Collapsed" Margin="0,14,0,0">
+                                    <TextBlock Text="Yeni Celeris API anahtarı" Style="{StaticResource RowLabel}" FontSize="12" Margin="0,0,0,6"/>
+                                    <PasswordBox x:Name="CelerisApiKey" Style="{StaticResource ApiKeyInput}" KeyDown="AiKeyInput_KeyDown"
+                                                 AutomationProperties.Name="Yeni Celeris API anahtarı"/>
+                                    <TextBlock x:Name="CelerisKeyHint" Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                                    <TextBlock x:Name="CelerisKeyError" Style="{StaticResource Validation}" AutomationProperties.LiveSetting="Assertive"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                                        <Button Content="Vazgeç" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                                Click="CancelCelerisKey_Click" AutomationProperties.Name="Celeris anahtarı değişikliğinden vazgeç"/>
+                                        <Button Content="Anahtarı kaydet" Style="{StaticResource ModernButton}" MinHeight="32"
+                                                Click="SaveCelerisKey_Click" AutomationProperties.Name="Celeris anahtarını kaydet"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border BorderBrush="{StaticResource Line}" BorderThickness="0,1,0,0" Padding="0,16,0,0">
+                            <StackPanel>
+                                <Grid>
+                                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="Groq" Style="{StaticResource RowLabel}" FontSize="14"/>
+                                        <TextBlock x:Name="GroqKeyStatus" Style="{StaticResource Hint}" AutomationProperties.LiveSetting="Polite"/>
+                                    </StackPanel>
+                                    <Button Grid.Column="1" x:Name="GroqChangeKeyButton" Content="Değiştir" Style="{StaticResource SecondaryButton}" Margin="16,0,0,0"
+                                            Click="ChangeGroqKey_Click" AutomationProperties.Name="Groq anahtarını değiştir"/>
+                                </Grid>
+                                <StackPanel x:Name="GroqKeyEditor" Visibility="Collapsed" Margin="0,14,0,0">
+                                    <TextBlock Text="Yeni Groq API anahtarı" Style="{StaticResource RowLabel}" FontSize="12" Margin="0,0,0,6"/>
+                                    <PasswordBox x:Name="GroqApiKey" Style="{StaticResource ApiKeyInput}" KeyDown="AiKeyInput_KeyDown"
+                                                 AutomationProperties.Name="Yeni Groq API anahtarı"/>
+                                    <TextBlock x:Name="GroqKeyHint" Style="{StaticResource Hint}" Margin="0,6,0,0"/>
+                                    <TextBlock x:Name="GroqKeyError" Style="{StaticResource Validation}" AutomationProperties.LiveSetting="Assertive"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                                        <Button Content="Vazgeç" Style="{StaticResource SecondaryButton}" Margin="0,0,8,0"
+                                                Click="CancelGroqKey_Click" AutomationProperties.Name="Groq anahtarı değişikliğinden vazgeç"/>
+                                        <Button Content="Anahtarı kaydet" Style="{StaticResource ModernButton}" MinHeight="32"
+                                                Click="SaveGroqKey_Click" AutomationProperties.Name="Groq anahtarını kaydet"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
+                        <Border x:Name="AiKeysRestartNotice" Style="{StaticResource Inset}" Visibility="Collapsed" Margin="0,16,0,0">
+                            <Grid>
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Yeni anahtarlar yeniden başlatınca kullanılacak." Style="{StaticResource Hint}" Foreground="{StaticResource Ink}" VerticalAlignment="Center" Margin="0"/>
+                                <Button Grid.Column="1" Content="Yeniden başlat" Style="{StaticResource SecondaryButton}" Margin="12,0,0,0"
+                                        Click="RestartApplication_Click" AutomationProperties.Name="Yeni anahtarları kullanmak için OmniSpot'u yeniden başlat"/>
+                            </Grid>
+                        </Border>
                     </StackPanel>
                 </Border>
 

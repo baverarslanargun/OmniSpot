@@ -126,6 +126,25 @@ public sealed class SearchApplicationService : ISearchApplicationService
             structuredQuery);
     }
 
+    public async Task<SearchOutcome> RefreshAsync(
+        SearchRequest request,
+        SearchOutcome previousOutcome,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(previousOutcome);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var results = previousOutcome.StructuredQuery is { } structuredQuery
+            ? await Task.Run(
+                () => _advancedSearch(structuredQuery, request.MaxResults, request.View, cancellationToken),
+                cancellationToken).ConfigureAwait(false)
+            : await RunStandardSearchAsync(request, cancellationToken).ConfigureAwait(false);
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return previousOutcome with { Results = results, AutoOpenPath = null };
+    }
+
     private Task<IReadOnlyList<SearchResult>> RunStandardSearchAsync(
         SearchRequest request,
         CancellationToken cancellationToken) =>

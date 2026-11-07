@@ -128,7 +128,10 @@ public sealed class ApplicationCompositionRoot : IDisposable
             _indexLifecycle.CreateSearchState,
             tokenizer,
             scoring);
-        var intentParser = new IntentParser(_log.Write);
+        var aiCredentials = _measurementRun == null ? AiCredentials.Load(_log.Write) : null;
+        var intentParser = new IntentParser(_log.Write,
+            intentApiKey: aiCredentials?.IntentApiKey,
+            keywordApiKey: aiCredentials?.KeywordApiKey);
 
         _search = new SearchApplicationService(
             standardSearch.Search,

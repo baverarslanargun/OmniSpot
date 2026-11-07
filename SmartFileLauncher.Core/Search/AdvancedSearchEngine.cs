@@ -327,6 +327,12 @@ public class AdvancedSearchEngine
         var allowedExtensions = CreateFilterOnlyAllowedExtensions(query, cancellationToken);
         var expandedFolderNames = ExpandFilterFolderNames(query, cancellationToken);
         var userWantsFolders = query.TargetType?.PrefersFolder == true;
+        filter = filter with
+        {
+            PathSegments = expandedFolderNames,
+            AllowedExtensions = !userWantsFolders && allowedExtensions.Count > 0 ? allowedExtensions : null,
+            IncludeDirectoriesWithoutExtension = query.IncludeFolderContents
+        };
         var expandsFolders = query.IncludeFolderContents && !userWantsFolders && filter.IncludeDirectories;
         var seen = expandsFolders ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         var winners = new PriorityQueue<FilterCandidate, FilterCandidate>(
