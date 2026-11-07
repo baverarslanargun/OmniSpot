@@ -10,6 +10,7 @@ public sealed class AppSettings
     public bool NaturalLanguageModeEnabled { get; set; }
     public string AiReasoningEffort { get; set; } = "medium";
     public bool GridViewEnabled { get; set; }
+    public bool AnimationsEnabled { get; set; } = true;
     public int SearchDebounceMs { get; set; } = 1200;
     public bool DiagnosticsLoggingEnabled { get; set; }
     public bool DiagnosticsMetricLoggingEnabled { get; set; }
@@ -38,6 +39,7 @@ public sealed class AppSettings
         NaturalLanguageModeEnabled = false;
         AiReasoningEffort = "medium";
         GridViewEnabled = false;
+        AnimationsEnabled = true;
         SearchDebounceMs = 1200;
         DiagnosticsLoggingEnabled = false;
         DiagnosticsMetricLoggingEnabled = false;

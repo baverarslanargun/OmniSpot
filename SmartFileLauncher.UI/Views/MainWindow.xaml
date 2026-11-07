@@ -26,9 +26,72 @@
         <Style x:Key="IndexWaitGlint" TargetType="TextBlock">
             <Setter Property="IsHitTestVisible" Value="False"/>
             <Setter Property="Foreground" Value="#64748B"/>
+            <Setter Property="OpacityMask">
+                <Setter.Value>
+                    <LinearGradientBrush MappingMode="Absolute" StartPoint="0,0" EndPoint="96,0">
+                        <GradientStop Color="#00000000" Offset="0"/>
+                        <GradientStop Color="#FF000000" Offset="0.5"/>
+                        <GradientStop Color="#00000000" Offset="1"/>
+                        <LinearGradientBrush.Transform>
+                            <TranslateTransform X="-10000"/>
+                        </LinearGradientBrush.Transform>
+                    </LinearGradientBrush>
+                </Setter.Value>
+            </Setter>
         </Style>
-        <Style x:Key="SearchWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}"/>
-        <Style x:Key="AiWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}"/>
+        <Style x:Key="SearchWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}">
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+                        <Condition Binding="{Binding IsVisible, ElementName=SearchWatermark}" Value="True"/>
+                        <Condition Binding="{Binding Enabled, Source={x:Static services:UiAnimationSettings.Current}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <MultiDataTrigger.EnterActions>
+                        <BeginStoryboard Name="SearchGlint">
+                            <Storyboard>
+                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="(TextBlock.OpacityMask).(Brush.Transform).(TranslateTransform.X)"
+                                                               Duration="0:0:2.6" RepeatBehavior="Forever">
+                                    <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="-96"/>
+                                    <EasingDoubleKeyFrame KeyTime="0:0:1.2" Value="485">
+                                        <EasingDoubleKeyFrame.EasingFunction><SineEase EasingMode="EaseInOut"/></EasingDoubleKeyFrame.EasingFunction>
+                                    </EasingDoubleKeyFrame>
+                                </DoubleAnimationUsingKeyFrames>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </MultiDataTrigger.EnterActions>
+                    <MultiDataTrigger.ExitActions>
+                        <RemoveStoryboard BeginStoryboardName="SearchGlint"/>
+                    </MultiDataTrigger.ExitActions>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
+        <Style x:Key="AiWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}">
+            <Style.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
+                        <Condition Binding="{Binding Enabled, Source={x:Static services:UiAnimationSettings.Current}}" Value="True"/>
+                    </MultiDataTrigger.Conditions>
+                    <MultiDataTrigger.EnterActions>
+                        <BeginStoryboard Name="AiGlint">
+                            <Storyboard>
+                                <DoubleAnimationUsingKeyFrames Storyboard.TargetProperty="(TextBlock.OpacityMask).(Brush.Transform).(TranslateTransform.X)"
+                                                               Duration="0:0:2.6" RepeatBehavior="Forever">
+                                    <DiscreteDoubleKeyFrame KeyTime="0:0:0" Value="-547"/>
+                                    <EasingDoubleKeyFrame KeyTime="0:0:1.2" Value="34">
+                                        <EasingDoubleKeyFrame.EasingFunction><SineEase EasingMode="EaseInOut"/></EasingDoubleKeyFrame.EasingFunction>
+                                    </EasingDoubleKeyFrame>
+                                </DoubleAnimationUsingKeyFrames>
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </MultiDataTrigger.EnterActions>
+                    <MultiDataTrigger.ExitActions>
+                        <RemoveStoryboard BeginStoryboardName="AiGlint"/>
+                    </MultiDataTrigger.ExitActions>
+                </MultiDataTrigger>
+            </Style.Triggers>
+        </Style>
         <converters:NotNullConverter x:Key="NotNullConverter"/>
         <Style x:Key="ToolbarButtonStyle" TargetType="Button">
             <Setter Property="Background" Value="#F1F5F9"/>
@@ -116,6 +179,7 @@
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding Thumbnail, Converter={StaticResource NotNullConverter}}" Value="True"/>
                         <Condition Binding="{Binding ElementName=IconRoot, Path=(services:UiAnimationScope.ThumbnailFadeEnabled)}" Value="True"/>
+                        <Condition Binding="{Binding Enabled, Source={x:Static services:UiAnimationSettings.Current}}" Value="True"/>
                     </MultiDataTrigger.Conditions>
                     <MultiDataTrigger.EnterActions>
                         <BeginStoryboard><Storyboard>
@@ -520,7 +584,7 @@
                                 </Grid>
                             </Border>
                             <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True" Focusable="False"
-                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="Fade">
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="{Binding PopupAnimation, Source={x:Static services:UiAnimationSettings.Current}}">
                                 <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="8">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
@@ -567,7 +631,7 @@
                                 </Grid>
                             </Border>
                             <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True" Focusable="False"
-                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="Fade">
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="{Binding PopupAnimation, Source={x:Static services:UiAnimationSettings.Current}}">
                                 <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="8">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
@@ -614,7 +678,7 @@
                                 </Grid>
                             </Border>
                             <Popup x:Name="PART_Popup" Placement="Right" HorizontalOffset="4" VerticalOffset="-5" AllowsTransparency="True" Focusable="False"
-                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="Fade">
+                                   IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}" PopupAnimation="{Binding PopupAnimation, Source={x:Static services:UiAnimationSettings.Current}}">
                                 <Border Background="White" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="8" Padding="4" Margin="8">
                                     <Border.Effect>
                                         <DropShadowEffect BlurRadius="16" ShadowDepth="4" Opacity="0.15" Color="#000000"/>
@@ -1364,7 +1428,7 @@
                                        HorizontalOffset="-6"
                                        AllowsTransparency="True"
                                        StaysOpen="True"
-                                       PopupAnimation="Fade"
+                                       PopupAnimation="{Binding PopupAnimation, Source={x:Static services:UiAnimationSettings.Current}}"
                                        Closed="FilterBadgePopup_Closed">
                                     <Border Background="White"
                                             BorderBrush="#E2E8F0"
@@ -1486,38 +1550,56 @@
                                HorizontalAlignment="Center" VerticalAlignment="Center"
                                Style="{StaticResource AiWaitGlint}" Visibility="Collapsed"/>
                     </Grid>
-                    <Button x:Name="AiEffortButton" IsEnabled="False" Width="44" Height="40" Margin="4,0,0,0"
+                    <Button x:Name="AiEffortButton" Height="40"
+                            IsEnabled="False"
                             Click="AiEffortButton_Click" AutomationProperties.Name="AI eforu: Medium">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource ToolbarButtonStyle}">
+                                <Setter Property="Width" Value="44"/>
+                                <Setter Property="Margin" Value="4,0,0,0"/>
                                 <Setter Property="Opacity" Value="1"/>
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsChecked, ElementName=NaturalLanguageToggle}" Value="False">
                                         <Setter Property="IsHitTestVisible" Value="False"/>
                                         <Setter Property="Focusable" Value="False"/>
-                                        <DataTrigger.EnterActions>
-                                            <BeginStoryboard>
-                                                <Storyboard>
-                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.14"/>
-                                                    <DoubleAnimation Storyboard.TargetProperty="Width" To="0" Duration="0:0:0.18">
-                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    <ThicknessAnimation Storyboard.TargetProperty="Margin" To="0" Duration="0:0:0.18"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </DataTrigger.EnterActions>
-                                        <DataTrigger.ExitActions>
-                                            <BeginStoryboard>
-                                                <Storyboard>
-                                                    <DoubleAnimation Storyboard.TargetProperty="Width" To="44" Duration="0:0:0.18">
-                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
-                                                    </DoubleAnimation>
-                                                    <ThicknessAnimation Storyboard.TargetProperty="Margin" To="4,0,0,0" Duration="0:0:0.18"/>
-                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" BeginTime="0:0:0.06" Duration="0:0:0.14"/>
-                                                </Storyboard>
-                                            </BeginStoryboard>
-                                        </DataTrigger.ExitActions>
+                                        <Setter Property="Width" Value="0"/>
+                                        <Setter Property="Margin" Value="0"/>
+                                        <Setter Property="Opacity" Value="0"/>
                                     </DataTrigger>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsChecked, ElementName=NaturalLanguageToggle}" Value="False"/>
+                                            <Condition Binding="{Binding Enabled, Source={x:Static services:UiAnimationSettings.Current}}" Value="True"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <MultiDataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard FillBehavior="Stop">
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="1" To="0" Duration="0:0:0.14"/>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Width" From="44" To="0" Duration="0:0:0.18">
+                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <ThicknessAnimation Storyboard.TargetProperty="Margin" From="4,0,0,0" To="0" Duration="0:0:0.18"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </MultiDataTrigger.EnterActions>
+                                    </MultiDataTrigger>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding IsChecked, ElementName=NaturalLanguageToggle}" Value="True"/>
+                                            <Condition Binding="{Binding Enabled, Source={x:Static services:UiAnimationSettings.Current}}" Value="True"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <MultiDataTrigger.EnterActions>
+                                            <BeginStoryboard>
+                                                <Storyboard FillBehavior="Stop">
+                                                    <DoubleAnimation Storyboard.TargetProperty="Width" From="0" To="44" Duration="0:0:0.18">
+                                                        <DoubleAnimation.EasingFunction><CubicEase EasingMode="EaseOut"/></DoubleAnimation.EasingFunction>
+                                                    </DoubleAnimation>
+                                                    <ThicknessAnimation Storyboard.TargetProperty="Margin" From="0" To="4,0,0,0" Duration="0:0:0.18"/>
+                                                    <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" BeginTime="0:0:0.06" Duration="0:0:0.14"/>
+                                                </Storyboard>
+                                            </BeginStoryboard>
+                                        </MultiDataTrigger.EnterActions>
+                                    </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
@@ -2291,7 +2373,7 @@
                            VerticalOffset="6"
                            AllowsTransparency="True"
                            StaysOpen="False"
-                           PopupAnimation="Fade">
+                           PopupAnimation="{Binding PopupAnimation, Source={x:Static services:UiAnimationSettings.Current}}">
                         <Border Width="330" Background="#FFFFFF" BorderBrush="#E2E8F0" BorderThickness="1" CornerRadius="12"
                                 Padding="8" Margin="12,12,12,12">
                             <Border.Effect>

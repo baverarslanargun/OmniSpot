@@ -142,6 +142,7 @@ public partial class MainWindow : Window {
         MeasurementRunLayout? measurementRun) {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
+        UiAnimationSettings.Current.Apply(_appSettings.AnimationsEnabled);
         _settingsApplication = settingsApplication ?? throw new ArgumentNullException(nameof(settingsApplication));
         _indexMaintenance = indexMaintenance ?? throw new ArgumentNullException(nameof(indexMaintenance));
         _indexLifecycle = indexLifecycle ?? throw new ArgumentNullException(nameof(indexLifecycle));
@@ -160,6 +161,8 @@ public partial class MainWindow : Window {
         DataContext = _viewModel;
         InitializeComponent();
         InitializeFileTransfers();
+        System.ComponentModel.PropertyChangedEventManager.AddHandler(
+            UiAnimationSettings.Current, HandleAnimationSettingChanged, nameof(UiAnimationSettings.Enabled));
         TrackMoreOptionsMenuState();
         DesktopIcons.ItemsSource = _desktopRows;
         _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
@@ -289,8 +292,8 @@ public partial class MainWindow : Window {
         Show();
         WindowState = WindowState.Normal;
         if (wasHidden) {
-            Shell.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
-                TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));
+            if (Animate) Shell.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
+                TimeSpan.FromMilliseconds(120)));
         }
         Activate();
         SearchBox.Focus();
@@ -336,6 +339,7 @@ public partial class MainWindow : Window {
     
     private void OnSettingsChanged(object? sender, AppSettings newSettings) {
         _appSettings = newSettings;
+        UiAnimationSettings.Current.Apply(newSettings.AnimationsEnabled);
         LoadAiEffortSelection();
         ApplyThumbnailSettings();
         Log("⚙️ Ayarlar güncellendi");
@@ -480,7 +484,76 @@ public partial class MainWindow : Window {
         CatalogBuildStatus.Text = IndexProgressPresentation.Format(progress, _indexProgressClock.ElapsedMilliseconds);
     }
 
-    private static bool Animate => SystemParameters.ClientAreaAnimation;
+    private static bool Animate => UiAnimationSettings.Current.Enabled;
+
+    private void HandleAnimationSettingChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e) {
+        if (!Animate) StopActiveAnimations();
+        else {
+            if (FolderLoadingBar.Visibility == Visibility.Visible) FolderLoadingBar.IsIndeterminate = true;
+            if (DeltaSyncPanel.Visibility == Visibility.Visible && string.IsNullOrEmpty(DeltaSyncDetails.Text))
+                DeltaSyncProgressBar.IsIndeterminate = true;
+        }
+    }
+
+    private void StopActiveAnimations() {
+        StopPulse(CatalogBuildPulseShift);
+        CatalogBuildPulseShift.X = ((CatalogBuildPanel.ActualWidth > 0 ? CatalogBuildPanel.ActualWidth : 600) - 140) / 2;
+        Shell.BeginAnimation(OpacityProperty, null);
+        Shell.Opacity = 1;
+        foreach (var panel in new FrameworkElement[] { DesktopIconsScroll, ResultsContainer, ResultsList, ResultsGridScroll, EmptyFolderPanel }) {
+            panel.BeginAnimation(OpacityProperty, null);
+            panel.Opacity = 1;
+            panel.CacheMode = null;
+            if (panel.RenderTransform is System.Windows.Media.TranslateTransform translation) {
+                translation.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+                translation.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
+                translation.X = 0;
+                translation.Y = 0;
+            }
+        }
+        ViewModeThumbShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+        ViewModeThumbShift.X = _isGridViewMode ? 28 : 0;
+        AiEffortButton.BeginAnimation(WidthProperty, null);
+        AiEffortButton.BeginAnimation(MarginProperty, null);
+        AiEffortButton.BeginAnimation(OpacityProperty, null);
+        var needleAngle = AiEffortNeedle.Angle;
+        AiEffortNeedle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty, null);
+        AiEffortNeedle.Angle = needleAngle;
+        foreach (var item in _searchResults.ToList()) {
+            if (item.IsRemoving) _searchResults.Remove(item);
+            else item.IsNew = false;
+        }
+        FolderLoadingBar.IsIndeterminate = false;
+        FolderLoadingBar.Value = 50;
+        if (DeltaSyncProgressBar.IsIndeterminate) {
+            DeltaSyncProgressBar.IsIndeterminate = false;
+            DeltaSyncProgressBar.Value = 50;
+        }
+        foreach (var host in new[] { ResultsList, ResultsGrid }) {
+            foreach (var item in _searchResults) {
+                if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container) continue;
+                container.BeginAnimation(OpacityProperty, null);
+                container.Opacity = 1;
+                if (container is System.Windows.Controls.Control control) {
+                    foreach (var name in new[] { "borderScale", "CardScale" }) {
+                        if (control.Template?.FindName(name, control) is System.Windows.Media.ScaleTransform scale) {
+                            scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, null);
+                            scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, null);
+                        }
+                    }
+                    foreach (var name in new[] { "border", "CardBorder" }) {
+                        if (control.Template?.FindName(name, control) is UIElement border)
+                            border.BeginAnimation(OpacityProperty, null);
+                    }
+                }
+                if (container.RenderTransform is System.Windows.Media.TranslateTransform shift) {
+                    shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+                    shift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
+                    container.RenderTransform = null;
+                }
+            }
+        }
+    }
 
     private static System.Windows.Media.Animation.DoubleAnimation Loop(double from, double to, TimeSpan duration, System.Windows.Media.Animation.IEasingFunction? ease = null) =>
         new(from, to, duration) { RepeatBehavior = System.Windows.Media.Animation.RepeatBehavior.Forever, EasingFunction = ease };
@@ -538,8 +611,13 @@ public partial class MainWindow : Window {
         AiEffortButton.ToolTip = $"Anahtar kelime eforu: {label}\nTıkla: Low → Medium → High\nYüksek efor daha uzun sürebilir.";
         System.Windows.Automation.AutomationProperties.SetName(AiEffortButton, $"Anahtar kelime eforu: {label}. Sonraki seviyeye geç");
         var angle = effort switch { "low" => -55d, "high" => 55d, _ => 0d };
-        AiEffortNeedle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty,
-            new System.Windows.Media.Animation.DoubleAnimation(angle, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));
+        if (Animate) {
+            AiEffortNeedle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty,
+                new System.Windows.Media.Animation.DoubleAnimation(angle, TimeSpan.FromMilliseconds(120)));
+        } else {
+            AiEffortNeedle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty, null);
+            AiEffortNeedle.Angle = angle;
+        }
     }
 
     private void AiEffortButton_Click(object sender, RoutedEventArgs e) {
@@ -585,15 +663,23 @@ public partial class MainWindow : Window {
     }
 
     private void ApplyViewMode(UIElement hide, UIElement show) {
-        var duration = TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 160 : 0);
-        var ease = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
-
         hide.Visibility = Visibility.Collapsed;
         show.Visibility = Visibility.Visible;
-        if (show is FrameworkElement shown) AnimatePanel(shown, 0, 0, 0.35);
+        if (show is FrameworkElement shown) {
+            shown.BeginAnimation(OpacityProperty, null);
+            shown.Opacity = 1;
+            shown.RenderTransform = null;
+        }
 
-        var thumbShift = new System.Windows.Media.Animation.DoubleAnimation(_isGridViewMode ? 28 : 0, duration) { EasingFunction = ease };
-        ViewModeThumbShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, thumbShift);
+        if (Animate) {
+            var thumbShift = new System.Windows.Media.Animation.DoubleAnimation(_isGridViewMode ? 28 : 0, TimeSpan.FromMilliseconds(160)) {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut }
+            };
+            ViewModeThumbShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, thumbShift);
+        } else {
+            ViewModeThumbShift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+            ViewModeThumbShift.X = _isGridViewMode ? 28 : 0;
+        }
         var active = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0x7A, 0xFF));
         var idle = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x94, 0xA3, 0xB8));
         ViewModeListIcon.Stroke = _isGridViewMode ? idle : active;
@@ -1366,7 +1452,8 @@ public partial class MainWindow : Window {
 
         DeltaSyncText.Text = "Değişiklikler kontrol ediliyor";
         DeltaSyncDetails.Text = string.Empty;
-        DeltaSyncProgressBar.IsIndeterminate = true;
+        DeltaSyncProgressBar.IsIndeterminate = Animate;
+        if (!Animate) DeltaSyncProgressBar.Value = 50;
         DeltaSyncMinimizedText.Text = "Kontrol ediliyor";
         DeltaSyncPanel.Visibility = Visibility.Visible;
         DeltaSyncMinimized.Visibility = Visibility.Collapsed;
@@ -1392,8 +1479,9 @@ public partial class MainWindow : Window {
         _folderLoadingDelay.Stop();
         _folderLoadingDelay.Start();
         if (DesktopIconsScroll.Visibility == Visibility.Visible && _desktopIcons.Count > 0) {
-            DesktopIconsScroll.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.55,
-                TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));
+            if (Animate) DesktopIconsScroll.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0.55,
+                TimeSpan.FromMilliseconds(120)));
+            else DesktopIconsScroll.Opacity = 0.55;
         }
     }
 
@@ -1402,7 +1490,8 @@ public partial class MainWindow : Window {
         Interlocked.Increment(ref _loadingBarHideToken);
         if (FolderLoadingBar.Visibility == Visibility.Visible) return;
         _loadingBarShownAt = Environment.TickCount64;
-        FolderLoadingBar.IsIndeterminate = true;
+        FolderLoadingBar.IsIndeterminate = Animate;
+        if (!Animate) FolderLoadingBar.Value = 50;
         FolderLoadingBar.Visibility = Visibility.Visible;
     }
 
@@ -1420,7 +1509,7 @@ public partial class MainWindow : Window {
     }
 
     private void AnimatePanel(FrameworkElement panel, double fromX, double fromY, double fromOpacity) {
-        if (!SystemParameters.ClientAreaAnimation) return;
+        if (!Animate) return;
         if (panel.RenderTransform is not System.Windows.Media.TranslateTransform shift) {
             shift = new System.Windows.Media.TranslateTransform();
             panel.RenderTransform = shift;
@@ -1441,6 +1530,11 @@ public partial class MainWindow : Window {
         DesktopScroll?.ScrollToTop();
         var direction = _navigationDirection;
         _navigationDirection = 0;
+        if (!Animate) {
+            DesktopIconsScroll.BeginAnimation(OpacityProperty, null);
+            DesktopIconsScroll.Opacity = 1;
+            return;
+        }
         if (direction == 0 || incomingCount > 400 || incomingCount == 0) {
             DesktopIconsScroll.BeginAnimation(OpacityProperty, null);
             DesktopIconsScroll.Opacity = 1;
