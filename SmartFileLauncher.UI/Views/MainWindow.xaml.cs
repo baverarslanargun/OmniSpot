@@ -514,8 +514,8 @@ public partial class MainWindow : Window {
         var effort = _appSettings.AiReasoningEffort;
         var label = effort switch { "low" => "Low", "high" => "High", _ => "Medium" };
         AiEffortLabel.Text = label;
-        AiEffortButton.ToolTip = $"AI eforu: {label}\nTıkla: Low → Medium → High\nYüksek efor daha uzun sürebilir.";
-        System.Windows.Automation.AutomationProperties.SetName(AiEffortButton, $"AI eforu: {label}. Sonraki seviyeye geç");
+        AiEffortButton.ToolTip = $"Anahtar kelime eforu: {label}\nTıkla: Low → Medium → High\nYüksek efor daha uzun sürebilir.";
+        System.Windows.Automation.AutomationProperties.SetName(AiEffortButton, $"Anahtar kelime eforu: {label}. Sonraki seviyeye geç");
         var angle = effort switch { "low" => -55d, "high" => 55d, _ => 0d };
         AiEffortNeedle.BeginAnimation(System.Windows.Media.RotateTransform.AngleProperty,
             new System.Windows.Media.Animation.DoubleAnimation(angle, TimeSpan.FromMilliseconds(SystemParameters.ClientAreaAnimation ? 120 : 0)));

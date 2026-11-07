@@ -2,16 +2,16 @@
 
 ## Güncel durum
 
-OmniSpot'un aktif doğal dil akışı yerel Phi-3, ONNX veya LLamaSharp modeli kullanmaz. İnternet bağlantısı görülen Doğal Dil modu iki Groq API isteğini paralel çalıştırır ve sonuçları `StructuredQuery` nesnesine dönüştürür. Retriable 429/5xx için her çağrı en fazla bir kez yinelenebildiğinden normalde iki, en kötü durumda dört POST oluşabilir. İnternet yoksa arama standard/local yola düşer. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
+OmniSpot'un aktif doğal dil akışı Celeris-1 ile intent analizi ve Groq üzerindeki Qwen ile keyword üretimini paralel çalıştırır. Sonuçlar `StructuredQuery` nesnesine dönüştürülür. Metadata-only sorgularda da iki çağrı yapılır; keyword yanıtı yanlış `filter` kararını düzeltebilir. Geçici 429/5xx için her çağrı en fazla bir kez yinelenebildiğinden normalde iki, en kötü durumda dört POST oluşabilir. İstek boyutu veya kalıcı kota kaynaklı 429 aynı payload ile yinelenmez. İnternet yoksa arama standard/local yola düşer. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
 
 Standart arama Groq kullanmaz ve yerel indeks üzerinde çalışır.
 
-AI düğmesine fareyle gelindiğinde veya klavyeyle odaklanıldığında yanında efor ibresi görünür. İbreye her tıklama Low → Medium → High → Low döngüsünde ilerler. Varsayılan Orta düzeyidir; seçim kaydedilir ve hem intent hem keyword isteğine uygulanır. Efor değiştiğinde mevcut sorgu yeniden aranır. Her istek seçimini ayrı taşır; sonraki seçim devam eden çağrının profilini değiştirmez. Yüksek efor daha uzun sürebilir; daha iyi sonuç veya kota sorunlarının çözülmesini garanti etmez. Temperature 0.6, strict JSON ve mevcut çıktı bütçesi korunur.
+AI düğmesine fareyle gelindiğinde veya klavyeyle odaklanıldığında yanında efor ibresi görünür. İbreye her tıklama Low → Medium → High → Low döngüsünde ilerler. Varsayılan Orta düzeyidir; seçim kaydedilir ve yalnız Qwen keyword isteğine uygulanır. Celeris doğrudan yanıt verir; düşünme kapalıdır. Efor değiştiğinde mevcut sorgu yeniden aranır. Her istek seçimini ayrı taşır; sonraki seçim devam eden çağrının profilini değiştirmez. Yüksek efor daha uzun sürebilir; daha iyi sonuç veya kota sorunlarının çözülmesini garanti etmez.
 
 ## Akış
 
 1. Kullanıcı arayüzünde Doğal Dil modu açılır.
-2. `IntentParser.ParseWithGroqAsync` aynı sorgu için intent ve keyword isteklerini başlatır.
+2. `IntentParser` aynı sorgu için Celeris intent ve Groq keyword isteklerini başlatır. Mevcut `ParseWithGroqAsync` / `ParseWithGroqEffortAsync` adları çağıranlarla uyumluluk için korunmuştur.
 3. Intent sonucu filtre, hedef türü, tarih/boyut ve benzeri yapılandırılmış alanlara dönüştürülür.
 4. Keyword sonucu başarılıysa terimler zorunlu `anchor`, sıralama amaçlı `phrase` ve düşük etkili `context` rollerine ayrılır. Aynı anchor grubundaki biçim ve çeviriler alternatif, farklı anchor grupları birlikte zorunludur. Ağırlıklar modelden alınmaz; rol, kategori ve sıra temelinde uygulama tarafından deterministik atanır.
 Dosya hedefli başarılı AI sorgusunda, intent klasör adıyla örtüşen anchor grubu `FolderContextTerms` alanına ayrılır. En az bir dosya anchor grubu korunur. Motor dosya adaylarını kalan anchorlarla bulur, klasör gruplarını üst klasörlerde doğrular; Türkçe/ASCII biçimleri ve grup içi alternatifler desteklenir. Klasör bağlamı dosya adıyla karşılanamaz. Klasör hedefi, yalnız tek anchor ve fallback akışları mevcut davranışını korur. Standart arama bu alanı üretmez.
@@ -23,10 +23,14 @@ Aktif endpoint ve modeller:
 
 | Amaç | Model |
 |---|---|
-| Intent analizi | `qwen/qwen3.8-27b` (`reasoning_effort=medium`) |
+| Intent analizi | `celeris-1` (`enable_thinking=false`) |
 | Keyword üretimi | `qwen/qwen3.8-27b` (`reasoning_effort=medium`) |
 
-İki istek de `https://api.groq.com/openai/v1/chat/completions` endpoint'ini kullanır ve her biri 30 saniyelik linked-timeout sınırına sahiptir. İki çağrı da `medium` reasoning, `temperature=0.6`, `top_p=0.95`, `max_completion_tokens=2048` ve `reasoning_format=hidden` profiliyle çalışır. Temperature, JSON hatası sonrası kullanıcı tercihiyle 0.6 olarak denenmektedir; nedensellik ve arama kalitesi henüz doğrulanmamıştır. İki Qwen çağrısında da ayrı [Groq Structured Outputs](https://console.groq.com/docs/structured-outputs) şemaları (`json_schema`, `strict=true`) kullanılır. Varsayılan profilde araç yoktur; yalnız açıkça `groq/compound` seçilen alternatif profilde `code_interpreter` payload'ı ve `Groq-Model-Version: latest` header'ı eklenebilir.
+Celeris `https://inference.celeris.ai/celeris-1/v1/chat/completions` adresine `temperature=0`, `max_tokens=512`, `stream=false`, `chat_template_kwargs.enable_thinking=false` ve `json_schema` ile çağrılır. [Celeris API sözleşmesi](https://docs.celeris.ai/making-requests) uyarınca `reasoning_effort` gönderilmez. C# tarafı 12 alanın eksiksiz ve tekil olmasını, liste/open türlerini ve `finish_reason=stop` değerini kontrol eder; mevcut tarih/boyut/enum doğrulaması devam eder.
+
+Qwen keyword `https://api.groq.com/openai/v1/chat/completions` adresinde varsayılan `medium`, `temperature=0.6`, `top_p=0.95`, `max_completion_tokens=768`, `reasoning_format=hidden` ve [Groq Structured Outputs](https://console.groq.com/docs/structured-outputs) (`json_schema`, `strict=true`) kullanır. Low/Medium/High aynı 768 üst sınırını kullanır; açık `none` profilinin sınırı 350'dir. `finish_reason=length` yanıtı tamamlanmış keyword sonucu kabul edilmez; intent korunarak keyword fallback uygulanır. Her çağrı kendi 30 saniyelik linked-timeout sınırına sahiptir ve paralel başlar. Intent ve keyword promptları sağlayıcı değişiminde korunmuştur; yeni modelin arama kalitesi ve hız üstünlüğü ayrıca değerlendirilmelidir. Varsayılan profilde araç yoktur. Explicit Groq intent modelleri karşılaştırma için önceki bütçeleriyle desteklenmeye devam eder.
+
+Geçici 429 yanıtında `Retry-After` saniye veya tarih biçiminde okunur; sunucunun süresi iki saniyeye kırpılmaz. Bekleme Groq ve Celeris için ayrı tutulur. Sorguyu iptal etmek sağlayıcının bekleme bitişini silmez; yeni sorgu o süre dolmadan aynı sağlayıcıya HTTP göndermez ve kalan süreyi uyarıda gösterir. 30 saniye veya daha uzun bekleme bildirilirse aynı çağrı içinde erken retry yapılmaz, 429 nedeni korunur. Tanılama günlüğündeki `Intent API denemesi` / `Keyword API denemesi` satırları sağlayıcıya yapılan HTTP denemelerini gösterir; anahtar ve istek gövdesi yazılmaz.
 
 ## API anahtarı
 
@@ -65,21 +69,21 @@ dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
 
 ## Fallback davranışı
 
-Intent API anahtarı yoksa uygulama ağ isteği göndermeden kural tabanlı parser'a döner. Anahtar geçersizse veya Groq'a erişilemiyorsa intent isteğinin hatası üzerine aynı fallback çalışır. Fallback:
+Intent API anahtarı yoksa uygulama ağ isteği göndermeden kural tabanlı parser'a döner. Celeris anahtarı geçersizse, sağlayıcıya erişilemiyorsa veya yanıt sözleşmeye uymuyorsa intent isteğinin hatası üzerine aynı fallback çalışır. Fallback:
 
 - sorgudan temel anahtar kelimeleri çıkarır,
 - intent tarih filtresi korunuyorsa zaman ve ilişki sözcüklerini zorunlu arama hedefi yapmaz,
 - bilinen dosya türlerini uzantılara eşler,
 - klasör içeriğini aramaya dahil eder,
-- Groq intent sonucundaki gelişmiş tarih, boyut ve eylem semantiğini garanti etmez.
+- AI intent sonucundaki gelişmiş tarih, boyut ve eylem semantiğini garanti etmez.
 
 Fallback kullanıldığında UI uyarı gösterir ve neden `StructuredQuery.FallbackReason` alanında taşınır. Kullanıcının başlattığı cancellation fallback'e çevrilmez; işlem iptal edilir.
 
 ## Gizlilik ve ağ davranışı
 
-Doğal Dil modu geçerli intent yapılandırması ve internet bağlantısıyla çalıştırıldığında sorgu metni intent ve keyword analizi için Groq endpoint'ine gönderilir. Intent payload'ı sorguya ek olarak gün ve saat dilimini; keyword payload'ı sorguyu taşır. Intent anahtarı eksikse güncel uygulama ağ isteği yapmadan fallback'e geçer. Ağ üzerinden sorgu göndermek istemiyorsanız standart arama modunu kullanın.
+Doğal Dil modu geçerli intent yapılandırması ve internet bağlantısıyla çalıştırıldığında sorgu metni Celeris'e intent, Groq'a keyword analizi için gönderilir. Intent payload'ı sorguya ek olarak gün ve saat dilimini; keyword payload'ı sorguyu taşır. Intent anahtarı eksikse uygulama ağ isteği yapmadan fallback'e geçer. Ağ üzerinden sorgu göndermek istemiyorsanız standart arama modunu kullanın.
 
-OmniSpot bu çağrı zincirinde indekslenmiş dosya adlarını, path'leri, içerikleri, snippet'leri veya sonucu Groq'a göndermez; dinamik veri sorgu (intent isteğinde ayrıca gün/saat dilimi) ve kodda tanımlı sistem istemleridir.
+OmniSpot bu çağrı zincirinde indekslenmiş dosya adlarını, path'leri, içerikleri, snippet'leri veya sonucu sağlayıcılara göndermez; dinamik veri sorgu (intent isteğinde ayrıca gün/saat dilimi) ve kodda tanımlı sistem istemleridir. Kullanıcının sorguda yazdığı dosya adı veya yol da sorgu metninin parçasıdır.
 
 Bu, provider'ın kendi retention/processing politikasını değerlendirme gereğini ortadan kaldırmaz; yalnız güncel uygulama payload sınırını tanımlar.
 
@@ -87,17 +91,17 @@ Bu, provider'ın kendi retention/processing politikasını değerlendirme gereğ
 
 ### Sürekli fallback kullanılıyor
 
-1. Uygulamayı doğrudan exe ile değil `OmniSpot AI` kısayoluyla başlattığınızı doğrulayın. `Groq intent API anahtarı yapılandırılmamış` uyarısı, kurulum hatasından çok çalışan sürecin anahtarı devralmadığını gösterir; uygulamayı kapatıp AI kısayoluyla yeniden başlatın.
+1. Celeris intent anahtarını `OMNISPOT_CELERIS_API_KEY` veya `CELERIS_API_KEY` süreç ortamında tanımlayıp uygulamayı yeniden başlatın.
 2. Geçici manuel başlatma kullanıyorsanız anahtarların uygulamayı başlatan PowerShell sürecinde göründüğünü doğrulayın:
 
    ```powershell
    Test-Path Env:OMNISPOT_GROQ_API_KEY
-   Test-Path Env:OMNISPOT_GROQ_INTENT_API_KEY
+   Test-Path Env:OMNISPOT_CELERIS_API_KEY
    Test-Path Env:OMNISPOT_GROQ_KEYWORD_API_KEY
    ```
 
 3. Ortak anahtar yerine aşamaya özel değişkenler kullanıyorsanız ikisinin de boş olmadığını kontrol edin.
-4. `https://api.groq.com` erişimini, sistem saatini ve VPN durumunu doğrulayın. TCP 443 bağlantısının açık olması Groq'un kullanılan VPN çıkışını kabul edeceğini tek başına garanti etmez.
+4. `https://api.groq.com` ve `https://inference.celeris.ai` erişimini, sistem saatini ve VPN durumunu doğrulayın. TCP 443 bağlantısının açık olması sağlayıcının kullanılan VPN çıkışını kabul edeceğini tek başına garanti etmez.
 5. Uygulama logunda intent ve keyword çağrılarının ayrı hata mesajlarını ve HTTP durum kodlarını inceleyin.
 
 ### Yerel model ayarları çalışmıyor
@@ -112,13 +116,13 @@ Prompt değişikliklerini UI açmadan, üretimdeki `IntentParser` ve .NET 8 HTTP
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler"
 ```
 
-Thinking karşılaştırması için yalnız probe çağrısında:
+Qwen keyword eforunu yalnız probe çağrısında değiştirmek için:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1 -ProbeQuery "bu yaza ait biletler" -ProbeReasoningEffort default
 ```
 
-Probe varsayılanları üretimle aynıdır: iki aşamada da Qwen 3.8 27B ve `medium`. Qwen için `none` reasoning'i kapatır; `default`, `low`, `medium` ve `high` açar. `-ProbeReasoningEffort` yalnız intent seviyesini değiştirir; keyword çağrısı `medium` olarak kalır. Thinking açıkken `temperature=0.6`, `top_p=0.95`, `max_completion_tokens=2048` ve JSON çıktısına uygun `reasoning_format=hidden` kullanılır. Açıkça seçilen `none` profilinde mevcut `temperature=0.3` korunur.
+Probe varsayılanları üretimle aynıdır: Celeris-1 doğrudan intent ve Qwen 3.8 27B `medium` keyword. Varsayılan Celeris profilinde `-ProbeReasoningEffort` yalnız Qwen'i değiştirir. `-ProbeModel qwen/qwen3.8-27b` eski iki-Qwen karşılaştırmasını seçer; explicit Groq intent profillerinde bu parametre intent seviyesini değiştirir ve keyword `medium` kalır. Qwen için `none` reasoning'i kapatır; `default`, `low`, `medium` ve `high` açar. Thinking açıkken `temperature=0.6`, `top_p=0.95`, `max_completion_tokens=2048` ve `reasoning_format=hidden` kullanılır; `none` profilinde `temperature=0.3` korunur.
 
 GPT-OSS 20B veya 120B intent karşılaştırması için `low`, `medium` veya `high` kullanın:
 
@@ -144,8 +148,8 @@ Bu mod:
 - süre, fallback durumu, yapılandırılmış intent ve ağırlıklı arama terimlerini JSON olarak yazdırır,
 - çalışan OmniSpot sürecini kapatmayı gerektirmez.
 
-Probe gerçek Groq isteği gönderir ve hesap kotasını kullanır. Anahtarları veya dosya içeriklerini çıktıya yazmaz.
+Probe gerçek Celeris/Groq istekleri gönderir ve hesap kotasını kullanır. Anahtarları veya dosya içeriklerini çıktıya yazmaz.
 
 ## Manuel doğrulama
 
-Groq başarı ve fallback senaryolarını adım adım doğrulamak için [doğal dil arama test rehberini](nlu-integration.md) kullanın.
+Hibrit başarı ve fallback senaryolarını adım adım doğrulamak için [doğal dil arama test rehberini](nlu-integration.md) kullanın.

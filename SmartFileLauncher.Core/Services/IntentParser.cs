@@ -15,18 +15,23 @@ public class IntentParser
     private const string IntentApiKeyEnvironmentVariable = "OMNISPOT_GROQ_INTENT_API_KEY";
     private const string KeywordApiKeyEnvironmentVariable = "OMNISPOT_GROQ_KEYWORD_API_KEY";
     private const string SharedApiKeyEnvironmentVariable = "OMNISPOT_GROQ_API_KEY";
+    private const string CelerisApiKeyEnvironmentVariable = "OMNISPOT_CELERIS_API_KEY";
     private const string GroqApiUrl = "https://api.groq.com/openai/v1/chat/completions";
+    private const string CelerisApiUrl = "https://inference.celeris.ai/celeris-1/v1/chat/completions";
+    private const string CelerisModel = "celeris-1";
     private const string QwenModel = "qwen/qwen3.8-27b";
     private const string Oss20BModel = "openai/gpt-oss-20b";
     private const string Oss120BModel = "openai/gpt-oss-120b";
     private const string CompoundModel = "groq/compound";
     private const string Llama33Model = "llama-3.3-70b-versatile";
-    private const string DefaultIntentModel = QwenModel;
+    private const string DefaultIntentModel = CelerisModel;
     private const string DefaultKeywordModel = QwenModel;
     private const string DefaultIntentReasoningEffort = "medium";
     private const string DefaultKeywordReasoningEffort = "medium";
     private const int MaxQueryLength = 500;
     private const int MaxAttempts = 2;
+    private const int QwenKeywordCompletionTokens = 768;
+    private readonly ProviderRetryState _retryState = new(TimeProvider.System);
 
     private readonly HttpClient _intentHttpClient;
     private readonly HttpClient _keywordHttpClient;
@@ -88,14 +93,16 @@ public class IntentParser
         string reasoningEffort = DefaultIntentReasoningEffort,
         string? keywordReasoningEffort = DefaultKeywordReasoningEffort,
         string model = DefaultIntentModel,
-        string? keywordModel = DefaultKeywordModel)
+        string? keywordModel = DefaultKeywordModel,
+        string? intentApiKey = null,
+        string? keywordApiKey = null)
     {
         _logger = logger;
         _nowProvider = () => DateTimeOffset.Now;
         _timeZone = TimeZoneInfo.Local;
         _intentModel = NormalizeModel(model);
-        _keywordModel = NormalizeModel(keywordModel ?? DefaultKeywordModel);
-        _intentReasoningEffort = NormalizeReasoningEffort(
+        _keywordModel = NormalizeModel(keywordModel ?? DefaultKeywordModel, allowCeleris: false);
+        _intentReasoningEffort = _intentModel == CelerisModel ? "none" : NormalizeReasoningEffort(
             reasoningEffort,
             _intentModel);
         _keywordReasoningEffort = NormalizeReasoningEffort(
@@ -103,8 +110,11 @@ public class IntentParser
             _keywordModel);
 
         var sharedApiKey = Environment.GetEnvironmentVariable(SharedApiKeyEnvironmentVariable);
-        var intentApiKey = Environment.GetEnvironmentVariable(IntentApiKeyEnvironmentVariable) ?? sharedApiKey;
-        var keywordApiKey = Environment.GetEnvironmentVariable(KeywordApiKeyEnvironmentVariable) ?? sharedApiKey;
+        intentApiKey ??= _intentModel == CelerisModel
+            ? Environment.GetEnvironmentVariable(CelerisApiKeyEnvironmentVariable) ??
+              Environment.GetEnvironmentVariable("CELERIS_API_KEY")
+            : Environment.GetEnvironmentVariable(IntentApiKeyEnvironmentVariable) ?? sharedApiKey;
+        keywordApiKey ??= Environment.GetEnvironmentVariable(KeywordApiKeyEnvironmentVariable) ?? sharedApiKey;
 
         _intentHttpClient = CreateHttpClient(intentApiKey);
         _keywordHttpClient = CreateHttpClient(keywordApiKey);
@@ -113,7 +123,7 @@ public class IntentParser
 
         if (!_intentConfigured || !_keywordConfigured)
         {
-            Log("[IntentParser] Groq API anahtarlarından biri yapılandırılmamış.");
+            Log("[IntentParser] Intent veya keyword API anahtarı yapılandırılmamış.");
         }
     }
 
@@ -126,16 +136,18 @@ public class IntentParser
         string reasoningEffort = DefaultIntentReasoningEffort,
         string? keywordReasoningEffort = DefaultKeywordReasoningEffort,
         string model = DefaultIntentModel,
-        string? keywordModel = DefaultKeywordModel)
+        string? keywordModel = DefaultKeywordModel,
+        TimeProvider? timeProvider = null)
     {
         _intentHttpClient = intentHttpClient ?? throw new ArgumentNullException(nameof(intentHttpClient));
         _keywordHttpClient = keywordHttpClient ?? throw new ArgumentNullException(nameof(keywordHttpClient));
+        _retryState = new(timeProvider ?? TimeProvider.System);
         _logger = logger;
         _nowProvider = nowProvider ?? (() => DateTimeOffset.Now);
         _timeZone = timeZone ?? TimeZoneInfo.Local;
         _intentModel = NormalizeModel(model);
-        _keywordModel = NormalizeModel(keywordModel ?? DefaultKeywordModel);
-        _intentReasoningEffort = NormalizeReasoningEffort(
+        _keywordModel = NormalizeModel(keywordModel ?? DefaultKeywordModel, allowCeleris: false);
+        _intentReasoningEffort = _intentModel == CelerisModel ? "none" : NormalizeReasoningEffort(
             reasoningEffort,
             _intentModel);
         _keywordReasoningEffort = NormalizeReasoningEffort(
@@ -168,7 +180,7 @@ public class IntentParser
 
         if (!_intentConfigured)
         {
-            return CreateFallback(query, "Groq intent API anahtarı yapılandırılmamış");
+            return CreateFallback(query, $"{(_intentModel == CelerisModel ? "Celeris" : "Groq")} intent API anahtarı yapılandırılmamış");
         }
 
         try
@@ -177,7 +189,7 @@ public class IntentParser
             var localNow = TimeZoneInfo.ConvertTime(_nowProvider(), _timeZone);
             var today = DateOnly.FromDateTime(localNow.DateTime).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
-            var intentEffort = reasoningEffort == null ? _intentReasoningEffort : NormalizeReasoningEffort(reasoningEffort, _intentModel);
+            var intentEffort = _intentModel == CelerisModel ? "none" : reasoningEffort == null ? _intentReasoningEffort : NormalizeReasoningEffort(reasoningEffort, _intentModel);
             var keywordEffort = reasoningEffort == null ? _keywordReasoningEffort : NormalizeReasoningEffort(reasoningEffort, _keywordModel);
             var intentTask = CallIntentApiWithErrorHandlingAsync(
                 query,
@@ -245,7 +257,7 @@ public class IntentParser
         }
         catch (Exception ex)
         {
-            Log($"[IntentParser] Groq ayrıştırma hatası: {ex.GetType().Name}");
+            Log($"[IntentParser] AI ayrıştırma hatası: {ex.GetType().Name}");
             return CreateFallback(query, ex.Message);
         }
     }
@@ -358,6 +370,14 @@ public class IntentParser
             ["temperature"] = reasoningEnabled && _intentModel == QwenModel ? 0.6 : standardProfile || reasoningEnabled ? 1.0 : 0.3,
             ["max_completion_tokens"] = reasoningEnabled || standardProfile ? 2048 : 450
         };
+        if (_intentModel == CelerisModel)
+        {
+            requestBody["temperature"] = 0.0;
+            requestBody.Remove("max_completion_tokens");
+            requestBody["max_tokens"] = 512;
+            requestBody["stream"] = false;
+            requestBody["chat_template_kwargs"] = new { enable_thinking = false };
+        }
         if (SupportsReasoning(_intentModel))
         {
             requestBody["reasoning_effort"] = reasoningEffort;
@@ -403,6 +423,10 @@ public class IntentParser
             _intentModel,
             "Intent",
             linkedCts.Token);
+        if (_intentModel == CelerisModel)
+        {
+            ValidateCelerisIntentJson(content);
+        }
         return ValidateIntentResult(JsonSerializer.Deserialize<GroqIntentResult>(content));
     }
 
@@ -433,7 +457,9 @@ public class IntentParser
             ["model"] = _keywordModel,
             ["messages"] = messages,
             ["temperature"] = reasoningEnabled && _keywordModel == QwenModel ? 0.6 : standardProfile || reasoningEnabled ? 1.0 : 0.3,
-            ["max_completion_tokens"] = reasoningEnabled || standardProfile ? 2048 : 350
+            ["max_completion_tokens"] = reasoningEnabled || standardProfile
+                ? _keywordModel == QwenModel ? QwenKeywordCompletionTokens : 2048
+                : 350
         };
         if (SupportsReasoning(_keywordModel))
         {
@@ -491,10 +517,15 @@ public class IntentParser
         CancellationToken cancellationToken)
     {
         var payload = JsonSerializer.Serialize(requestBody);
+        var provider = model == CelerisModel ? "Celeris" : "Groq";
+        _retryState.ThrowIfCoolingDown(provider, operation);
 
         for (var attempt = 0; attempt < MaxAttempts; attempt++)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Post, GroqApiUrl)
+            if (attempt > 0) await _retryState.WaitAsync(provider, cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            using var request = new HttpRequestMessage(HttpMethod.Post,
+                model == CelerisModel ? CelerisApiUrl : GroqApiUrl)
             {
                 Content = new StringContent(payload, Encoding.UTF8, "application/json")
             };
@@ -503,13 +534,19 @@ public class IntentParser
                 request.Headers.TryAddWithoutValidation("Groq-Model-Version", "latest");
             }
 
+            _logger?.Invoke($"🌐 {operation} API denemesi: {model} ({attempt + 1}/{MaxAttempts})");
             using var response = await client.SendAsync(request, cancellationToken);
             var responseBody = await response.Content.ReadAsStringAsync(cancellationToken);
 
             if (response.IsSuccessStatusCode)
             {
                 var envelope = JsonSerializer.Deserialize<GroqApiResponse>(responseBody);
-                var content = envelope?.Choices?.FirstOrDefault()?.Message.Content;
+                var choice = envelope?.Choices?.FirstOrDefault();
+                if ((model == CelerisModel && choice?.FinishReason != "stop") || choice?.FinishReason == "length")
+                {
+                    throw new InvalidDataException($"{operation} API yanıtı tamamlanmadı");
+                }
+                var content = choice?.Message.Content;
                 if (string.IsNullOrWhiteSpace(content))
                 {
                     throw new InvalidDataException($"{operation} API yanıtı boş");
@@ -518,9 +555,15 @@ public class IntentParser
                 return content;
             }
 
-            if (attempt + 1 < MaxAttempts && IsRetriable(response.StatusCode))
+            var rateLimited = response.StatusCode == HttpStatusCode.TooManyRequests;
+            var transientRateLimit = rateLimited && !ProviderRetryState.IsPermanentRateLimit(responseBody);
+            var delay = _retryState.RetryDelay(response, attempt);
+            if (transientRateLimit) _retryState.Defer(provider, delay);
+            if (attempt + 1 < MaxAttempts && (transientRateLimit || (int)response.StatusCode >= 500) &&
+                delay < TimeSpan.FromSeconds(30))
             {
-                await Task.Delay(GetRetryDelay(response, attempt), cancellationToken);
+                _logger?.Invoke($"⏳ {operation} API yeniden denemesi: {delay.TotalSeconds:0.###} sn sonra");
+                if (!rateLimited) await Task.Delay(delay, _retryState.Clock, cancellationToken);
                 continue;
             }
 
@@ -540,18 +583,15 @@ public class IntentParser
         throw new HttpRequestException($"{operation} API yeniden deneme sınırına ulaştı");
     }
 
-    private static bool IsRetriable(HttpStatusCode statusCode) =>
-        statusCode == HttpStatusCode.TooManyRequests ||
-        (int)statusCode >= 500;
-
-    private static string NormalizeModel(string model)
+    private static string NormalizeModel(string model, bool allowCeleris = true)
     {
         var normalized = model.Trim().ToLowerInvariant();
-        return normalized is QwenModel or Oss20BModel or Oss120BModel or CompoundModel or Llama33Model
+        return (allowCeleris && normalized == CelerisModel) ||
+               normalized is QwenModel or Oss20BModel or Oss120BModel or CompoundModel or Llama33Model
             ? normalized
             : throw new ArgumentOutOfRangeException(
                 nameof(model),
-                "Model Qwen 3.8 27B, GPT-OSS 20B, GPT-OSS 120B, Groq Compound veya Llama 3.3 70B olmalıdır.");
+                "Model Celeris-1, Qwen 3.8 27B, GPT-OSS 20B, GPT-OSS 120B, Groq Compound veya Llama 3.3 70B olmalıdır.");
     }
 
     private static string NormalizeReasoningEffort(
@@ -577,7 +617,7 @@ public class IntentParser
 
     private static object CreateResponseFormat(string model, bool keyword)
     {
-        if (model != QwenModel)
+        if (model is not (QwenModel or CelerisModel))
         {
             return new { type = "json_object" };
         }
@@ -616,6 +656,16 @@ public class IntentParser
                 ["open"] = new { type = "boolean" }
             };
 
+        var schema = new { type = "object", properties, required = properties.Keys.ToArray(), additionalProperties = false };
+        if (model == CelerisModel)
+        {
+            return new
+            {
+                type = "json_schema",
+                json_schema = new { name = "search_intent", schema }
+            };
+        }
+
         return new
         {
             type = "json_schema",
@@ -623,7 +673,7 @@ public class IntentParser
             {
                 name = keyword ? "search_keywords" : "search_intent",
                 strict = true,
-                schema = new { type = "object", properties, required = properties.Keys.ToArray(), additionalProperties = false }
+                schema
             }
         };
     }
@@ -640,18 +690,38 @@ public class IntentParser
     private static bool IsOssModel(string model) =>
         model is Oss20BModel or Oss120BModel;
 
-    private static TimeSpan GetRetryDelay(HttpResponseMessage response, int attempt)
+    private static void ValidateCelerisIntentJson(string content)
     {
-        var delay = response.Headers.RetryAfter?.Delta ??
-                    TimeSpan.FromMilliseconds(200 * Math.Pow(2, attempt));
-        if (delay < TimeSpan.Zero)
+        using var document = JsonDocument.Parse(content);
+        var root = document.RootElement;
+        string[] fields = ["mode", "target", "hard_extensions", "soft_extensions", "folders",
+            "created_from", "created_to_exclusive", "modified_from", "modified_to_exclusive",
+            "min_mb", "max_mb", "open"];
+        if (root.ValueKind != JsonValueKind.Object)
         {
-            return TimeSpan.Zero;
+            throw new InvalidDataException("Intent JSON nesnesi çözümlenemedi");
         }
 
-        return delay > TimeSpan.FromSeconds(2)
-            ? TimeSpan.FromSeconds(2)
-            : delay;
+        var names = root.EnumerateObject().Select(property => property.Name).ToArray();
+        if (names.Length != fields.Length || !names.Order().SequenceEqual(fields.Order()))
+        {
+            throw new InvalidDataException("Intent JSON alanları eksik, yinelenmiş veya geçersiz");
+        }
+
+        foreach (var field in new[] { "hard_extensions", "soft_extensions", "folders" })
+        {
+            var value = root.GetProperty(field);
+            if (value.ValueKind != JsonValueKind.Array ||
+                value.EnumerateArray().Any(item => item.ValueKind != JsonValueKind.String))
+            {
+                throw new InvalidDataException("Intent JSON liste alanı geçersiz");
+            }
+        }
+
+        if (root.GetProperty("open").ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new InvalidDataException("Intent JSON open değeri geçersiz");
+        }
     }
 
     private static GroqIntentResult ValidateIntentResult(GroqIntentResult? result)
@@ -1370,6 +1440,9 @@ Output: {"anchors":[{"primary":"müşteri","variants":["musteri"],"translations"
 
     private sealed class GroqChoice
     {
+        [JsonPropertyName("finish_reason")]
+        public string? FinishReason { get; set; }
+
         [JsonPropertyName("message")]
         public GroqMessage Message { get; set; } = new();
     }

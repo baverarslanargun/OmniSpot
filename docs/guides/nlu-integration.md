@@ -1,13 +1,13 @@
 # Doğal Dil Arama Test Rehberi
 
-Bu rehber aktif Groq + rule-based fallback akışının manuel doğrulamasını kapsar. Anahtar yönetimi ve başlatma davranışının tek kaynağı [doğal dil arama yapılandırma rehberidir](llm-setup.md). Testler kişisel dosyalar yerine ayrı bir örnek klasörde yapılmalıdır.
+Bu rehber paralel Celeris intent + Groq keyword ve rule-based fallback akışının manuel doğrulamasını kapsar. Anahtar yönetimi ve başlatma davranışının tek kaynağı [doğal dil arama yapılandırma rehberidir](llm-setup.md). Testler kişisel dosyalar yerine ayrı bir örnek klasörde yapılmalıdır.
 
 ## Ön koşullar
 
 - Windows 10/11
 - .NET 8 SDK
 - Güncel bir build
-- Groq başarı senaryosu için yapılandırma rehberine göre hazırlanmış `OmniSpot AI` kısayolu, geçerli API anahtarları ve Groq tarafından kabul edilen ağ bağlantısı
+- Hibrit başarı senaryosu için yapılandırma rehberine göre kaydedilmiş Celeris ve Groq keyword anahtarları, iki sağlayıcıya erişen ağ bağlantısı
 
 OmniSpot Desktop, Documents, Downloads, Pictures, Music ve Videos klasörlerini tek kalıcı indeks üzerinden tarar ve canlı izler. Bu rehber, test verisini kolayca ayırmak ve temizlemek için Desktop altında oluşturur.
 
@@ -39,7 +39,7 @@ Silme işleminden önce `$testRoot` değerinin beklediğiniz Desktop test klasö
 
 Bu senaryo standart arama için ağ bağımlılığı olmadığını kontrol eder.
 
-## Senaryo 2 — Groq destekli doğal dil arama
+## Senaryo 2 — Hibrit doğal dil arama
 
 AI kısayolu daha önce hazırlanmadıysa bir kez yapılandırın:
 
@@ -53,7 +53,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\configure-ai-short
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-with-ai.ps1
 ```
 
-Doğrudan Release exe'sini çalıştırmayın; bu yol şifreli anahtarları alt sürece aktarmaz.
+Doğrudan Release exe'sini çalıştırmayın; bu yol şifreli anahtarları alt sürece aktarmaz. Efor seçimi yalnız Qwen keyword isteğini değiştirir; Celeris düşünme kapalı kalır.
 
 UI testinden önce aynı sorgunun yapılandırılmış sonucunu terminalde görmek isterseniz [yapılandırma rehberindeki hızlı prompt probe](llm-setup.md#hızlı-prompt-probe) komutunu kullanabilirsiniz.
 
@@ -91,7 +91,7 @@ Anahtar makine veya kullanıcı ortamında kalıcı tanımlıysa yeni PowerShell
 Bu senaryo için geçerli intent anahtarı ve geçersiz keyword anahtarı kullanın:
 
 ```powershell
-$env:OMNISPOT_GROQ_INTENT_API_KEY = "gsk_gecerli_intent_anahtari"
+$env:OMNISPOT_CELERIS_API_KEY = "ck_gecerli_intent_anahtari"
 $env:OMNISPOT_GROQ_KEYWORD_API_KEY = "gecersiz"
 ```
 
@@ -104,11 +104,14 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 - [ ] Intent çağrısı başarısız olduğunda rule-based fallback devreye giriyor.
 - [ ] Keyword çağrısı tek başına başarısız olduğunda intent sonucu korunuyor.
 - [ ] Fallback nedeni kullanıcıya ve loga yansıyor.
+- [ ] Kalıcı 429 aynı payload ile tekrarlanmıyor; geçici 429 beklemesi yeni sorguyla sıfırlanmıyor.
 - [ ] Test dosyaları kontrollü biçimde temizlendi.
 
 ## Otomasyon kapsamı
 
-Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. `IntentParserTests` ayrıca Groq JSON doğrulaması, rol ve anchor grubu eşlemesi, açık komut koruması, HTTP retry ve kısmi fallback sözleşmelerini deterministik fake HTTP yanıtlarıyla doğrular. Arama testleri context'in aday üretmediğini, grup içi alternatifleri, gruplar arası zorunluluğu, kısa token güvenliğini ve sayısal identifier eşleşmesini kapsar. Gerçek Groq hesabı, model kalitesi, VPN kabulü ve uçtan uca UI davranışı bu rehberle manuel doğrulanır.
+Core test paketi arama snapshot'ı, eşzamanlı mutasyon ve cancellation davranışlarını kapsar. `IntentParserTests` mevcut Groq profillerini, rol ve anchor grubu eşlemesini, açık komut korumasını, HTTP retry ve kısmi fallback sözleşmelerini fake HTTP yanıtlarıyla doğrular. `HybridIntentParserTests` ayrı sağlayıcı/anahtar/endpoint, paralel başlangıç, yalnız Qwen eforu, yanlış filter düzeltmesi, eksik/yinelenmiş/yarım intent yanıtı, kısmi hata ve iptali kapsar. Gerçek sağlayıcı hesabı, model kalitesi, ağ kabulü ve uçtan uca UI davranışı ayrı manuel doğrulama gerektirir.
+
+`IntentParserRateLimitTests` sentetik HTTP ve denetlenebilir saatle kalıcı/geçici 429 ayrımını, saniye/tarih `Retry-After` süresini, iptal sonrası sağlayıcı beklemesini, uzun beklemede erken retry yapılmamasını ve yarım keyword yanıtının reddini doğrular.
 
 ## Güncelleme notu — 2026-07-31
 
