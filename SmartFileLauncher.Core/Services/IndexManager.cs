@@ -1078,7 +1078,7 @@ public partial class IndexManager : IDisposable
     public bool ApplyExternalChanges(IReadOnlyList<FileChangeEvent> changes) =>
         ApplyExternalChangesCore(changes, out _);
 
-    private bool ApplyExternalChangesCore(IReadOnlyList<FileChangeEvent> changes, out List<FileChangeEvent> failed,
+    internal bool ApplyExternalChangesCore(IReadOnlyList<FileChangeEvent> changes, out List<FileChangeEvent> failed,
         bool deferFailures = true)
     {
         ArgumentNullException.ThrowIfNull(changes);

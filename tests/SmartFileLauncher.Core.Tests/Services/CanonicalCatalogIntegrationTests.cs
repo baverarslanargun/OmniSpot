@@ -249,7 +249,7 @@ public sealed class CanonicalCatalogIntegrationTests
         };
         if (includeOtherDelete)
             events.Add(new() { ChangeType = FileChangeType.Deleted, FullPath = Path.Combine(world.Root, "other.txt") });
-        Assert.False(world.Manager.ApplyExternalChanges(events));
+        Assert.False(world.Manager.ApplyExternalChangesCore(events, out _, deferFailures: false));
         Assert.True(world.Manager.CurrentSearchState.ContainsPath(world.File));
         Assert.NotNull(world.Database.GetFileByPath(world.File));
     }
@@ -372,7 +372,8 @@ public sealed class CanonicalCatalogIntegrationTests
         }
 
         internal bool Apply(FileChangeType type, string path, string? oldPath = null) =>
-            Manager.ApplyExternalChanges([new() { ChangeType = type, FullPath = path, OldPath = oldPath }]);
+            Manager.ApplyExternalChangesCore([new() { ChangeType = type, FullPath = path, OldPath = oldPath }],
+                out _, deferFailures: false);
 
         internal void Sql(string sql) => Scalar(sql);
         internal object? Scalar(string sql)
