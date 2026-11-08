@@ -220,6 +220,36 @@ public sealed class ThumbnailServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task GetThumbnailAsync_ShellLoadsUnicodePathAndCachesResult()
+    {
+        var service = CreateService(Path.Combine(_root, "cache-unicode"));
+        var imagePath = Path.Combine(_root, "küçük resim.png");
+        File.WriteAllBytes(imagePath, CreatePng(320, 160));
+
+        var first = await service.GetThumbnailAsync(imagePath, RequestedSize);
+        var second = await service.GetThumbnailAsync(imagePath, RequestedSize);
+
+        var bitmap = Assert.IsAssignableFrom<BitmapSource>(first);
+        Assert.True(bitmap.IsFrozen);
+        Assert.True(bitmap.PixelWidth <= RequestedSize && bitmap.PixelHeight <= RequestedSize);
+        Assert.Same(first, second);
+        Assert.Equal(1, service.GetDiagnostics().ShellGenerated);
+        Assert.Equal(1, service.GetDiagnostics().MemoryHits);
+    }
+
+    [Fact]
+    public async Task GetThumbnailAsync_WithoutThumbnailDoesNotReturnAnIcon()
+    {
+        var service = CreateService(Path.Combine(_root, "cache-no-thumbnail"));
+        var file = Path.Combine(_root, $"no-thumbnail.{Guid.NewGuid():N}");
+        File.WriteAllText(file, "test");
+
+        Assert.Null(await service.GetThumbnailAsync(file, RequestedSize));
+        Assert.Equal(1, service.GetDiagnostics().Failures);
+        Assert.Equal(0, service.GetDiagnostics().ShellGenerated);
+    }
+
+    [Fact]
     public async Task GetThumbnailAsync_ReportsFailureForMissingPath()
     {
         var service = CreateService(Path.Combine(_root, "cache"));

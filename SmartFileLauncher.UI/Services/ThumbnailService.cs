@@ -1,7 +1,9 @@
 using System.IO;
+using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using Microsoft.WindowsAPICodePack.Shell;
 
 namespace SmartFileLauncher.UI.Services;
 
@@ -9,6 +11,7 @@ public class ThumbnailService : IThumbnailService, IThumbnailCacheControl
 {
     internal const int DefaultMaxMemoryCacheCount = 1000;
     internal const long DefaultMaxMemoryCacheBytes = 64L * 1024 * 1024;
+    private const uint ShellThumbnailOnly = 0x8;
 
     private sealed record CacheEntry(ThumbnailKey Key, ImageSource Image, long Bytes);
 
@@ -259,32 +262,56 @@ public class ThumbnailService : IThumbnailService, IThumbnailCacheControl
 
     private BitmapSource? GenerateShellThumbnail(string path, int size)
     {
+        IShellItemImageFactory? factory = null;
+        IntPtr bitmap = IntPtr.Zero;
         try
         {
-            using var shellFile = ShellFile.FromFilePath(path);
-
-            var shellThumbnail = shellFile.Thumbnail;
-            shellThumbnail.AllowBiggerSize = false;
-            shellThumbnail.FormatOption = ShellThumbnailFormatOption.ThumbnailOnly;
-            shellThumbnail.CurrentSize = new System.Windows.Size(size, size);
-
-            var bitmapSource = shellThumbnail.BitmapSource;
-
-            if (bitmapSource == null)
-            {
+            if (Directory.Exists(path)) return null;
+            var iid = typeof(IShellItemImageFactory).GUID;
+            if (SHCreateItemFromParsingName(path, IntPtr.Zero, in iid, out factory) < 0 || factory == null)
                 return null;
-            }
-
-            if (!bitmapSource.IsFrozen)
-                bitmapSource.Freeze();
-
+            if (factory.GetImage(new ShellSize(size, size), ShellThumbnailOnly, out bitmap) < 0 || bitmap == IntPtr.Zero)
+                return null;
+            var bitmapSource = Imaging.CreateBitmapSourceFromHBitmap(
+                bitmap, IntPtr.Zero, Int32Rect.Empty, BitmapSizeOptions.FromEmptyOptions());
+            bitmapSource.Freeze();
             return bitmapSource;
         }
         catch
         {
             return null;
         }
+        finally
+        {
+            if (bitmap != IntPtr.Zero) DeleteObject(bitmap);
+            if (factory != null) Marshal.ReleaseComObject(factory);
+        }
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct ShellSize(int width, int height)
+    {
+        public readonly int Width = width;
+        public readonly int Height = height;
+    }
+
+    [ComImport]
+    [Guid("BCC18B79-BA16-442F-80C4-8A59C30C463B")]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IShellItemImageFactory
+    {
+        [PreserveSig]
+        int GetImage(ShellSize size, uint flags, out IntPtr bitmap);
+    }
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int SHCreateItemFromParsingName(
+        string path, IntPtr bindContext, in Guid iid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItemImageFactory? shellItem);
+
+    [DllImport("gdi32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeleteObject(IntPtr handle);
 
     private BitmapSource StoreAndBound(string diskCachePath, BitmapSource generated, int size)
     {
