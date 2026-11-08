@@ -208,6 +208,12 @@ public sealed class ChangeFeedIpcRoundTripTests
         await harness.SendAsync(
             new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.AddRoot, root));
 
+        await harness.ReadyAsync();
+        using var pipe = new System.IO.Pipes.NamedPipeClientStream(
+            ".", harness.PipeName, System.IO.Pipes.PipeDirection.InOut,
+            System.IO.Pipes.PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
+        await pipe.ConnectAsync((int)ChangeFeedProtocol.IoTimeout.TotalMilliseconds);
+        using var deadline = new CancellationTokenSource();
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         using var release = new ManualResetEventSlim();
 
@@ -223,8 +229,11 @@ public sealed class ChangeFeedIpcRoundTripTests
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            removal = Task.Run(() => harness.SendAsync(
-                new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.RemoveRoot, root)));
+            deadline.CancelAfter(ChangeFeedProtocol.IoTimeout);
+            await ChangeFeedMessageChannel.WriteRequestAsync(pipe,
+                new ChangeFeedRequest(ChangeFeedProtocol.Version, ChangeFeedRequestKind.RemoveRoot, root),
+                deadline.Token);
+            removal = ChangeFeedMessageChannel.ReadResponseAsync<ChangeFeedResponse>(pipe, deadline.Token);
 
             var raced = await Task.WhenAny(removal, Task.Delay(TimeSpan.FromMilliseconds(400)));
             Assert.NotSame(removal, raced);
@@ -239,7 +248,8 @@ public sealed class ChangeFeedIpcRoundTripTests
             if (removal != null) result = await removal;
         }
 
-        Assert.Equal(ChangeFeedResponseStatus.Ok, result!.Status);
+        Assert.Equal(ChangeFeedProtocol.Version, result!.Version);
+        Assert.Equal(ChangeFeedResponseStatus.Ok, result.Status);
         Assert.Empty(harness.StoredRoots());
     }
 
