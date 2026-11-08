@@ -417,22 +417,30 @@ public sealed class ChangeFeedIpcRoundTripTests
     {
         using var harness = new Harness(handoffDrainBudget: TimeSpan.FromMilliseconds(100));
         await harness.ReadyAsync();
+        using var pipe = new System.IO.Pipes.NamedPipeClientStream(
+            ".", harness.PipeName, System.IO.Pipes.PipeDirection.InOut,
+            System.IO.Pipes.PipeOptions.Asynchronous, TokenImpersonationLevel.Impersonation);
+        await pipe.ConnectAsync((int)ChangeFeedProtocol.IoTimeout.TotalMilliseconds);
         using var entered = new ManualResetEventSlim();
         using var release = new ManualResetEventSlim();
-        var blocker = Task.Run(() =>
+        var blocker = Task.Factory.StartNew(() =>
         {
             using var owner = harness.OwnerStore().EnterOwnerScope();
             entered.Set();
             release.Wait();
-        });
+        }, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default);
         try
         {
             Assert.True(entered.Wait(TimeSpan.FromSeconds(5)));
-            var pending = harness.SendAsync(new ChangeFeedRequest(
-                ChangeFeedProtocol.Version, ChangeFeedRequestKind.DrainContinuous));
+            await ChangeFeedMessageChannel.WriteRequestAsync(pipe, new ChangeFeedRequest(
+                ChangeFeedProtocol.Version, ChangeFeedRequestKind.DrainContinuous), CancellationToken.None);
+            var pending = ChangeFeedMessageChannel.ReadResponseAsync<ChangeFeedResponse>(
+                pipe, CancellationToken.None);
             var completed = await Task.WhenAny(pending, Task.Delay(TimeSpan.FromSeconds(1)));
             Assert.Same(pending, completed);
-            Assert.Equal(ChangeFeedResponseStatus.Unavailable, (await pending).Status);
+            var response = await pending;
+            Assert.Equal(ChangeFeedProtocol.Version, response.Version);
+            Assert.Equal(ChangeFeedResponseStatus.Unavailable, response.Status);
             Assert.Equal(0, harness.HandoffDrainCount);
         }
         finally

@@ -89,7 +89,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Inno Setup derlemesi başarısız.'
 }
 
-$installerPath = Join-Path $repoRoot "installer\output\OmniSpot-$Version-Demo-Setup.exe"
+$installerPath = Join-Path $repoRoot "installer\output\OmniSpot-$Version-Setup.exe"
 if (-not (Test-Path -LiteralPath $installerPath)) {
     throw "Installer çıktısı bulunamadı: $installerPath"
 }
