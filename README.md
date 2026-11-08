@@ -330,11 +330,11 @@ OmniSpot/
 
 ### Sürümler
 
-Temel sürüm GitHub’da açık kaynaktır ve geliştirilmeye devam eder; AI anahtarını kullanıcı girer. Kapalı kaynak ticari sürüm, dosya içeriği indeksleme, çok daha gelişmiş AI araması, AI ile resim arama ve özel bellek sıkıştırma ekler; AI kurulumunu Baver ARSLANARGUN yapar. İletişim: ben@baver.tr, https://baver.tr/projects/omnispot/.
+Temel sürüm GitHub’da açık kaynaktır ve geliştirilmeye devam eder; AI anahtarını kullanıcı girer. Kapalı kaynak OmniSpot Kurumsal, dosya içeriği indeksleme, çok daha gelişmiş AI araması, AI ile resim arama ve özel bellek sıkıştırma ekler; AI kurulumunu Baver ARSLANARGUN yapar. İletişim: ben@baver.tr, https://baver.tr/projects/omnispot/.
 
 ### Lisans
 
-OmniSpot temel sürümü GNU General Public License v3.0 (GPL-3.0) ile lisanslanmıştır; tam metin için LICENSE dosyasına bakın. Telif hakkı (C) 2025-2026 Baver ARSLANARGUN. Bu depo yalnız açık kaynak temel sürümü içerir; ticari sürüm kapalı kaynaktır ve bu lisansın kapsamında değildir.
+OmniSpot temel sürümü GNU General Public License v3.0 (GPL-3.0) ile lisanslanmıştır; tam metin için LICENSE dosyasına bakın. Telif hakkı (C) 2025-2026 Baver ARSLANARGUN. Bu depo yalnız açık kaynak temel sürümü içerir; OmniSpot Kurumsal kapalı kaynaktır ve bu lisansın kapsamında değildir.
 
 ## 📚 Dokümantasyon
 
