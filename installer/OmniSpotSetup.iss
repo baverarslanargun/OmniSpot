@@ -9,7 +9,7 @@
 #endif
 
 #define MyAppName "OmniSpot"
-#define MyAppPublisher "OmniSpot"
+#define MyAppPublisher "Baver ARSLANARGUN"
 #define MyAppURL "https://github.com/baverarslanargun/OmniSpot"
 #define MyAppExeName "OmniSpot.exe"
 #define ServiceExeName "OmniSpot.ChangeFeedService.exe"
@@ -54,6 +54,7 @@ Name: "turkish"; MessagesFile: "compiler:Languages\Turkish.isl"
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#UiPublishDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion restartreplace
 Source: "{#ServicePublishDir}\{#ServiceExeName}"; DestDir: "{app}\service"; Flags: ignoreversion restartreplace
 Source: "Manage-ChangeFeedService.ps1"; DestDir: "{app}\service"; Flags: ignoreversion

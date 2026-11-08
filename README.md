@@ -294,10 +294,8 @@ panoya alır.
 - [ ] TF-IDF skorlama
 - [ ] Trie tabanlı autocomplete
 - [ ] Sesli komut desteği (Vosk)
-- [ ] Kullanıcı tanımlı indeks kökleri
 - [ ] Tema desteği
 - [ ] Özelleştirilebilir kısayollar
-- [ ] Dosya içerik araması
 
 ### Proje Yapısı
 
@@ -328,11 +326,15 @@ OmniSpot/
 
 ### Katkıda Bulunma
 
-Bu bir eğitim projesidir. Öneriler için issue açabilirsiniz.
+Öneriler için issue açabilirsiniz.
+
+### Sürümler
+
+Temel sürüm GitHub’da açık kaynaktır ve geliştirilmeye devam eder; AI anahtarını kullanıcı girer. Kapalı kaynak ticari sürüm, dosya içeriği indeksleme, çok daha gelişmiş AI araması, AI ile resim arama ve özel bellek sıkıştırma ekler; AI kurulumunu Baver ARSLANARGUN yapar. İletişim: ben@baver.tr, https://baver.tr/projects/omnispot/.
 
 ### Lisans
 
-Depoda henüz bir `LICENSE` dosyası yoktur. Kullanım, kopyalama ve dağıtım izinleri açık bir lisans seçilene kadar tanımlı değildir.
+OmniSpot temel sürümü GNU General Public License v3.0 (GPL-3.0) ile lisanslanmıştır; tam metin için LICENSE dosyasına bakın. Telif hakkı (C) 2025-2026 Baver ARSLANARGUN. Bu depo yalnız açık kaynak temel sürümü içerir; ticari sürüm kapalı kaynaktır ve bu lisansın kapsamında değildir.
 
 ## 📚 Dokümantasyon
 
