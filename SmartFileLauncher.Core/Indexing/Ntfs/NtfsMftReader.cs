@@ -6,21 +6,27 @@ public sealed partial class NtfsMftReader : IDisposable
     private const int MaxAttributeListBytes = 16 * 1024 * 1024;
     private readonly INtfsVolumeSource _source;
     private readonly Func<INtfsVolumeSource>? _parallelSourceFactory;
+    private readonly string? _scanWorkerKey;
     private readonly NtfsDataExtent _mft;
     private bool _disposed;
     private int _enumerating;
 
     public NtfsMftReader(string volumeRootPath)
-        : this(new WindowsNtfsVolumeSource(volumeRootPath),
-            () => new WindowsNtfsVolumeSource(volumeRootPath))
+        : this(new WindowsNtfsVolumeSource(volumeRootPath), volumeRootPath)
+    {
+    }
+
+    private NtfsMftReader(WindowsNtfsVolumeSource source, string volumeRootPath)
+        : this(source, source.Share, volumeRootPath)
     {
     }
 
     internal NtfsMftReader(INtfsVolumeSource source,
-        Func<INtfsVolumeSource>? parallelSourceFactory = null)
+        Func<INtfsVolumeSource>? parallelSourceFactory = null, string? scanWorkerKey = null)
     {
         _source = source ?? throw new ArgumentNullException(nameof(source));
         _parallelSourceFactory = parallelSourceFactory;
+        _scanWorkerKey = scanWorkerKey;
         try
         {
             var record = ReadFileRecord(0, includeDataRuns: true);
@@ -90,9 +96,17 @@ public sealed partial class NtfsMftReader : IDisposable
                 continue;
             var metadata = record.BasicInformation ??
                 throw new InvalidDataException("MFT kaydının temel dosya bilgileri bulunamadı.");
-            foreach (var name in record.Names.Where(name => name.Namespace != 2)
-                         .DistinctBy(name => (name.ParentReference, name.Name)))
+            NtfsFileName? firstName = null;
+            HashSet<(ulong, string)>? names = null;
+            foreach (var name in record.Names)
             {
+                if (name.Namespace == 2) continue;
+                if (firstName is null) firstName = name;
+                else
+                {
+                    names ??= [(firstName.ParentReference, firstName.Name)];
+                    if (!names.Add((name.ParentReference, name.Name))) continue;
+                }
                 yield return new NtfsMftEntry(
                     record.Reference, name.ParentReference, name.Name,
                     record.IsDirectory,

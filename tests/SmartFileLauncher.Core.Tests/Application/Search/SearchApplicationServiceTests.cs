@@ -267,6 +267,72 @@ public sealed class SearchApplicationServiceTests
         Assert.Equal(@"C:\Workspace\first.txt", outcome.AutoOpenPath);
     }
 
+    [Fact]
+    public async Task StandardOutcomesLoadLaterPagesAndCountThroughTheStandardEngine()
+    {
+        var pageCalls = new List<(string Query, int Offset, int Limit)>();
+        var service = new SearchApplicationService(
+            (_, maxResults, _, _) => Enumerable.Range(0, maxResults).Select(i => Result($"{i}.txt")).ToArray(),
+            (_, _, _, _) => throw new InvalidOperationException("AI motoru çağrılmamalı"),
+            (_, _) => throw new InvalidOperationException("Ayrıştırıcı çağrılmamalı"),
+            _ => throw new InvalidOperationException("Ayrıştırıcı çağrılmamalı"),
+            (query, offset, limit, _, _) =>
+            {
+                pageCalls.Add((query, offset, limit));
+                return [Result("sayfa.txt")];
+            },
+            (query, _, _) => query == "rapor" ? 4321 : 0);
+        var request = new SearchRequest("rapor", false, true, 3);
+        var outcome = await service.SearchAsync(request);
+
+        var page = await service.LoadPageAsync(request, outcome, 3, 200);
+
+        Assert.True(outcome.IsPageable);
+        Assert.Equal("sayfa.txt", Assert.Single(page).Name);
+        Assert.Equal(("rapor", 3, 200), Assert.Single(pageCalls));
+        Assert.Equal(4321, await service.CountAsync(request, outcome));
+    }
+
+    [Fact]
+    public async Task WithoutAPageEngineLaterPagesComeFromALargerStandardWindow()
+    {
+        var service = CreateService(
+            standardSearch: (_, maxResults, _) => Enumerable.Range(0, Math.Min(maxResults, 8)).Select(i => Result($"{i}.txt")).ToArray());
+        var request = new SearchRequest("rapor", false, true, 3);
+        var outcome = await service.SearchAsync(request);
+
+        var page = await service.LoadPageAsync(request, outcome, 3, 4);
+        var last = await service.LoadPageAsync(request, outcome, 6, 4);
+        var beyond = await service.LoadPageAsync(request, outcome, 8, 4);
+
+        Assert.Equal(new[] { "3.txt", "4.txt", "5.txt", "6.txt" }, page.Select(result => result.Name));
+        Assert.Equal(new[] { "6.txt", "7.txt" }, last.Select(result => result.Name));
+        Assert.Empty(beyond);
+        Assert.Null(await service.CountAsync(request, outcome));
+    }
+
+    [Fact]
+    public async Task AiOutcomesAreNeitherPagedNorCounted()
+    {
+        var pageCalls = 0;
+        var countCalls = 0;
+        var service = new SearchApplicationService(
+            (_, _, _, _) => [],
+            (_, _, _, _) => [Result("ai.txt")],
+            (_, _) => Task.FromResult(new StructuredQuery { Keywords = ["rapor"] }),
+            _ => new StructuredQuery(),
+            (_, _, _, _, _) => { pageCalls++; return [Result("sayfa.txt")]; },
+            (_, _, _) => { countCalls++; return 1; });
+        var request = new SearchRequest("rapor", true, true);
+        var outcome = await service.SearchAsync(request);
+
+        Assert.False(outcome.IsPageable);
+        Assert.Empty(await service.LoadPageAsync(request, outcome, 1, 200));
+        Assert.Null(await service.CountAsync(request, outcome));
+        Assert.Equal(0, pageCalls);
+        Assert.Equal(0, countCalls);
+    }
+
     private static SearchApplicationService CreateService(
         Func<string, int, CancellationToken, IReadOnlyList<SearchResult>>? standardSearch = null,
         Func<StructuredQuery, int, CancellationToken, IReadOnlyList<SearchResult>>? advancedSearch = null,

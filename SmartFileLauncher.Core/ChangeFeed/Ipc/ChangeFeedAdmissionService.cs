@@ -1,6 +1,7 @@
 using System.IO.Pipes;
 using System.Runtime.Versioning;
 using System.Security.Principal;
+using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.ChangeFeed.Store;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
@@ -19,6 +20,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
     private readonly SharedCatalogService? _catalogs;
     private readonly IndexVolumeService _volumes = new();
     internal Func<string, CancellationToken, SmartFileLauncher.Core.ChangeFeed.Usn.UsnDrainRunner.BootstrapLease>? CatalogBootstrap { get; }
+    internal Func<string, IndexIssue?>? CheckIndexJournal { get; }
 
     public ChangeFeedAdmissionService(
         ChangeFeedRootAdmission admission,
@@ -30,7 +32,8 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         TimeSpan? handoffDrainBudget = null,
         ChangeFeedInventorySessions? inventory = null,
         Func<string, ChangeFeedStoreLayout>? sharedCatalogLayout = null,
-        Func<string, CancellationToken, SmartFileLauncher.Core.ChangeFeed.Usn.UsnDrainRunner.BootstrapLease>? catalogBootstrap = null)
+        Func<string, CancellationToken, SmartFileLauncher.Core.ChangeFeed.Usn.UsnDrainRunner.BootstrapLease>? catalogBootstrap = null,
+        bool checkIndexJournal = false)
     {
         _admission = admission ?? throw new ArgumentNullException(nameof(admission));
         _storeFactory = storeFactory ?? throw new ArgumentNullException(nameof(storeFactory));
@@ -41,6 +44,7 @@ public sealed partial class ChangeFeedAdmissionService : IDisposable
         _inventory = inventory;
         if (sharedCatalogLayout is not null) _catalogs = new(this, sharedCatalogLayout, _storeFactory);
         CatalogBootstrap = catalogBootstrap;
+        CheckIndexJournal = checkIndexJournal ? IndexVolumeService.CheckJournal : null;
         _handoffDrainBudget = handoffDrainBudget ?? ChangeFeedProtocol.HandoffDrainBudget;
 
         if (_handoffDrainBudget <= TimeSpan.Zero ||

@@ -113,6 +113,19 @@ public class DesktopIconViewModel : INotifyPropertyChanged
         }
     }
 
+    private bool _selectionArriving;
+
+    public bool SelectionArriving
+    {
+        get => _selectionArriving;
+        set
+        {
+            if (_selectionArriving == value) return;
+            _selectionArriving = value;
+            OnPropertyChanged(nameof(SelectionArriving));
+        }
+    }
+
     public double Opacity
     {
         get => _opacity;

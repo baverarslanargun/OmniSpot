@@ -20,23 +20,15 @@ public sealed class IndexMaintenanceService : IIndexMaintenanceService
 
     public IndexStorageStatus GetStatus()
     {
-        try
-        {
-            if (File.Exists(_indexPath))
-            {
-                var bytes = IsLiveCatalog ? Directory.EnumerateFiles(_catalogDirectory?.Invoke() ?? Path.GetDirectoryName(_indexPath)!, "*", SearchOption.AllDirectories)
-                    .Sum(path => new FileInfo(path).Length) : new FileInfo(_indexPath).Length;
-                return new IndexStorageStatus(
-                    _indexPath,
-                    true,
-                    bytes / 1024);
-            }
-        }
-        catch
-        {
-        }
-
-        return new IndexStorageStatus(_indexPath, false, 0);
+        var index = new FileInfo(_indexPath);
+        long bytes;
+        try { bytes = index.Length; }
+        catch (FileNotFoundException) { return new(_indexPath, false, 0); }
+        catch (DirectoryNotFoundException) { return new(_indexPath, false, 0); }
+        if (IsLiveCatalog)
+            bytes = Directory.EnumerateFiles(_catalogDirectory?.Invoke() ?? Path.GetDirectoryName(_indexPath)!, "*", SearchOption.AllDirectories)
+                .Sum(path => new FileInfo(path).Length);
+        return new IndexStorageStatus(_indexPath, true, bytes / 1024);
     }
 
     public bool OpenIndexFolder()

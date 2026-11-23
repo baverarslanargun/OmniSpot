@@ -16,6 +16,7 @@ public partial class SettingsWindow : Window
     private readonly Action<string>? _log;
     private bool _indexStatusStarted;
     private bool _indexStatusClosed;
+    private bool? _indexExists;
     
     private bool _isRecordingHotkey = false;
     private GlobalHotkeyService.ModifierKeys _pendingModifiers;
@@ -53,6 +54,9 @@ public partial class SettingsWindow : Window
         Closed += (_, _) => _indexStatusClosed = true;
         SourceInitialized += (_, _) => ModernDialog.ApplyRoundedCorners(this);
     }
+
+    internal void FocusIndexingSettings() =>
+        Loaded += (_, _) => IndexSettingsHeading.BringIntoView();
 
     private void LoadSettingsToUI()
     {
@@ -93,11 +97,13 @@ public partial class SettingsWindow : Window
             IndexSizeText.Text = "Boyut: -";
             IndexPathText.Text = "Konum: -";
             _log?.Invoke($"⚠️ İndeks bilgisi okunamadı: {failure.Message}");
+            RebuildIndexButton.IsEnabled = true;
         }
     }
 
     private void UpdateIndexStatus(IndexStorageStatus status)
     {
+        _indexExists = status.Exists;
         if (status.Exists)
         {
             IndexStatusText.Text = "İndeks mevcut";
@@ -105,25 +111,25 @@ public partial class SettingsWindow : Window
             IndexSizeText.Text = status.SizeKilobytes >= 1024
                 ? $"Boyut: {FormatThumbnailBytes(status.SizeKilobytes * 1024)}"
                 : $"Boyut: {status.SizeKilobytes:N0} KB";
-            RebuildIndexButton.IsEnabled = true;
         }
         else
         {
             IndexStatusText.Text = "İndeks henüz oluşturulmadı";
             IndexStatusText.Foreground = (System.Windows.Media.Brush)FindResource("Ink2");
             IndexSizeText.Text = "Boyut: -";
-            RebuildIndexButton.IsEnabled = false;
         }
-        
+        RebuildIndexButton.Content = status.Exists ? "Yeniden oluştur" : "İndeksi oluştur";
+        RebuildIndexButton.IsEnabled = true;
         IndexPathText.Text = $"Konum: {status.Path}";
     }
 
     private void RebuildIndex_Click(object sender, RoutedEventArgs e)
     {
         if (!SaveIndexingSettings()) return;
-        if (!ModernDialog.Confirm(this, "İndeks yeniden oluşturulsun mu?",
-                "Seçtiğiniz yöntem ve klasörler kaydedilecek. Mevcut arama indeksi yeniden oluşturulacak; kişisel dosyalarınız değişmez.",
-                "Yeniden oluştur", DialogKind.Warning))
+        var create = _indexExists == false;
+        if (!ModernDialog.Confirm(this, create ? "İndeks oluşturulsun mu?" : "İndeks yeniden oluşturulsun mu?",
+                "Seçtiğiniz yöntem ve konumlar kaydedilecek. OmniSpot yeniden açıldığında tarama başlayacak.",
+                create ? "İndeksi oluştur" : "Yeniden oluştur", DialogKind.Question))
         {
             return;
         }
@@ -137,8 +143,12 @@ public partial class SettingsWindow : Window
         }
         catch (Exception ex)
         {
-            ModernDialog.Show(this, "İndeks yeniden oluşturulamadı",
-                $"{ex.Message}\n\nLütfen uygulamayı elle yeniden başlatın.", DialogKind.Danger);
+            var issue = IndexIssue.FromException(ex, null, "İndeks oluşturmayı başlatma");
+            var health = new IndexHealth([issue], SearchAvailable: _indexExists == true);
+            var message = IndexIssuePresentation.Describe(health);
+            if (ModernDialog.Confirm(this, "İndeks oluşturma başlatılamadı", message.Message,
+                    "Teknik ayrıntılar", DialogKind.Warning, "Kapat"))
+                IndexIssuePresentation.ShowDetails(this, health);
         }
     }
 

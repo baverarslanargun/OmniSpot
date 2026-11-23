@@ -13,6 +13,7 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 ### Temel Özellikler
 - ✅ **Global Hotkey**: Ctrl+Space ile her yerden açın
 - ✅ **Akıllı Arama**: Dosya adlarında hızlı arama
+- **Başlat uygulamaları** genel aramada en üstte görünür. Benzersiz en iyi eşleşmeyi Enter ile açabilir, ok tuşlarıyla başka bir uygulamaya veya dosyaya geçebilirsiniz. Pencere menüsündeki **Tüm uygulamalar** Windows kataloğunu alfabetik açar. Esc önceki aramaya döner.
 - ✅ **Doğal Dil Arama**: İsteğe bağlı Groq desteği ve kural tabanlı fallback ile sorguları yapılandırın
 - ✅ **Klasör Navigasyonu**: Uygulama içinde klasörlerde gezinin
 - ✅ **Adres Çubuğu ve Geçmiş**: Klasördeyken içeriğin üstünde tıklanabilir yol; Geri/İleri aramaya da döner ve aramayı yeniden çalıştırmaz
@@ -36,8 +37,10 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 | **Ctrl+V** | Windows panosundaki dosya ve klasörleri hedefe yapıştır |
 | **Ctrl / Shift + tıklama** | Birden çok öğe veya bir öğe aralığı seç |
 | **Ctrl / Shift + sürükleme** | Sırasıyla kopyala veya taşı |
-| **F2** | Yeniden adlandır (hover); 2+ öğe seçiliyse toplu yeniden adlandır |
-| **Delete** | Sil (hover); 2+ öğe seçiliyse seçimin tamamını sil |
+| **F2** | Adı satırın veya kartın üstünde düzenle (hover); Enter kaydeder, Esc vazgeçer. 2+ öğe seçiliyse toplu yeniden adlandır |
+| **Ctrl+Shift+N** | Klasör görünümünde yeni klasörü yerinde adlandırarak oluştur |
+| **Delete** | Onay sormadan Geri Dönüşüm Kutusu'na taşı (hover); 2+ öğe seçiliyse seçimin tamamını taşı. Kutuya gidemeyen öğe için Windows kalıcı silme uyarısı gösterir |
+| **Ctrl+Z** | Silme bildirimi açıkken son silinenleri Geri Dönüşüm Kutusu'ndan geri getir |
 | **F5** | Yenile |
 | **Alt+← / Alt+→** | Geri / ileri (fare yan tuşları da çalışır); geri tuşu aramaya da döner |
 | **Alt+↑** | Üst klasör |
@@ -52,6 +55,9 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 ### Doğal Dil Arama ve Gizlilik
 
 - Standart dosya araması yerel indeks üzerinde çalışır.
+- “İlgililik” sıralamasında önce tam ad, ardından uzantısız sorgularda tam dosya gövdesi, ad başlangıcı, sözcük başlangıcı ve diğer eşleşmeler gelir. Örneğin `cmd.exe`, `appcmd.exe` dosyasından önce görünür.
+- Aynı düzeyde eşleşen sonuçlarda OmniSpot üzerinden açtığınız öğeler öne çıkar. Açılan yol, açılma sayısı ve son açılış zamanı kullanıcıya ait `%LOCALAPPDATA%\OmniSpot\open-history.db` dosyasında tutulur. İndeksi yeniden oluşturmak bu geçmişi korur.
+- Klasör görünümünde seçilen sıralama o klasöre özel hatırlanır ve yeniden başlatmadan sonra da geçerlidir. Son değiştirilen en çok 1000 klasörün yolu ve sıralaması `%LOCALAPPDATA%\OmniSpot\folder-views.json` dosyasında tutulur. Filtreler klasöre özeldir ama yalnız uygulama açıkken hatırlanır.
 - Doğal Dil modu, sorguyu yapılandırmak için Groq API'ına iki paralel istek göndermeyi dener. Bu mod kullanıldığında sorgu metni harici servise aktarılabilir.
 - Groq anahtarı eksik/geçersizse veya servis yanıt vermezse uygulama kural tabanlı yerel parser'a döner. Fallback daha sınırlı sorgu semantiği sunar.
 - Yapılandırma ve güncel mimari için [doğal dil arama rehberine](docs/guides/llm-setup.md) bakın.
@@ -92,10 +98,18 @@ Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 
 ### İlk indeksleme ve işçi ayarları
 
-Ayarlar'daki **Tarama ve sıralama** bölümünden klasör taraması veya yerel NTFS
-diskler için MFT seçilebilir. MFT okuma ve işleme için tek işçi, adaptif seçim veya elle 1–16 işçi
-ayarlanabilir. İndeks sıralamasında Pivot ve Birleştir yöntemleri; otomatik veya
-elle 1–16 sıralama işçisi kullanılabilir. Bu ayarlar sonuçların filtre ve sıralama
+Ayarlar'daki **İndekslenecek konumlar** listesinde her disk için tarama yöntemi
+ayrı seçilir: **Otomatik**, **MFT** veya **Klasör taraması**. Otomatik, NTFS diskte
+MFT'yi dener; disk NTFS değilse, ağ konumuysa ya da Windows değişiklik günlüğü (USN)
+kapalıysa klasör taramasını kullanır. NTFS olmayan disklerde ve ağ konumlarında MFT
+hiç denenmez. Klasör taramalı disk, Windows klasör izleyicisiyle canlı güncellenir ve
+her açılışta arka planda yeniden gezilir; bu sırada arama önceki indeksle çalışır.
+Seçim `settings.json` içinde `IndexVolumeMethods` altında disk başına saklanır.
+
+**Tarama ve sıralama** bölümünde MFT okuma ve işleme için tek işçi, adaptif seçim veya
+elle 1–16 işçi ayarlanabilir. İndeks sıralamasında Pivot, Birleştir ve varsayılan pS⁵
+kullanılabilir. Sıralama işçisi otomatik veya elle 1–16 seçilebilir;
+pS⁵'te otomatik seçim en çok 8 işçi kullanır. Bu ayarlar sonuçların filtre ve sıralama
 seçeneklerini değiştirmez.
 
 Token indeksi bu sürümde geçici olarak kapalıdır (`TokenIndexing.Enabled=false`).
@@ -105,6 +119,19 @@ hazırlandığı anlamına gelmez.
 Tarama ayarları sonraki yeni taramada uygulanır; mevcut indeks korunur. Yeni
 ayarlarla baştan taramak için indeks bölümündeki yeniden oluşturma işlemini
 kullanın. Uygulama ve OmniSpot hizmeti aynı güncel sürümde olmalıdır.
+
+Bir konum taranamıyorsa veya arka planda güncellenemiyorsa arama penceresindeki
+uyarı etkilenen konumu ve aramaya etkisini gösterir. Açılamayan bir disk yalnız
+kendisini etkiler: diğer konumlarda arama açık kalır, o disk birkaç dakikada bir
+yeniden denenir ve açıldığında indekse eklenir. **İndeks ayarlarını aç**
+ile kapsamı düzenleyebilir, **Teknik ayrıntılar** bölümünden hata kodunu
+kopyalayabilirsiniz. İlk tarama tamamlanmadıysa ayarlardan **İndeksi oluştur**'u
+seçerek tekrar başlayabilirsiniz.
+
+İndekslenecek konumlar listesindeki değişiklikler uygulamanın sonraki açılışında
+uygulanır. Seçili disklerin tümü başarıyla açıldıktan sonra listeden
+çıkarılan disklerin eski indeksleri ve geçici indeks dosyaları otomatik temizlenir.
+Seçili bir diske erişilemezse o açılışta temizlik yapılmaz.
 
 ### Küçük resim belleği
 

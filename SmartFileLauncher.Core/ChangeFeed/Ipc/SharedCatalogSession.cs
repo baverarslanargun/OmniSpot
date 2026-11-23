@@ -27,6 +27,8 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
     private SharedCatalogSession? _previous;
     private readonly Func<string, CancellationToken, UsnDrainRunner.BootstrapLease>? _bootstrap;
     private readonly ChangeFeedIndexBridge _bridge;
+    private readonly Func<string, IndexIssue?>? _checkJournal;
+    private IReadOnlyList<IndexIssue>? _scanIssues;
     private readonly CancellationTokenSource _stop = new();
     private readonly SemaphoreSlim _wake = new(0, 1);
     private readonly ConcurrentQueue<(string Path, bool Open, long Operation, bool SynchronizeOnly)> _commands = new();
@@ -63,6 +65,7 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
         _bootstrap = admission.CatalogBootstrap;
         _allNames = method == IndexScanMethod.Mft;
         _bridge = new(new LocalChannel(admission, caller, () => _allNames, _profile), this);
+        _checkJournal = admission.CheckIndexJournal;
         _status = new(_id, "Servis kataloğu hazırlanıyor", 0, 0, false, 0, [], AppliedBuildOptions: _buildOptions, TokenIndexReady: false);
     }
 
@@ -130,6 +133,9 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
             using var bootstrap = !cached ? _bootstrap?.Invoke(_layout.OwnerSid, ct) : null;
             var preparation = await _bridge.PrepareContinuousAsync(_roots, !cached && bootstrap is null, ct).ConfigureAwait(false);
             if (!preparation.Available) throw new IOException(preparation.Diagnostic);
+            var journalRoots = preparation.ServiceRoots.Select(UsnVolumeJournalReader.ResolveVolumeRoot)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+            if (FindJournalIssue(journalRoots) is { } journalIssue) throw new IndexIssueException(journalIssue);
             if (!cached && _method == IndexScanMethod.Mft && preparation.WatcherRoots.Length != 0)
                 throw new NotSupportedException("MFT yöntemi yalnız yerel NTFS konumlarında kullanılabilir.");
             foreach (var root in _roots) Watch(root, preparation.WatcherRoots.Contains(root, StringComparer.OrdinalIgnoreCase));
@@ -141,7 +147,7 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
                 {
                     UpdateProgress("İlk taramanın değişiklik sınırı hazırlanıyor", 0);
                     bootstrap.DiscardPending(ct);
-                    foreach (var volume in preparation.ServiceRoots.Select(UsnVolumeJournalReader.ResolveVolumeRoot).Distinct(StringComparer.OrdinalIgnoreCase))
+                    foreach (var volume in journalRoots)
                     {
                         using var journal = new UsnVolumeJournalReader(volume);
                         boundaries.Add(volume, journal.QueryJournal());
@@ -152,6 +158,7 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
                 _parts = _method == IndexScanMethod.Mft
                     ? builder.ReadMft(Subscriptions(_roots), ct)
                     : builder.ReadDirectories(_roots, ct);
+                _scanIssues = builder.ScanIssues.Count == 0 ? null : builder.ScanIssues.ToArray();
                 _build = builder.Metrics;
                 Save();
                 if (bootstrap is not null && preparation.ServiceRoots.Length != 0)
@@ -194,6 +201,8 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
                             using var scope = _store.EnterOwnerScope(ct);
                             throughSequence = _store.ReadPending().AvailableThroughSequence;
                         }
+                        else if (FindJournalIssue(journalRoots) is { } issue)
+                            throw new IndexIssueException(issue);
                     }
                     if (throughSequence is not null)
                     {
@@ -228,24 +237,34 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
                 {
                     if (!await _bridge.DrainContinuousAsync(ct).ConfigureAwait(false))
                     {
-                        UpdateStatus(status => status with { Phase = "USN değişiklikleri bekleniyor" });
+                        var issue = FindJournalIssue(journalRoots) ??
+                            new IndexIssue(IndexIssueReason.Unknown, null, "USN güncellemesi", "USN değişiklikleri bekleniyor.");
+                        UpdateStatus(status => status with { Phase = "USN değişiklikleri bekleniyor", IndexIssue = issue });
                         continue;
                     }
                     var consumed = await ConsumePendingAsync(ct).ConfigureAwait(false);
                     if (!consumed.Available && !consumed.Retryable) throw new IOException(consumed.Diagnostic ?? "USN teslimi alınamadı.");
-                    if (consumed.Retryable) { Wake(); continue; }
+                    if (consumed.Retryable)
+                    {
+                        var issue = new IndexIssue(IndexIssueReason.Unknown, null, "USN güncellemesi",
+                            consumed.Diagnostic ?? "USN değişiklikleri bekleniyor.");
+                        UpdateStatus(status => status with { IndexIssue = issue });
+                        Wake();
+                        continue;
+                    }
                     if (!consumed.CaughtUp) Wake();
                 }
                 ProcessCommands(ct, commandsThrough);
                 if (Interlocked.Exchange(ref _nameOrderPublished, 0) != 0 || _revision != before) Publish();
-                else UpdateStatus(status => status with { CompletedOperation = _completedOperation });
+                else UpdateStatus(status => status with { CompletedOperation = _completedOperation, IndexIssue = null });
                 PrepareNameOrder(ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
         catch (Exception failure)
         {
-            UpdateStatus(status => status with { Ready = false, Failure = failure.Message, Phase = "Katalog işlemi durdu" });
+            var issue = IndexIssue.FromException(failure, _roots.Length == 1 ? _roots[0] : null, "Katalog işlemi");
+            UpdateStatus(status => status with { Ready = false, Failure = failure.Message, IndexIssue = issue, Phase = "Katalog işlemi durdu" });
         }
         finally
         {
@@ -259,6 +278,9 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
             _caller.Dispose();
         }
     }
+
+    private IndexIssue? FindJournalIssue(string[] volumes) =>
+        _checkJournal is null ? null : volumes.Select(_checkJournal).FirstOrDefault(issue => issue is not null);
 
     private async Task<ContinuousConsumption> ConsumePendingAsync(CancellationToken ct, long? throughSequence = null)
     {
@@ -589,6 +611,7 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
                 _parts.Add(new(store, part.ExcludeRoot, part.NativeIdentity, part.AllNames));
             }
             _allNames = _parts.Any(part => part.AllNames);
+            _scanIssues = manifest.ScanIssues;
             return _parts.Count > 0;
         }
         catch (Exception failure) when (failure is IOException or JsonException)
@@ -605,7 +628,7 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
         {
             using var catalog = part.Store.Acquire();
             return new SavedPart(Path.GetFileName(catalog.Data.Directory), part.ExcludeRoot, part.NativeIdentity, part.AllNames);
-        }).ToArray(), _build);
+        }).ToArray(), _build, _scanIssues);
         var temporary = Path.Combine(_directory, "current.tmp");
         using (var stream = new FileStream(temporary, FileMode.Create, FileAccess.Write, FileShare.None))
         { JsonSerializer.Serialize(stream, manifest); stream.Flush(true); }
@@ -614,8 +637,8 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
 
     private void Publish()
     {
-        if (!_allNames && !_caller.Run(_ => _roots.All(SharedCatalogService.CanList)))
-            throw new UnauthorizedAccessException("İndeks köklerinden birine erişim değişti.");
+        if (!_allNames && _caller.Run(_ => _roots.Select(SharedCatalogService.CheckRoot).FirstOrDefault(issue => issue is not null)) is { } issue)
+            throw new IndexIssueException(issue);
         var files = 0; var directories = 0; var tokens = 0; var tokenReady = TokenIndexing.Enabled;
         var parts = _parts.Select(part =>
         {
@@ -629,7 +652,8 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
         }).ToArray();
         UpdateStatus(_ => new(_id, tokenReady ? "Hazır" : "Arama hazır; AI indeksi arka planda hazırlanıyor", files + directories, _elapsed.ElapsedMilliseconds,
             true, ++_revision, parts, Files: files, Directories: directories, Tokens: tokens,
-            CompletedOperation: _completedOperation, Build: _build, AppliedBuildOptions: _buildOptions, TokenIndexReady: tokenReady));
+            CompletedOperation: _completedOperation, Build: _build, AppliedBuildOptions: _buildOptions, TokenIndexReady: tokenReady)
+            { ScanIssues = _scanIssues });
     }
     private int Count() => _parts.Sum(part => { using var catalog = part.Store.Acquire(); return catalog.Data.EntryCount; });
     private void UpdateProgress(string phase, int count) => UpdateStatus(status =>
@@ -638,7 +662,8 @@ internal sealed class SharedCatalogSession : IChangeFeedIndexTarget
     private static bool Same(string left, string right) => string.Equals(Path.TrimEndingDirectorySeparator(left), Path.TrimEndingDirectorySeparator(right), StringComparison.OrdinalIgnoreCase);
     public bool Apply(IReadOnlyList<FileChangeEvent> changes) => false;
     public Task<bool> ResynchronizeAsync(string rootPath, bool withinLifecycle, CancellationToken ct) => Task.FromResult(Enqueue(rootPath, false));
-    private sealed record Manifest(string Signature, SavedPart[] Parts, SharedCatalogBuildMetrics? Build = null);
+    private sealed record Manifest(string Signature, SavedPart[] Parts, SharedCatalogBuildMetrics? Build = null,
+        IReadOnlyList<IndexIssue>? ScanIssues = null);
     private sealed record SavedPart(string Folder, bool ExcludeRoot, bool NativeIdentity, bool AllNames = false);
     private sealed class LocalChannel(ChangeFeedAdmissionService admission, ChangeFeedCaller caller, Func<bool> allNames, SharedCatalogProfile profile) : IChangeFeedRequestChannel
     {

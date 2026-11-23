@@ -22,6 +22,21 @@ public sealed class NtfsMftParallelReaderTests
         Assert.Equal(expected, actual);
     }
     [Fact]
+    public void ReusedWorkerBufferKeepsShortFinalChunkAndEarlierEntries()
+    {
+        var volume = new ParallelTestVolume(shortTail: true);
+        using var reader = new NtfsMftReader(volume.CreateSource(), () => volume.CreateSource(worker: true));
+        var expected = reader.ReadEntries().ToArray();
+        var actual = reader.ReadEntries(new IndexBuildOptions(
+            ScanMode: IndexScanWorkerMode.Manual, ScanWorkers: 1)).ToArray();
+
+        Assert.Equal(expected, actual);
+        Assert.Equal("kisa-son.txt", actual[^1].Name);
+        Assert.Equal(5, actual.Length);
+        Assert.All(volume.WorkerSources, source => Assert.True(source.Disposed));
+    }
+
+    [Fact]
     public void ManualScanUsesIndependentReadersAndYieldsChunksInMftOrder()
     {
         var volume = new ParallelTestVolume { SynchronizeChunkReads = true };
@@ -38,6 +53,129 @@ public sealed class NtfsMftParallelReaderTests
         Assert.True(volume.WorkerSources.Count >= 2);
         Assert.All(volume.WorkerSources, source => Assert.True(source.Disposed));
         Assert.Equal(1, volume.RecordReadCount(1));
+    }
+
+    [Fact]
+    public void AdaptiveScanStartsFromTheWorkerCountRememberedForItsVolume()
+    {
+        var single = Guid.NewGuid().ToString("N");
+        var pair = Guid.NewGuid().ToString("N");
+        NtfsMftReader.RememberedScanWorkers[single] = 1;
+        NtfsMftReader.RememberedScanWorkers[pair] = 2;
+        try
+        {
+            var serialVolume = new ParallelTestVolume();
+            using (var reader = new NtfsMftReader(serialVolume.CreateSource(),
+                () => serialVolume.CreateSource(worker: true), single))
+                Assert.Equal(4, reader.ReadEntries(new IndexBuildOptions(), default).Count());
+            Assert.Single(serialVolume.WorkerSources);
+
+            var parallelVolume = new ParallelTestVolume { SynchronizeChunkReads = true };
+            using (var reader = new NtfsMftReader(parallelVolume.CreateSource(),
+                () => parallelVolume.CreateSource(worker: true), pair))
+                Assert.Equal(4, reader.ReadEntries(new IndexBuildOptions(), default).Count());
+            Assert.True(parallelVolume.PeakReads >= 2);
+        }
+        finally
+        {
+            NtfsMftReader.RememberedScanWorkers.TryRemove(single, out _);
+            NtfsMftReader.RememberedScanWorkers.TryRemove(pair, out _);
+        }
+    }
+
+    [Fact]
+    public void OnlyACompletedAdaptiveScanRemembersItsWorkerCount()
+    {
+        var key = Guid.NewGuid().ToString("N");
+        try
+        {
+            Assert.Equal(MftScanWorkerTuner.DefaultStartWorkers, NtfsMftReader.AdaptiveStartWorkers(key));
+            var volume = new ParallelTestVolume();
+            using (var reader = new NtfsMftReader(volume.CreateSource(),
+                () => volume.CreateSource(worker: true), key))
+            {
+                using (var abandoned = reader.ReadEntries(new IndexBuildOptions(), default).GetEnumerator())
+                    Assert.True(abandoned.MoveNext());
+                Assert.False(NtfsMftReader.RememberedScanWorkers.ContainsKey(key));
+
+                Assert.Equal(4, reader.ReadEntries(new IndexBuildOptions(
+                    ScanMode: IndexScanWorkerMode.Manual, ScanWorkers: 2), default).Count());
+                Assert.False(NtfsMftReader.RememberedScanWorkers.ContainsKey(key));
+
+                Assert.Equal(4, reader.ReadEntries(new IndexBuildOptions(), default).Count());
+            }
+            Assert.Equal(MftScanWorkerTuner.DefaultStartWorkers, NtfsMftReader.RememberedScanWorkers[key]);
+        }
+        finally
+        {
+            NtfsMftReader.RememberedScanWorkers.TryRemove(key, out _);
+        }
+    }
+
+    [Fact]
+    public async Task WorkerStillOpeningItsReaderDoesNotHoldBackTheOthers()
+    {
+        var volume = new ParallelTestVolume(shortTail: true);
+        using var secondOpening = new ManualResetEventSlim();
+        using var releaseSecond = new ManualResetEventSlim();
+        var opened = 0;
+        using var reader = new NtfsMftReader(volume.CreateSource(), () =>
+        {
+            if (Interlocked.Increment(ref opened) == 1)
+            {
+                Assert.True(secondOpening.Wait(TimeSpan.FromSeconds(5)));
+                return volume.CreateSource(worker: true);
+            }
+            secondOpening.Set();
+            releaseSecond.Wait();
+            return volume.CreateSource(worker: true);
+        });
+        var trace = new MftScanTrace();
+        var enumerator = reader.ReadEntries(new IndexBuildOptions(
+            ScanMode: IndexScanWorkerMode.Manual, ScanWorkers: 2), trace, default).GetEnumerator();
+        var read = Task.Run(() =>
+        {
+            var names = new List<string>();
+            while (names.Count < 5 && enumerator.MoveNext())
+                names.Add(enumerator.Current.Name);
+            return names;
+        });
+        try
+        {
+            var names = await read.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(new[] { "$MFT", "ilk.txt", "ikinci.txt", "son.txt", "kisa-son.txt" }, names);
+            Assert.Single(trace.ReaderOpenMs);
+        }
+        finally
+        {
+            releaseSecond.Set();
+            try { await read; } catch (Exception) { }
+            enumerator.Dispose();
+        }
+        Assert.Equal(2, trace.ReaderOpenMs.Count);
+    }
+
+    [Fact]
+    public void ScanTraceAccountsForEveryChunkAndEntry()
+    {
+        var volume = new ParallelTestVolume(shortTail: true);
+        using var reader = new NtfsMftReader(volume.CreateSource(), () => volume.CreateSource(worker: true));
+        var trace = new MftScanTrace();
+
+        var entries = reader.ReadEntries(new IndexBuildOptions(
+            ScanMode: IndexScanWorkerMode.Manual, ScanWorkers: 2), trace, default).ToArray();
+
+        var last = trace.Samples[^1];
+        Assert.Equal(3, last.Chunks);
+        Assert.Equal(entries.Length, last.Entries);
+        Assert.Equal(2, last.Workers);
+        Assert.All(trace.Samples, sample =>
+        {
+            Assert.True(sample.WaitMs >= sample.LongestWaitMs && sample.LongestWaitMs >= 0);
+            Assert.True(sample.DownstreamMs >= sample.LongestDownstreamMs && sample.LongestDownstreamMs >= 0);
+        });
+        Assert.Equal(trace.Samples.OrderBy(sample => sample.ElapsedMs), trace.Samples);
     }
 
     [Fact]
@@ -93,25 +231,28 @@ public sealed class NtfsMftParallelReaderTests
     {
         private const int RecordBytes = 1024;
         private const int ChunkBytes = 1024 * 1024;
-        private const int MftBytes = 2 * ChunkBytes;
+        private readonly int _mftBytes;
         private const int ClusterBytes = 512;
         private const int MftLcn = 8;
         private const int MftOffset = MftLcn * ClusterBytes;
-        private readonly byte[] _volume = new byte[MftOffset + MftBytes];
+        private readonly byte[] _volume;
         private readonly Dictionary<ulong, byte[]> _records = [];
         private readonly ConcurrentDictionary<ulong, int> _recordReads = new();
         private int _activeReads;
         private int _peakReads;
         private int _disposedWhileReading;
 
-        internal ParallelTestVolume()
+        internal ParallelTestVolume(bool shortTail = false)
         {
+            _mftBytes = 2 * ChunkBytes + (shortTail ? RecordBytes : 0);
+            _volume = new byte[MftOffset + _mftBytes];
             Add(0, Record(Basic(), Name("$MFT"),
-                Nonresident(0x80, MftBytes, 0, MftBytes / ClusterBytes - 1,
-                    0x12, 0x00, 0x10, MftLcn, 0)));
+                Nonresident(0x80, _mftBytes, 0, _mftBytes / ClusterBytes - 1,
+                    0x12, (byte)(shortTail ? 0x02 : 0x00), 0x10, MftLcn, 0)));
             Add(1, Record(Basic(), Name("ilk.txt"), Resident(0x80, [1])));
             Add(1024, Record(Basic(), Name("ikinci.txt"), Resident(0x80, [2])));
             Add(2047, Record(Basic(), Name("son.txt"), Resident(0x80, [3])));
+            if (shortTail) Add(2048, Record(Basic(), Name("kisa-son.txt"), Resident(0x80, [4, 5])));
         }
 
         internal bool SynchronizeChunkReads { get; init; }
@@ -204,7 +345,7 @@ public sealed class NtfsMftParallelReaderTests
             private int _disposed;
 
             public NtfsVolumeGeometry Geometry { get; } =
-                new(ClusterBytes, ClusterBytes, RecordBytes, 8192, MftBytes);
+                new(ClusterBytes, ClusterBytes, RecordBytes, 8192, owner._mftBytes);
             internal bool Disposed => Volatile.Read(ref _disposed) != 0;
             internal bool Worker { get; } = worker;
 

@@ -20,11 +20,43 @@ public sealed class SharedIndexLifecycleTests
             File.WriteAllText(marker, "pending");
             var channel = new Channel(_ => new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, Message: "continuous-usn-v1"));
             using var lifecycle = new SharedIndexLifecycleService(channel, new Locations(), IndexScanMethod.Mft, Path.Combine(directory, "control"));
-            await Assert.ThrowsAsync<IOException>(() => lifecycle.InitializeAsync());
+            var failure = await Assert.ThrowsAsync<IndexIssueException>(() => lifecycle.InitializeAsync());
+            Assert.Equal(IndexIssueReason.ServiceVersionMismatch, failure.Issue.Reason);
             Assert.Equal(new[] { ChangeFeedRequestKind.GetCapabilities }, channel.Requests);
             Assert.True(File.Exists(marker));
         }
         finally { Directory.Delete(directory, true); }
+    }
+
+    [Fact]
+    public async Task BackgroundCatalogWarningPreservesSearchUntilTheServiceRecovers()
+    {
+        using var directory = new SmartFileLauncher.Core.Tests.TestInfrastructure.TemporaryDirectory();
+        var options = new IndexBuildOptions().ForService();
+        var issue = new IndexIssue(IndexIssueReason.JournalInactive, @"C:\", "FSCTL_QUERY_USN_JOURNAL", "Günlük etkin değil", 1179);
+        var warn = 0;
+        var channel = new Channel(request => request.Kind == ChangeFeedRequestKind.GetCapabilities
+            ? new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok,
+                Capabilities: ["shared-build-options-v1", "two-phase-index-v1"])
+            : new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok,
+                Catalog: new SharedCatalogStatus("session", "Hazır", 0, 0, true, 1, [], AppliedBuildOptions: options)
+                { IndexIssue = Volatile.Read(ref warn) == 1 ? issue : null }));
+        using var lifecycle = new SharedIndexLifecycleService(channel, new Locations(), IndexScanMethod.SelectedFolders,
+            Path.Combine(directory.Path, "control"), options);
+        var updates = System.Threading.Channels.Channel.CreateUnbounded<IndexHealth>();
+        lifecycle.HealthChanged += health => updates.Writer.TryWrite(health);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+        await lifecycle.InitializeAsync(deadline.Token);
+        Assert.Empty((await updates.Reader.ReadAsync(deadline.Token)).Issues);
+
+        Volatile.Write(ref warn, 1);
+        var degraded = await updates.Reader.ReadAsync(deadline.Token);
+        Assert.True(degraded.SearchAvailable);
+        Assert.Equal(issue, Assert.Single(degraded.Issues));
+        Volatile.Write(ref warn, 0);
+        var recovered = await updates.Reader.ReadAsync(deadline.Token);
+        Assert.True(recovered.SearchAvailable);
+        Assert.Empty(recovered.Issues);
     }
 
     [Fact(Skip = "Token sistemi geçici olarak kapalı: TokenIndexing.Enabled=false")]

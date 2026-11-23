@@ -37,7 +37,8 @@ internal sealed class ChangeFeedAdmissionWorker : BackgroundService
             handoffDrainer: ChangeFeedDrainWorker.DrainToCurrentBoundary,
             inventory: new ChangeFeedInventorySessions(onInventoryFailure),
             sharedCatalogLayout: ChangeFeedStoreLayout.ForTrustedOwner,
-            catalogBootstrap: ChangeFeedDrainWorker.BeginCatalogBootstrap);
+            catalogBootstrap: ChangeFeedDrainWorker.BeginCatalogBootstrap,
+            checkIndexJournal: true);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

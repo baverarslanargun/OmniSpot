@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using SmartFileLauncher.Core.Application.Files;
+using SmartFileLauncher.UI.Services;
 using SmartFileLauncher.UI.ViewModels;
 using Clipboard = System.Windows.Clipboard;
 using KeyEventArgs = System.Windows.Input.KeyEventArgs;
@@ -27,6 +28,9 @@ public partial class MainWindow
         ["MoveToNewFolderMenuItem"] = "Yeni Klasöre Taşı",
         ["AddToShelfMenuItem"] = "Rafa Ekle"
     };
+
+    private static readonly HashSet<string> VolumeRootHiddenMenuItems =
+        ["CutMenuItem", "RenameMenuItem", "DeleteMenuItem", "ZipMenuItem", "MoveToNewFolderMenuItem"];
 
     private bool _archiveInProgress;
 
@@ -80,7 +84,7 @@ public partial class MainWindow
     private void UpdateSelectionBar()
     {
         var count = SelectedItemCount;
-        var show = count >= 2 && !_isPreparedForShutdown;
+        var show = count >= 2 && !_isPreparedForShutdown && !ApplicationOwnsCommands;
         if (show) SelectionCountText.Text = $"{count} öğe seçildi";
         var visible = SelectionBar.Visibility == Visibility.Visible;
         if (show == visible) return;
@@ -90,7 +94,7 @@ public partial class MainWindow
 
     private void BatchPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (KeyboardInDualPane) return;
+        if (NameEditing || KeyboardInDualPane || ApplicationOwnsCommands || StaleFileResults) return;
         var modifiers = Keyboard.Modifiers;
         if (e.Key == Key.A && modifiers == ModifierKeys.Control &&
             (Keyboard.FocusedElement is not TextBoxBase ||
@@ -101,7 +105,7 @@ public partial class MainWindow
         }
         else if (e.Key == Key.C && modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
         {
-            var targets = KeyboardTargets(_hoveredItemPath ?? _selectedItemPath);
+            var targets = KeyboardTargets(FocusedFileSearchPath ?? _hoveredItemPath ?? _selectedItemPath);
             if (targets.Count == 0) return;
             e.Handled = true;
             CopyPaths(targets);
@@ -136,11 +140,15 @@ public partial class MainWindow
 
     private void UpdateBatchMenuItems(ContextMenu menu, string? path)
     {
-        var count = MenuTargets(path).Count;
+        var targets = MenuTargets(path);
+        var count = targets.Count;
+        var includesVolumeRoot = targets.Any(FileOperationService.IsVolumeRoot);
         foreach (var item in menu.Items.OfType<MenuItem>())
         {
             if (BatchMenuHeaders.TryGetValue(item.Name, out var header))
                 item.Header = count > 1 ? $"{header} ({count} öğe)" : header;
+            if (VolumeRootHiddenMenuItems.Contains(item.Name))
+                item.Visibility = includesVolumeRoot ? Visibility.Collapsed : Visibility.Visible;
         }
 
         var extract = menu.Items.OfType<MenuItem>().FirstOrDefault(item => item.Name == "ExtractMenuItem");
@@ -221,38 +229,7 @@ public partial class MainWindow
         }
     }
 
-    private void DeleteItems(IReadOnlyList<string> paths)
-    {
-        if (paths.Count == 0) return;
-        if (paths.Count == 1)
-        {
-            DeleteItem(paths[0]);
-            return;
-        }
-
-        var confirmed = ModernDialog.Confirm(this, $"{paths.Count} öğe silinsin mi?",
-            "Öğeler Geri Dönüşüm Kutusu'na taşınacak, oradan geri alabilirsiniz.", "Sil", DialogKind.Danger);
-        if (!confirmed) return;
-
-        var deleted = 0;
-        var failures = new List<string>();
-        foreach (var path in paths)
-        {
-            try
-            {
-                if (_fileOperations.DeleteToRecycleBin(path) != FileItemKind.Missing) deleted++;
-                RemoveItemFromView(path);
-                RemoveSearchResult(path);
-            }
-            catch (Exception ex)
-            {
-                failures.Add($"{Path.GetFileName(path)}: {ex.Message}");
-            }
-        }
-
-        ReportBatch("🗑️", $"{deleted} öğe silindi", failures);
-        UpdateSelectionBar();
-    }
+    private void DeleteItems(IReadOnlyList<string> paths) => DeleteWithUndo(paths, fromPane: false);
 
     private void RenameItems(IReadOnlyList<string> paths)
     {
@@ -376,6 +353,7 @@ public partial class MainWindow
             Log($"🗜️ Arşiv oluşturuldu: {archive}");
             NotifyFileTransfer($"{Path.GetFileName(archive)} oluşturuldu.");
             _ = ProcessFileChangeAsync();
+            RenameWhenShown(archive, null);
         }
         catch (OperationCanceledException)
         {
@@ -437,6 +415,14 @@ public partial class MainWindow
 
         if (!PerformFileTransfer(paths.ToArray(), folder, move: true)) return;
         Log($"🗂️ {paths.Count} öğe yeni klasöre taşındı: {folder}");
-        RenameItem(folder);
+        RenameWhenShown(folder, () => ShowToast(
+            $"{paths.Count} öğe “{Path.GetFileName(folder)}” klasörüne taşındı.",
+            actionText: "Adlandır",
+            action: () => _ = RenameInParentFolderAsync(folder, parent)));
+    }
+
+    private async Task RenameInParentFolderAsync(string path, string parent)
+    {
+        if (await NavigateToFolderAsync(parent, path)) RenameWhenShown(path, null);
     }
 }

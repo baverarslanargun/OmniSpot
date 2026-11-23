@@ -54,6 +54,45 @@ public class SearchEngine
         CancellationToken cancellationToken = default) =>
         Search(query, maxResults, ResultView.SearchDefault, cancellationToken);
 
+    public IReadOnlyList<SearchResult> SearchPage(
+        string query,
+        int offset,
+        int limit,
+        ResultView view,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(query) || limit <= 0) return Array.Empty<SearchResult>();
+        if (_literalNamesOnly && _searchStateProvider != null)
+        {
+            var state = _searchStateProvider(cancellationToken).ForQuery();
+            using var lease = state as IQuerySnapshotLease;
+            if (state is ILiteralNamePageSnapshot paged)
+                return paged.SearchLiteralNames(query, offset, limit, view, cancellationToken);
+        }
+
+        var window = Search(query, (int)Math.Min(int.MaxValue, (long)offset + limit), view, cancellationToken);
+        return window.Count <= offset ? Array.Empty<SearchResult>() : window.Skip(offset).ToArray();
+    }
+
+    public int? CountMatches(
+        string query,
+        ResultView view,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(query)) return 0;
+        if (!_literalNamesOnly || _searchStateProvider == null) return null;
+        var state = _searchStateProvider(cancellationToken).ForQuery();
+        using var lease = state as IQuerySnapshotLease;
+        return state is ILiteralNamePageSnapshot paged
+            ? paged.CountLiteralNames(query, view, cancellationToken)
+            : null;
+    }
+
     public IReadOnlyList<SearchResult> Search(
         string query,
         int maxResults,
@@ -131,7 +170,7 @@ public class SearchEngine
         {
             cancellationToken.ThrowIfCancellationRequested();
             var node = candidate.node;
-            if (!filter.Matches(
+            if (!PathScope.Contains(view.Scope, node.FullPath) || !filter.Matches(
                     node.Name,
                     node.IsDirectory,
                     node.Metadata?.SizeBytes,
@@ -219,7 +258,7 @@ public class SearchEngine
         {
             cancellationToken.ThrowIfCancellationRequested();
             var item = candidate.item;
-            if (!filter.Matches(
+            if (!PathScope.Contains(view.Scope, item.FullPath) || !filter.Matches(
                     item.Name,
                     item.IsDirectory,
                     item.SizeBytes,

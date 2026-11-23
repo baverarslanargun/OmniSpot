@@ -46,7 +46,10 @@ public partial class MainWindow
         object? LatencyToolTip,
         bool LatencyVisible,
         string? Warning,
-        long ChangeSequence);
+        long ChangeSequence,
+        bool HasMore,
+        int? Total,
+        bool ScopeDismissed = false);
 
     private sealed record FolderPathTarget(string? Path, string? Highlight);
 
@@ -65,16 +68,30 @@ public partial class MainWindow
         {
             if (SearchBox.Text.Length == 0) _searchBoxEmptiedAt = Stopwatch.GetTimestamp();
         };
-        DependencyPropertyDescriptor
-            .FromProperty(VisibilityProperty, typeof(UIElement))
-            .AddValueChanged(DesktopIconsScroll, (_, _) => SyncFolderPathBarVisibility());
+        var visibility = DependencyPropertyDescriptor.FromProperty(VisibilityProperty, typeof(UIElement));
+        visibility.AddValueChanged(DesktopIconsScroll, (_, _) =>
+        {
+            SyncFolderPathBarVisibility();
+            SyncEmptyFolderPanel();
+        });
+        visibility.AddValueChanged(ResultsContainer, (_, _) => SyncEmptyFolderPanel());
         UpdateNavigationButtons();
     }
 
     private void NavigationPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (NameEditing) return;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         var modifiers = Keyboard.Modifiers;
+        if (BrowsingApplications && !KeyboardInDualPane)
+        {
+            if (key == Key.BrowserBack || (modifiers == ModifierKeys.Alt && key == Key.Left))
+            {
+                CloseApplicationBrowser();
+                e.Handled = true;
+            }
+            return;
+        }
         if (key == Key.BrowserBack || (modifiers == ModifierKeys.Alt && key == Key.Left))
         {
             e.Handled = true;
@@ -95,6 +112,10 @@ public partial class MainWindow
             e.Handled = true;
             _ = NavigateBackAsync();
         }
+        else if (key == Key.F && modifiers == ModifierKeys.Control)
+        {
+            e.Handled = HandleSearchInFolderShortcut();
+        }
     }
 
     private bool CanNavigateBackWithBackspace() =>
@@ -106,7 +127,13 @@ public partial class MainWindow
 
     private void NavigationPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
-        if (e.ChangedButton == MouseButton.XButton1)
+        if (e.ChangedButton is MouseButton.XButton1 or MouseButton.XButton2 &&
+            BrowsingApplications && !(DualPaneOpen && DualPane.IsMouseOver))
+        {
+            e.Handled = true;
+            if (e.ChangedButton == MouseButton.XButton1) CloseApplicationBrowser();
+        }
+        else if (e.ChangedButton == MouseButton.XButton1)
         {
             e.Handled = true;
             _ = NavigateBackAsync();
@@ -137,6 +164,7 @@ public partial class MainWindow
         UpdateBatchMenuItems(menu, PathFromMenuTarget(menu));
         UpdateTabMenuItems(menu);
         UpdateDualMenuItems(menu);
+        UpdateSearchInFolderMenuItem(menu);
         var goToFolder = menu.Items.OfType<MenuItem>().FirstOrDefault(item => item.Name == "GoToContainingFolderMenuItem");
         if (goToFolder == null) return;
         var target = menu.PlacementTarget as FrameworkElement;
@@ -145,13 +173,20 @@ public partial class MainWindow
         goToFolder.Visibility = fromSearch ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private async Task NavigateToFolderAsync(string folderPath, string? highlightPath = null)
+    private async Task<bool> NavigateToFolderAsync(string folderPath, string? highlightPath = null)
     {
         var origin = CaptureNavigationEntry();
         var sequence = ++_navigationSequence;
-        if (!await ShowFolderAsync(folderPath) || sequence != _navigationSequence) return;
+        if (!await ShowFolderAsync(folderPath) || sequence != _navigationSequence) return false;
         RememberNavigation(origin);
         if (highlightPath != null) HighlightFolderItem(highlightPath);
+        return true;
+    }
+
+    private async Task OpenFolderItemAsync(string path, bool inDualPane = false)
+    {
+        var opened = inDualPane ? await ShowPaneFolderAsync(path) : await NavigateToFolderAsync(path);
+        if (opened) _recordFolderOpened?.Invoke(path);
     }
 
     private Task NavigateToParentAsync()
@@ -261,9 +296,13 @@ public partial class MainWindow
                 }
 
                 _currentFolderPath = folderPath;
+                _searchScopeDismissed = false;
+                ResetKeyboardCardEffects();
+                SyncEmptyFolderPanel();
                 UpdateFilterBadge();
 
                 SearchBox.Clear();
+                SyncSearchScope();
                 ResultsContainer.Visibility = Visibility.Collapsed;
                 ShowPanel(DesktopIconsScroll);
                 UpdateFolderPathBar();
@@ -277,7 +316,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             Log($"❌ Klasör açılamadı: {ex.Message}");
-            ModernDialog.Show(this, "Klasör açılamadı", ex.Message, DialogKind.Warning);
+            ShowErrorToast($"Klasör açılamadı: {ex.Message}");
             return false;
         }
     }
@@ -285,9 +324,12 @@ public partial class MainWindow
     private void ShowHome()
     {
         _currentFolderPath = null;
+        _searchScopeDismissed = false;
+        ResetKeyboardCardEffects();
         LoadDesktopIcons();
         UpdateFilterBadge();
         UpdateFolderPathBar();
+        SyncSearchScope();
     }
 
     private void ClearSearchForNavigation()
@@ -326,18 +368,23 @@ public partial class MainWindow
             SearchLatencyText.ToolTip,
             SearchLatencyText.Visibility == Visibility.Visible,
             FallbackWarningBanner.Visibility == Visibility.Visible ? FallbackReasonText.Text : null,
-            Interlocked.Read(ref _fileChangeSequence));
+            Interlocked.Read(ref _fileChangeSequence),
+            _searchHasMore,
+            _searchTotal,
+            _searchScopeDismissed);
     }
 
     private void RestoreSearch(SearchSnapshot snapshot)
     {
         CancelCurrentSearch();
+        HideApplicationMatches();
         _restoringSearch = true;
         try
         {
             if (snapshot.NaturalLanguage != _isNaturalLanguageMode && NaturalLanguageToggle.IsEnabled)
                 NaturalLanguageToggle.IsChecked = snapshot.NaturalLanguage;
             _searchView = snapshot.View;
+            _searchScopeDismissed = snapshot.ScopeDismissed;
             SearchBox.Text = snapshot.Query;
             SearchBox.CaretIndex = snapshot.Query.Length;
         }
@@ -356,6 +403,7 @@ public partial class MainWindow
         }
 
         Volatile.Write(ref _refreshSearchRequest, request);
+        _presentedFileQuery = snapshot.Query;
         _completedSearchRequest = request;
         _completedSearchOutcome = outcome;
         DesktopIconsScroll.Visibility = Visibility.Collapsed;
@@ -376,6 +424,7 @@ public partial class MainWindow
         SearchLatencyText.Text = snapshot.LatencyText;
         SearchLatencyText.ToolTip = snapshot.LatencyToolTip;
         SearchLatencyText.Visibility = snapshot.LatencyVisible ? Visibility.Visible : Visibility.Collapsed;
+        RestoreSearchPaging(snapshot.HasMore, snapshot.Total);
         UpdateFilterBadge();
         SyncViewMenus();
 
@@ -387,6 +436,7 @@ public partial class MainWindow
                 ResultsList.SelectedItems.Add(result);
         }
 
+        ShowApplicationMatches(snapshot.Query);
         var offset = snapshot.Offset;
         if (offset > 0)
             _ = Dispatcher.InvokeAsync(() => SearchResultsScroll()?.ScrollToVerticalOffset(offset), DispatcherPriority.Background);
@@ -398,7 +448,13 @@ public partial class MainWindow
     }
 
     private ScrollViewer? SearchResultsScroll() =>
-        _isGridViewMode ? ResultsGridScroll : FindDescendant<ScrollViewer>(ResultsList);
+        FindDescendant<ScrollViewer>(_isGridViewMode ? ResultsGrid : ResultsList);
+
+    private void ScrollSearchResultsToTop()
+    {
+        foreach (var host in new System.Windows.Controls.ListBox[] { ResultsList, ResultsGrid })
+            FindDescendant<ScrollViewer>(host)?.ScrollToTop();
+    }
 
     private void RestoreFolderOffset(double offset)
     {

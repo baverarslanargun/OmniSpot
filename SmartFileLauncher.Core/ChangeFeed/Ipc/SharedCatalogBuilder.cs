@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.ChangeFeed.Store;
 using SmartFileLauncher.Core.ChangeFeed.Usn;
@@ -16,8 +17,19 @@ internal sealed partial class SharedCatalogBuilder(ChangeFeedCaller caller, stri
     private readonly IndexBuildOptions _buildOptions = IndexBuildOptions.Normalize(buildOptions);
     internal sealed record Part(CatalogStore Store, bool ExcludeRoot, bool NativeIdentity, bool AllNames = false);
     private int _count;
+    private readonly Dictionary<string, IndexIssue> _scanIssues = new(StringComparer.OrdinalIgnoreCase);
 
     internal SharedCatalogBuildMetrics? Metrics { get; private set; }
+    internal IReadOnlyCollection<IndexIssue> ScanIssues => _scanIssues.Values;
+
+    private void ReportSkipped(string path, Exception failure)
+    {
+        if (_scanIssues.Count >= 50) return;
+        _scanIssues.TryAdd(path, IndexIssue.FromException(failure, path, "Klasör taraması") with
+        {
+            Reason = IndexIssueReason.IncompleteScan
+        });
+    }
 
     internal List<Part> ReadMft(IReadOnlyList<ChangeFeedSubscribedRoot> roots, CancellationToken ct)
     {
@@ -134,7 +146,7 @@ internal sealed partial class SharedCatalogBuilder(ChangeFeedCaller caller, stri
             });
             ReadPart(path, true, ancestors, parts, ct);
         }
-        catch (Exception failure) when (MissingOrDenied(failure)) { }
+        catch (Exception failure) when (MissingOrDenied(failure)) { ReportSkipped(path, failure); }
     }
 
     private void ReadPart(string root, bool excludeRoot, HashSet<string> ancestors, List<Part> parts, CancellationToken ct)
@@ -162,7 +174,7 @@ internal sealed partial class SharedCatalogBuilder(ChangeFeedCaller caller, stri
             ct.ThrowIfCancellationRequested();
             NtfsDirectoryReader current;
             try { current = caller.Run(_ => new NtfsDirectoryReader(next.Path)); }
-            catch (Exception failure) when (MissingOrDenied(failure)) { continue; }
+            catch (Exception failure) when (MissingOrDenied(failure)) { ReportSkipped(next.Path, failure); continue; }
             using (current)
             {
                 if (current.Root.FileReference != next.Frn) continue;
@@ -176,7 +188,7 @@ internal sealed partial class SharedCatalogBuilder(ChangeFeedCaller caller, stri
         foreach (var link in links)
         {
             try { ReadPart(link.Path, true, new HashSet<string>(lineage, StringComparer.OrdinalIgnoreCase) { link.ParentPhysical }, parts, ct); }
-            catch (Exception failure) when (MissingOrDenied(failure)) { }
+            catch (Exception failure) when (MissingOrDenied(failure)) { ReportSkipped(link.Path, failure); }
         }
 
         void ReadDirectory(NtfsDirectoryReader reader, string path)

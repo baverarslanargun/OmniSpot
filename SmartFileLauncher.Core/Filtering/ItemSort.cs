@@ -1,3 +1,5 @@
+using SmartFileLauncher.Core.Search;
+
 namespace SmartFileLauncher.Core.Filtering;
 
 public enum SortField
@@ -100,6 +102,10 @@ public readonly record struct SortRow(
 
 public sealed record ResultView(ItemFilter Filter, ItemSort Sort)
 {
+    internal LiteralRanking? LiteralRanking { get; init; }
+
+    public string? Scope { get; init; }
+
     public static readonly ResultView SearchDefault = new(ItemFilter.None, ItemSort.Relevance);
     public static readonly ResultView FolderDefault = new(ItemFilter.None, ItemSort.NameAscending);
 

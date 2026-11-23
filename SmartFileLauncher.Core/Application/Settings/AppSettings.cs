@@ -21,6 +21,7 @@ public sealed class AppSettings
     public IndexScanMethod IndexingMethod { get; set; } = IndexScanMethod.SelectedFolders;
     public IndexBuildOptions IndexBuild { get; set; } = new();
     public List<string>? IndexedFolders { get; set; }
+    public Dictionary<string, IndexVolumeMethod>? IndexVolumeMethods { get; set; }
     public bool ThumbnailPreviewsEnabled { get; set; } = true;
     public bool ThumbnailCacheUseRamRatio { get; set; }
     public int ThumbnailCacheMaxCount { get; set; } = 1000;
@@ -28,6 +29,7 @@ public sealed class AppSettings
     public int ThumbnailIdleSeconds { get; set; } = 60;
     public List<string> ThumbnailPinnedFolders { get; set; } = new();
     public bool HideThumbnailPinWarning { get; set; }
+    public List<string> PinnedApplications { get; set; } = new();
 
     public void ResetToDefaults()
     {
@@ -50,6 +52,7 @@ public sealed class AppSettings
         IndexingMethod = IndexScanMethod.SelectedFolders;
         IndexBuild = new();
         IndexedFolders = null;
+        IndexVolumeMethods = null;
         ThumbnailPreviewsEnabled = true;
         ThumbnailCacheUseRamRatio = false;
         ThumbnailCacheMaxCount = 1000;
@@ -57,5 +60,6 @@ public sealed class AppSettings
         ThumbnailIdleSeconds = 60;
         ThumbnailPinnedFolders = new();
         HideThumbnailPinWarning = false;
+        PinnedApplications = new();
     }
 }

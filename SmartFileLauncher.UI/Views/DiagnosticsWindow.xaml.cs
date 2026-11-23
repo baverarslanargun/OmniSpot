@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Text;
 using System.Windows;
@@ -9,21 +10,18 @@ using SmartFileLauncher.Core.Diagnostics;
 using SmartFileLauncher.UI.Services;
 using CheckBox = System.Windows.Controls.CheckBox;
 using Clipboard = System.Windows.Clipboard;
-using Color = System.Windows.Media.Color;
 using FontFamily = System.Windows.Media.FontFamily;
+using Orientation = System.Windows.Controls.Orientation;
+using ShapePath = System.Windows.Shapes.Path;
 
 namespace SmartFileLauncher.UI.Views;
 
 public partial class DiagnosticsWindow : Window
 {
-    private const int MaxLogLines = 5000;
+    internal const int MaxLogLines = 5000;
+    internal const string StatusLabel = "durum";
 
-    private static readonly SolidColorBrush InkBrush = Frozen(0xE5, 0xE5, 0xEA);
-    private static readonly SolidColorBrush MutedBrush = Frozen(0x86, 0x86, 0x8B);
-    private static readonly SolidColorBrush GoodBrush = Frozen(0x30, 0xD1, 0x58);
-    private static readonly SolidColorBrush WarningBrush = Frozen(0xFF, 0xB3, 0x40);
-    private static readonly SolidColorBrush CriticalBrush = Frozen(0xFF, 0x6B, 0x6B);
-    private static readonly FontFamily MonoFont = new("Consolas");
+    private static readonly TimeSpan CopyFeedbackLength = TimeSpan.FromMilliseconds(1500);
 
     private readonly ApplicationLog _applicationLog;
     private readonly DiagnosticsSession _session;
@@ -33,9 +31,21 @@ public partial class DiagnosticsWindow : Window
     private readonly string? _fixedOutputDirectory;
 
     private readonly DispatcherTimer _timer = new();
-    private readonly Queue<string> _lines = new();
-    private readonly Dictionary<(string Group, string Label), TextBlock> _valueBlocks = new();
+    private readonly DispatcherTimer _copyFeedbackTimer = new();
+    private readonly ObservableCollection<DiagnosticsLogLine> _logLines;
+    private readonly Dictionary<(string Group, string Label), MetricView> _valueViews = new();
+    private readonly Dictionary<string, MetricView> _statusViews = new();
 
+    private readonly SolidColorBrush _ink;
+    private readonly SolidColorBrush _ink2;
+    private readonly SolidColorBrush _warning;
+    private readonly SolidColorBrush _danger;
+    private readonly FontFamily _monoFont;
+    private readonly Geometry _warningGlyph;
+    private readonly Geometry _dangerGlyph;
+
+    private ScrollViewer? _logScroll;
+    private DateTime? _refreshedAt;
     private long _renderedRevision = -1;
     private bool _suppressSettingChanges;
 
@@ -58,18 +68,31 @@ public partial class DiagnosticsWindow : Window
 
         InitializeComponent();
 
+        _ink = (SolidColorBrush)FindResource("Ink");
+        _ink2 = (SolidColorBrush)FindResource("Ink2");
+        _warning = (SolidColorBrush)FindResource("Warning");
+        _danger = (SolidColorBrush)FindResource("Danger");
+        _monoFont = (FontFamily)FindResource("Mono");
+        _warningGlyph = (Geometry)FindResource("WarningGlyph");
+        _dangerGlyph = (Geometry)FindResource("DangerGlyph");
+
         if (_fixedOutputDirectory != null)
         {
             ChooseDirectoryButton.IsEnabled = false;
             RememberDirectoryCheck.IsEnabled = false;
         }
 
-        foreach (var message in _applicationLog.GetSnapshot())
+        var snapshot = _applicationLog.GetSnapshot();
+        var first = Math.Max(0, snapshot.Count - MaxLogLines);
+        var lines = new List<DiagnosticsLogLine>(snapshot.Count - first);
+        for (var i = first; i < snapshot.Count; i++)
         {
-            _lines.Enqueue(message);
+            lines.Add(DiagnosticsLogLine.Parse(snapshot[i]));
         }
 
-        TrimAndRenderLog();
+        _logLines = new ObservableCollection<DiagnosticsLogLine>(lines);
+        LogList.ItemsSource = _logLines;
+        UpdateLogState();
         _applicationLog.MessageWritten += HandleMessageWritten;
 
         CopyButton.Click += (_, __) => CopyEverything();
@@ -87,27 +110,47 @@ public partial class DiagnosticsWindow : Window
         MetricLoggingCheck.IsChecked = _session.MetricLog.IsWriting;
         RememberDirectoryCheck.IsChecked = _settings.RememberDiagnosticsLogDirectory;
         _suppressSettingChanges = false;
+        UpdateStatus();
 
         _timer.Interval = TimeSpan.FromSeconds(1);
         _timer.Tick += (_, __) => Refresh();
+        _copyFeedbackTimer.Interval = CopyFeedbackLength;
+        _copyFeedbackTimer.Tick += (_, __) => EndCopyFeedback();
 
         Loaded += (_, __) =>
         {
             Refresh();
+            LogScroll?.ScrollToEnd();
             _timer.Start();
         };
         Closed += (_, __) =>
         {
             _timer.Stop();
+            _copyFeedbackTimer.Stop();
             _applicationLog.MessageWritten -= HandleMessageWritten;
         };
     }
 
-    private static SolidColorBrush Frozen(byte r, byte g, byte b)
+    internal Action<string> ClipboardWriter { get; set; } = Clipboard.SetText;
+
+    internal bool IsCopyFeedbackActive => _copyFeedbackTimer.IsEnabled;
+
+    internal MetricView? FindMetric(string group, string label) =>
+        _valueViews.TryGetValue((group, label), out var view) ? view : null;
+
+    internal MetricView? FindGroupStatus(string group) =>
+        _statusViews.TryGetValue(group, out var view) ? view : null;
+
+    private ScrollViewer? LogScroll
     {
-        var brush = new SolidColorBrush(Color.FromRgb(r, g, b));
-        brush.Freeze();
-        return brush;
+        get
+        {
+            if (_logScroll != null) return _logScroll;
+
+            LogList.ApplyTemplate();
+            _logScroll = LogList.Template?.FindName("LogScroll", LogList) as ScrollViewer;
+            return _logScroll;
+        }
     }
 
     private void HandleMessageWritten(string message)
@@ -123,47 +166,49 @@ public partial class DiagnosticsWindow : Window
 
     private void AppendLine(string message)
     {
-        var atEnd = LogScroll.ScrollableHeight - LogScroll.VerticalOffset < 4;
-        _lines.Enqueue(message);
+        var scroll = LogScroll;
+        var atEnd = scroll == null || scroll.ScrollableHeight - scroll.VerticalOffset < 1;
 
-        if (_lines.Count > MaxLogLines)
+        _logLines.Add(DiagnosticsLogLine.Parse(message));
+        while (_logLines.Count > MaxLogLines)
         {
-            TrimAndRenderLog();
+            _logLines.RemoveAt(0);
         }
-        else
-        {
-            LogText.Text = LogText.Text.Length == 0
-                ? message
-                : LogText.Text + Environment.NewLine + message;
-        }
+
+        UpdateLogState();
 
         if (atEnd)
         {
-            LogScroll.ScrollToEnd();
+            scroll?.ScrollToEnd();
         }
-    }
-
-    private void TrimAndRenderLog()
-    {
-        while (_lines.Count > MaxLogLines)
-        {
-            _lines.Dequeue();
-        }
-
-        LogText.Text = string.Join(Environment.NewLine, _lines);
     }
 
     private void ClearLog()
     {
-        _lines.Clear();
-        LogText.Text = string.Empty;
+        _logLines.Clear();
+        UpdateLogState();
     }
 
-    private void Refresh()
+    private void UpdateLogState()
+    {
+        EmptyLogText.Visibility = _logLines.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        UpdateHeader();
+    }
+
+    private void UpdateHeader()
+    {
+        var count = $"{_logLines.Count:N0} satır";
+        UpdatedText.Text = _refreshedAt is { } at
+            ? $"Son yenileme {at:HH:mm:ss}  ·  {count}"
+            : count;
+    }
+
+    internal void Refresh()
     {
         _session.Collector.Refresh();
         SyncMetrics();
-        UpdatedText.Text = DateTime.Now.ToString("HH:mm:ss");
+        _refreshedAt = DateTime.Now;
+        UpdateHeader();
         UpdateStatus();
     }
 
@@ -173,31 +218,37 @@ public partial class DiagnosticsWindow : Window
         if (error is { Length: > 0 })
         {
             LogStatusText.Text = $"hata: {error}";
-            LogStatusText.Foreground = CriticalBrush;
-            return;
+            LogStatusText.Foreground = _danger;
+            LogStatusText.FontFamily = this.FontFamily;
+            LogStatusText.ToolTip = LogStatusText.Text;
+            FolderGlyphPath.Visibility = Visibility.Collapsed;
+            ErrorGlyphPath.Visibility = Visibility.Visible;
         }
-
-        var parts = new List<string>();
-        var directory = _session.FileLog.CurrentFilePath is { Length: > 0 } logPath
-            ? Path.GetDirectoryName(logPath)
-            : _session.MetricLog.CurrentFilePath is { Length: > 0 } metricPath
-                ? Path.GetDirectoryName(metricPath)
-                : _fixedOutputDirectory ?? _settings.DiagnosticsLogDirectory;
-
-        parts.Add(string.IsNullOrWhiteSpace(directory) ? "dizin seçilmedi" : directory);
-
-        if (_session.FileLog.IsWriting)
+        else
         {
-            parts.Add($"günlük {_session.FileLog.WrittenLines:N0} satır");
+            var directory = _session.FileLog.CurrentFilePath is { Length: > 0 } logPath
+                ? Path.GetDirectoryName(logPath)
+                : _session.MetricLog.CurrentFilePath is { Length: > 0 } metricPath
+                    ? Path.GetDirectoryName(metricPath)
+                    : _fixedOutputDirectory ?? _settings.DiagnosticsLogDirectory;
+            var chosen = !string.IsNullOrWhiteSpace(directory);
+
+            LogStatusText.Text = chosen ? directory : "dizin seçilmedi";
+            LogStatusText.Foreground = _ink2;
+            LogStatusText.FontFamily = chosen ? _monoFont : this.FontFamily;
+            LogStatusText.ToolTip = chosen ? directory : null;
+            FolderGlyphPath.Visibility = Visibility.Visible;
+            ErrorGlyphPath.Visibility = Visibility.Collapsed;
         }
 
-        if (_session.MetricLog.IsWriting)
-        {
-            parts.Add($"sayaç {_session.MetricLog.WrittenRows:N0} satır");
-        }
+        ShowCount(FileLogCountText, _session.FileLog.IsWriting, _session.FileLog.WrittenLines);
+        ShowCount(MetricLogCountText, _session.MetricLog.IsWriting, _session.MetricLog.WrittenRows);
+    }
 
-        LogStatusText.Text = string.Join("  ·  ", parts);
-        LogStatusText.Foreground = MutedBrush;
+    private static void ShowCount(TextBlock block, bool writing, long rows)
+    {
+        block.Visibility = writing ? Visibility.Visible : Visibility.Collapsed;
+        block.Text = writing ? $"{rows:N0} satır" : string.Empty;
     }
 
     private void ApplyFileLogging(bool enabled)
@@ -357,7 +408,7 @@ public partial class DiagnosticsWindow : Window
         UpdateStatus();
     }
 
-    private void SyncMetrics()
+    internal void SyncMetrics()
     {
         var snapshot = _session.Collector.Metrics.Snapshot();
         var revision = _session.Collector.Metrics.Revision;
@@ -373,10 +424,19 @@ public partial class DiagnosticsWindow : Window
         {
             foreach (var reading in group.Readings)
             {
-                if (_valueBlocks.TryGetValue((group.Title, reading.Label), out var block))
+                if (IsStatus(reading))
                 {
-                    block.Text = reading.Value;
-                    block.Foreground = BrushFor(reading.Severity);
+                    if (_statusViews.TryGetValue(group.Title, out var status))
+                    {
+                        ApplyReading(status, reading, _ink2);
+                    }
+
+                    continue;
+                }
+
+                if (_valueViews.TryGetValue((group.Title, reading.Label), out var view))
+                {
+                    ApplyReading(view, reading, _ink);
                 }
             }
         }
@@ -385,64 +445,135 @@ public partial class DiagnosticsWindow : Window
     private void RebuildMetrics(IReadOnlyList<DiagnosticsGroup> snapshot)
     {
         MetricsStack.Children.Clear();
-        _valueBlocks.Clear();
+        _valueViews.Clear();
+        _statusViews.Clear();
 
         foreach (var group in snapshot)
         {
-            MetricsStack.Children.Add(new TextBlock
+            var section = new StackPanel
+            {
+                Margin = new Thickness(0, MetricsStack.Children.Count == 0 ? 0 : 20, 0, 0)
+            };
+
+            var header = new Grid { MinHeight = 20, Margin = new Thickness(0, 0, 0, 6) };
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            header.Children.Add(new TextBlock
             {
                 Text = group.Title,
-                FontFamily = MonoFont,
-                FontSize = 10,
-                Foreground = MutedBrush,
-                Margin = new Thickness(0, MetricsStack.Children.Count == 0 ? 0 : 20, 0, 7)
+                FontSize = 11,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = _ink2,
+                VerticalAlignment = VerticalAlignment.Center
             });
+
+            var status = CreateMetricView(12);
+            status.Panel.Visibility = Visibility.Collapsed;
+            Grid.SetColumn(status.Panel, 1);
+            header.Children.Add(status.Panel);
+            section.Children.Add(header);
+            _statusViews[group.Title] = status;
 
             foreach (var reading in group.Readings)
             {
-                var row = new Grid { Margin = new Thickness(0, 0, 0, 4) };
-                row.ColumnDefinitions.Add(
-                    new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                if (IsStatus(reading))
+                {
+                    status.Panel.Visibility = Visibility.Visible;
+                    ApplyReading(status, reading, _ink2);
+                    continue;
+                }
+
+                var row = new Grid { MinHeight = 22 };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
                 var label = new TextBlock
                 {
-                    Text = reading.Label,
-                    FontFamily = MonoFont,
-                    FontSize = 11,
-                    Foreground = MutedBrush,
-                    VerticalAlignment = VerticalAlignment.Center
+                    Text = reading.Label.Trim(),
+                    FontSize = 12,
+                    Foreground = _ink2,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    TextTrimming = TextTrimming.CharacterEllipsis,
+                    Margin = new Thickness(IsChild(reading.Label) ? 12 : 0, 0, 12, 0)
                 };
-                Grid.SetColumn(label, 0);
                 row.Children.Add(label);
 
-                var value = new TextBlock
-                {
-                    Text = reading.Value,
-                    FontFamily = MonoFont,
-                    FontSize = 13,
-                    Foreground = BrushFor(reading.Severity),
-                    TextAlignment = TextAlignment.Right,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                Grid.SetColumn(value, 1);
-                row.Children.Add(value);
+                var value = CreateMetricView(13);
+                value.Label = label;
+                ApplyReading(value, reading, _ink);
+                Grid.SetColumn(value.Panel, 1);
+                row.Children.Add(value.Panel);
 
-                MetricsStack.Children.Add(row);
-                _valueBlocks[(group.Title, reading.Label)] = value;
+                section.Children.Add(row);
+                _valueViews[(group.Title, reading.Label)] = value;
             }
+
+            MetricsStack.Children.Add(section);
         }
     }
 
-    private static SolidColorBrush BrushFor(DiagnosticsSeverity severity) => severity switch
+    private MetricView CreateMetricView(double fontSize)
     {
-        DiagnosticsSeverity.Good => GoodBrush,
-        DiagnosticsSeverity.Warning => WarningBrush,
-        DiagnosticsSeverity.Critical => CriticalBrush,
-        _ => InkBrush
-    };
+        var glyph = new ShapePath
+        {
+            Width = 12,
+            Height = 12,
+            Stretch = Stretch.Uniform,
+            StrokeThickness = 1.4,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            StrokeLineJoin = PenLineJoin.Round,
+            Margin = new Thickness(0, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+            Visibility = Visibility.Collapsed
+        };
+        var text = new TextBlock
+        {
+            FontSize = fontSize,
+            TextAlignment = TextAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        var panel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        panel.Children.Add(glyph);
+        panel.Children.Add(text);
+        return new MetricView(panel, glyph, text);
+    }
 
-    private void CopyEverything()
+    private void ApplyReading(MetricView view, DiagnosticsReading reading, SolidColorBrush calm)
+    {
+        view.Text.Text = reading.Value;
+        switch (reading.Severity)
+        {
+            case DiagnosticsSeverity.Warning:
+                view.Text.Foreground = _warning;
+                view.Glyph.Data = _warningGlyph;
+                view.Glyph.Stroke = _warning;
+                view.Glyph.Visibility = Visibility.Visible;
+                break;
+            case DiagnosticsSeverity.Critical:
+                view.Text.Foreground = _danger;
+                view.Glyph.Data = _dangerGlyph;
+                view.Glyph.Stroke = _danger;
+                view.Glyph.Visibility = Visibility.Visible;
+                break;
+            default:
+                view.Text.Foreground = calm;
+                view.Glyph.Visibility = Visibility.Collapsed;
+                break;
+        }
+    }
+
+    private static bool IsStatus(DiagnosticsReading reading) =>
+        string.Equals(reading.Label, StatusLabel, StringComparison.Ordinal);
+
+    private static bool IsChild(string label) =>
+        label.Length > 0 && char.IsWhiteSpace(label[0]);
+
+    internal string BuildCopyText()
     {
         var builder = new StringBuilder();
         builder.Append("OmniSpot tanılama · ")
@@ -464,16 +595,71 @@ public partial class DiagnosticsWindow : Window
             }
         }
 
-        builder.AppendLine().AppendLine("GÜNLÜK").AppendLine(LogText.Text);
+        builder.AppendLine().AppendLine("GÜNLÜK").AppendLine(string.Join(
+            Environment.NewLine,
+            _logLines.Select(line => line.Raw)));
+        return builder.ToString();
+    }
+
+    private void CopyEverything()
+    {
+        var text = BuildCopyText();
 
         try
         {
-            Clipboard.SetText(builder.ToString());
+            ClipboardWriter(text);
             _applicationLog.Write("📋 Tanılama panoya kopyalandı");
+            ShowCopyFeedback(true);
         }
         catch (Exception ex)
         {
             _applicationLog.Write($"⚠️ Panoya kopyalanamadı: {ex.Message}");
+            ShowCopyFeedback(false);
         }
+    }
+
+    private void ShowCopyFeedback(bool copied)
+    {
+        CopyLabel.Text = copied ? "Kopyalandı" : "Kopyalanamadı";
+        CopyGlyphPath.Visibility = copied ? Visibility.Collapsed : Visibility.Visible;
+        CopyDonePath.Visibility = copied ? Visibility.Visible : Visibility.Collapsed;
+        if (copied)
+        {
+            CopyLabel.ClearValue(TextBlock.ForegroundProperty);
+        }
+        else
+        {
+            CopyLabel.Foreground = _danger;
+        }
+
+        _copyFeedbackTimer.Stop();
+        _copyFeedbackTimer.Start();
+    }
+
+    internal void EndCopyFeedback()
+    {
+        _copyFeedbackTimer.Stop();
+        CopyLabel.Text = "Kopyala";
+        CopyLabel.ClearValue(TextBlock.ForegroundProperty);
+        CopyGlyphPath.Visibility = Visibility.Visible;
+        CopyDonePath.Visibility = Visibility.Collapsed;
+    }
+
+    internal sealed class MetricView
+    {
+        public MetricView(StackPanel panel, ShapePath glyph, TextBlock text)
+        {
+            Panel = panel;
+            Glyph = glyph;
+            Text = text;
+        }
+
+        public StackPanel Panel { get; }
+
+        public ShapePath Glyph { get; }
+
+        public TextBlock Text { get; }
+
+        public TextBlock? Label { get; set; }
     }
 }

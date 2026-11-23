@@ -41,6 +41,56 @@ public sealed class FileIndexTests
     }
 
     [Fact]
+    public void WalkingTheWholeOrderMatchesTheReferenceWhenDirectCollectionIsOff()
+    {
+        var model = Model.Random(new Random(77), folders: 300, files: 2500);
+        using var index = FileIndex.Build(RootPath, RootReference, model.Entries());
+        index.SparseNameLimit = 0;
+        AssertMatches(model, index);
+    }
+
+    [Theory]
+    [InlineData(1, 16384)]
+    [InlineData(3, 40)]
+    [InlineData(4096, 8)]
+    public void DirectAndWalkedCollectionMatchTheReferenceAtEveryThreshold(int nameLimit, int rowLimit)
+    {
+        var random = new Random(91);
+        var model = Model.Random(random, folders: 300, files: 2500);
+        using var index = FileIndex.Build(RootPath, RootReference, model.Entries());
+        index.SparseNameLimit = nameLimit;
+        index.SparseRowLimit = rowLimit;
+        AssertMatches(model, index);
+        index.Apply(model.RandomChanges(random, 200));
+        AssertMatches(model, index);
+        using var walked = FileIndex.Build(RootPath, RootReference, model.Entries());
+        walked.SparseNameLimit = 0;
+        AssertSameResults(walked, index);
+    }
+
+    [Fact]
+    public void PagesAcrossSeveralVolumesJoinIntoTheSingleWindowAndCountsAddUp()
+    {
+        var first = Model.Random(new Random(5), folders: 120, files: 900);
+        var second = Model.Random(new Random(6), folders: 120, files: 900);
+        using var left = FileIndex.Build(RootPath, RootReference, first.Entries());
+        using var right = FileIndex.Build(@"D:\Root", RootReference, second.Entries());
+        var engine = new SearchEngine(_ => new FileIndexReader([(left, null), (right, null)]), new BasicTokenizer(),
+            new BasicScoringStrategy(), literalNamesOnly: true);
+        foreach (var query in new[] { "a", "read", "2024", "zzz" })
+        foreach (var view in Views)
+        {
+            var whole = engine.Search(query, 100_000, view).Select(result => result.FullPath).ToArray();
+            var paged = new List<string>();
+            for (var offset = 0; offset <= whole.Length; offset += 37)
+                paged.AddRange(engine.SearchPage(query, offset, 37, view).Select(result => result.FullPath));
+            Assert.True(whole.SequenceEqual(paged), $"'{query}' {view.Sort.Field} desc={view.Sort.Descending} {view.Filter}");
+            Assert.Equal(left.CountMatches(query, view, null) + right.CountMatches(query, view, null), engine.CountMatches(query, view));
+            Assert.Equal(whole.Length, engine.CountMatches(query, view));
+        }
+    }
+
+    [Fact]
     public void SuccessiveChangeBatchesMatchTheReferenceAndAFreshRebuild()
     {
         var random = new Random(23);
@@ -166,6 +216,39 @@ public sealed class FileIndexTests
         AssertMatches(model, index);
     }
 
+    [Fact]
+    public void SizesBeyondTheCompactRangeSurviveChangesCompactionAndSnapshots()
+    {
+        using var directory = new TemporaryDirectory();
+        var model = Model.Random(new Random(15), folders: 40, files: 300);
+        using var index = FileIndex.Build(RootPath, RootReference, model.Entries());
+        var files = model.Files().Where(file => file.Name.Contains('.')).Take(5).ToArray();
+        long[] sizes = [(1L << 40) - 2, (1L << 40) - 1, 1L << 40, 5L << 40, long.MaxValue];
+        var now = DateTime.UtcNow.Ticks;
+        index.Apply(files.Select((file, at) => model.Touch(file.Reference, sizes[at], now)).ToList());
+        AssertMatches(model, index);
+        AssertLargest(index, sizes);
+        index.CompactNow();
+        AssertMatches(model, index);
+        AssertLargest(index, sizes);
+        var path = Path.Combine(directory.Path, "large.db");
+        index.Save(path, new IndexCheckpoint(1, 2, 3));
+        using var loaded = FileIndex.Load(path, out _);
+        Assert.NotNull(loaded);
+        AssertMatches(model, loaded!);
+        AssertLargest(loaded!, sizes);
+        loaded!.Apply([model.Touch(files[4].Reference, 10, now)]);
+        AssertMatches(model, loaded);
+        AssertLargest(loaded, sizes[..4]);
+
+        static void AssertLargest(FileIndex target, long[] expected)
+        {
+            var view = new ResultView(ItemFilter.None, new ItemSort(SortField.Size, true));
+            var found = target.Search(".", expected.Length, view).Select(result => result.SizeBytes!.Value).ToArray();
+            Assert.Equal(expected.OrderByDescending(size => size).ToArray(), found);
+        }
+    }
+
     private static readonly string[] WordTokens =
     [
         "fatura", "FATURA", "efatura2024", "isik", "ışık", "IŞIK", "rapor", "raporu", "çağrı", "cagri", "kopya", "readme", "md",
@@ -216,6 +299,62 @@ public sealed class FileIndexTests
             }
         }
         Assert.True(seen > 500, $"Kelime referansı çok az sonuç üretti: {seen}");
+        foreach (var token in WordTokens)
+        {
+            var combined = index.TokenItemsWithPartial(token, null, CancellationToken.None);
+            Assert.Equal(index.TokenItems(token, TokenMatch.Partial, 0, null, CancellationToken.None).Select(item => item.FullPath),
+                combined.Select(pair => pair.Item.FullPath));
+            var exact = index.TokenItems(token, TokenMatch.Exact, 0, null, CancellationToken.None);
+            Assert.Equal(exact.Select(item => item.FullPath),
+                combined.Where(pair => pair.Exact).Select(pair => pair.Item.FullPath));
+            var summary = index.SummarizeToken(token, 3, null, CancellationToken.None);
+            Assert.Equal(exact.Count, summary.Count);
+            Assert.Equal(exact.Take(3).Select(item => item.Name), summary.SampleNames);
+        }
+    }
+
+    [Fact]
+    public void CatalogFiltersMatchCheckingEveryItemAtAndAroundEachBound()
+    {
+        var random = new Random(53);
+        var model = Model.Random(random, folders: 120, files: 900);
+        using var index = FileIndex.Build(RootPath, RootReference, model.Entries());
+        index.Apply(model.RandomChanges(random, 400));
+        var everything = new QueryCatalogFilter(true, true, false, false, null, null, null, null, null, null);
+        var all = index.Items(everything, null, CancellationToken.None).ToList();
+        Assert.True(all.Count > 800, $"Çok az öğe: {all.Count}");
+        Assert.Contains(all, item => item.CreatedTime is null);
+        var pivots = new List<DateTime> { DateTime.MinValue, DateTime.MaxValue, DateTime.UnixEpoch, DateTime.Now };
+        foreach (var item in all.Where((_, at) => at % 97 == 0))
+        {
+            if (item.LastWriteTime is { } modified)
+                pivots.AddRange([modified, modified.AddSeconds(1), modified.AddSeconds(-1), modified.AddTicks(1),
+                    DateTime.SpecifyKind(modified, DateTimeKind.Unspecified), modified.ToUniversalTime()]);
+            if (item.CreatedTime is { } created) pivots.AddRange([created, created.AddHours(13), created.AddHours(-15)]);
+        }
+        var compared = 0;
+        foreach (var pivot in pivots)
+        foreach (var directories in new[] { false, true })
+        {
+            var earlier = pivot.Ticks > TimeSpan.FromDays(20).Ticks ? pivot.AddDays(-20) : pivot;
+            QueryCatalogFilter[] filters =
+            [
+                everything with { ModifiedAfter = pivot, FilterDirectoryDates = directories },
+                everything with { ModifiedBeforeExclusive = pivot, FilterDirectoryDates = directories },
+                everything with { CreatedAfter = pivot, FilterDirectoryDates = directories },
+                everything with { CreatedBeforeExclusive = pivot, FilterDirectoryDates = directories },
+                everything with { ModifiedAfter = earlier, ModifiedBeforeExclusive = pivot, CreatedBeforeExclusive = pivot, IncludeDirectories = directories },
+                everything with { ModifiedAfter = pivot, FilterFileSize = true, MinSizeMb = 0.001, MaxSizeMb = 250, FilterDirectoryDates = directories }
+            ];
+            foreach (var filter in filters)
+            {
+                var want = all.Where(item => filter.Matches(item)).Select(item => item.FullPath).ToArray();
+                var got = index.Items(filter, null, CancellationToken.None).Select(item => item.FullPath).ToArray();
+                Assert.True(want.SequenceEqual(got), $"{filter}: beklenen {want.Length}, gelen {got.Length}");
+                compared += want.Length;
+            }
+        }
+        Assert.True(compared > 10_000, $"Filtreler çok az öğe seçti: {compared}");
     }
 
     private static class WordReference
@@ -290,6 +429,16 @@ public sealed class FileIndexTests
                     $"'{query}' {view.Sort.Field} desc={view.Sort.Descending} {view.Filter} limit={limit}:{Environment.NewLine}" +
                     $"want [{string.Join(", ", want.Take(12))}]{Environment.NewLine}got  [{string.Join(", ", got.Take(12))}]");
             }
+            foreach (var offset in new[] { 0, 1, 7, 100, Math.Max(0, expected.Count - 3), expected.Count, expected.Count + 5 })
+            {
+                var want = expected.Skip(offset).Take(7).ToArray();
+                var got = index.Search(query, offset, 7, view, null).Select(result => result.FullPath).ToArray();
+                Assert.True(want.SequenceEqual(got),
+                    $"'{query}' {view.Sort.Field} desc={view.Sort.Descending} {view.Filter} offset={offset}:{Environment.NewLine}" +
+                    $"want [{string.Join(", ", want)}]{Environment.NewLine}got  [{string.Join(", ", got)}]");
+            }
+            Assert.True(expected.Count == index.CountMatches(query, view, null),
+                $"'{query}' {view.Filter} sayı: want {expected.Count}, got {index.CountMatches(query, view, null)}");
         }
         Assert.True(seen > 1000, $"Referans çok az sonuç üretti: {seen}");
     }
@@ -534,7 +683,7 @@ public sealed class FileIndexTests
                     var chain = Chain(link.Parent);
                     var item = new Item(node, link.Name, chain, RootPath + "\\" + string.Join("\\", chain.Append(link.Name)));
                     if (view.Filter.IsActive && !view.Filter.Matches(link.Name, node.Directory, node.Directory ? null : node.Size,
-                            node.Directory ? null : new DateTime(node.Modified, DateTimeKind.Utc).ToLocalTime(), now)) continue;
+                            node.Directory ? null : DateTime.UnixEpoch.AddSeconds(FileIndex.Seconds(node.Modified)).ToLocalTime(), now)) continue;
                     items.Add(item);
                 }
             }
@@ -550,7 +699,7 @@ public sealed class FileIndexTests
                 case SortField.Size:
                 case SortField.Modified:
                 {
-                    long Key(Item item) => sort.Field == SortField.Size ? item.Node.Size : item.Node.Modified;
+                    long Key(Item item) => sort.Field == SortField.Size ? item.Node.Size : FileIndex.Seconds(item.Node.Modified);
                     var files = items.Where(item => !item.Node.Directory).ToList();
                     files.Sort((left, right) =>
                     {

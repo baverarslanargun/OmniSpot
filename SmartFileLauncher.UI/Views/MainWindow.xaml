@@ -287,6 +287,56 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="BannerActionButton" TargetType="Button">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Foreground" Value="#2F4A73"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="10,4"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="#FFFFFF" BorderBrush="#EAD6AE" BorderThickness="1" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#FFFDF8"/>
+                                <Setter TargetName="Surface" Property="BorderBrush" Value="#D8BC84"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#FBF0D9"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="BannerQuietButton" TargetType="Button" BasedOn="{StaticResource BannerActionButton}">
+            <Setter Property="Foreground" Value="#5B6472"/>
+            <Setter Property="FontWeight" Value="Normal"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Surface" Background="Transparent" BorderThickness="1" BorderBrush="Transparent" CornerRadius="8" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#12000000"/>
+                                <Setter Property="Foreground" Value="#111827"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Surface" Property="Background" Value="#1F000000"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Geometry x:Key="CloseGlyphGeometry">M0 0 L8 8 M8 0 L0 8</Geometry>
         <Geometry x:Key="MinusGlyphGeometry">M0 4 L8 4</Geometry>
         <Geometry x:Key="SyncGeometry">M4 12 A8 8 0 0 1 18 6.7 M20 12 A8 8 0 0 1 6 17.3 M18 3 V7 H14 M6 21 V17 H10</Geometry>
@@ -991,6 +1041,7 @@
         <ContextMenu x:Key="FileContextMenu" Style="{StaticResource ModernContextMenu}" Opened="FileContextMenu_Opened">
             <MenuItem Header="Aç" Tag="📂" InputGestureText="Enter" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Open"/>
             <MenuItem x:Name="OpenInNewTabMenuItem" Header="Yeni Sekmede Aç" Tag="📑" InputGestureText="Orta tık" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenInNewTab"/>
+            <MenuItem x:Name="SearchInFolderMenuItem" Header="Bu Klasörde Ara" Tag="🔍" InputGestureText="Ctrl+F" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_SearchInFolder"/>
             <MenuItem Header="Birlikte Aç..." Tag="🔗" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_OpenWith"/>
             <Separator Style="{StaticResource MenuSeparator}"/>
             <MenuItem x:Name="CopyMenuItem" Header="Kopyala" Tag="📋" InputGestureText="Ctrl+C" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Copy"/>
@@ -1028,6 +1079,17 @@
             <MenuItem Header="Yenile" Tag="🔄" InputGestureText="F5" Style="{StaticResource ModernMenuItem}" Click="ContextMenu_Refresh"/>
         </ContextMenu>
 
+        <ContextMenu x:Key="ApplicationContextMenu" Style="{StaticResource ModernContextMenu}">
+            <MenuItem x:Name="ApplicationOpenMenuItem" Header="Aç" Tag="▶️" InputGestureText="Enter" Style="{StaticResource ModernMenuItem}" Click="ApplicationMenu_Open"/>
+            <MenuItem x:Name="ApplicationRunAsMenuItem" Header="Yönetici Olarak Çalıştır" Tag="🛡️" Style="{StaticResource ModernMenuItem}" Click="ApplicationMenu_RunAs"/>
+            <MenuItem x:Name="ApplicationLocationMenuItem" Header="Dosya Konumunu Aç" Tag="📍" Style="{StaticResource ModernMenuItem}" Click="ApplicationMenu_OpenLocation"/>
+            <Separator Style="{StaticResource MenuSeparator}"/>
+            <MenuItem x:Name="ApplicationPinMenuItem" Header="OmniSpot'ta Sabitle" Tag="📌" Style="{StaticResource ModernMenuItem}" Click="ApplicationMenu_TogglePin"
+                      ToolTip="Sabitlenen uygulamalar Tüm uygulamalar listesinin ve aramadaki uygulamaların başına gelir"/>
+            <MenuItem x:Name="ApplicationUninstallMenuItem" Header="Kaldır…" Tag="🗑️" Style="{StaticResource ModernMenuItem}" Click="ApplicationMenu_Uninstall"
+                      ToolTip="Windows'un Yüklü uygulamalar sayfasını açar"/>
+        </ContextMenu>
+
 
         <DataTemplate x:Key="DesktopCardTemplate">
                                 <Button Background="Transparent"
@@ -1037,14 +1099,16 @@
                                         Padding="0"
                                         Opacity="{Binding Opacity}"
                                         ToolTip="{Binding FullPath}"
+                                        services:CardNameReveal.Enabled="True"
                                         Tag="{Binding FullPath}"
-                                        Click="DesktopIcon_Click"
+                                        PreviewMouseLeftButtonDown="FileTile_MouseLeftButtonDown" PreviewKeyDown="FileTile_KeyDown"
                                         ContextMenu="{StaticResource FileContextMenu}"
                                         MouseRightButtonDown="FileItem_RightClick"
                                         MouseEnter="FileItem_MouseEnter"
                                         MouseLeave="FileItem_MouseLeave">
                                     <Button.Style>
                                         <Style TargetType="Button">
+                                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                                             <Setter Property="Template">
                                                 <Setter.Value>
                                                     <ControlTemplate TargetType="Button">
@@ -1061,10 +1125,17 @@
                                                                 <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
                                                                 <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
                                                             </Trigger>
-                                                            <DataTrigger Binding="{Binding IsTransferSelected}" Value="True">
+                                                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
+                                                            </Trigger>
+                                                            <MultiDataTrigger>
+                                                                <MultiDataTrigger.Conditions>
+                                                                    <Condition Binding="{Binding IsTransferSelected}" Value="True"/>
+                                                                    <Condition Binding="{Binding SelectionArriving}" Value="False"/>
+                                                                </MultiDataTrigger.Conditions>
                                                                 <Setter TargetName="CardBorder" Property="Background" Value="#EFF6FF"/>
                                                                 <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
-                                                            </DataTrigger>
+                                                            </MultiDataTrigger>
                                                         </ControlTemplate.Triggers>
                                                     </ControlTemplate>
                                                 </Setter.Value>
@@ -1073,14 +1144,14 @@
                                     </Button.Style>
                                     <StackPanel HorizontalAlignment="Center" Width="100">
                                         <!-- Modern Icon Container with colored background -->
-                                        <Border Width="72" Height="72"
+                                        <Border x:Name="CardIcon" Width="72" Height="72"
                                                 Margin="0,0,0,12"
                                                 CornerRadius="16"
                                                 HorizontalAlignment="Center">
                                             <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="56" Height="56"/>
                                         </Border>
 
-                                        <TextBlock Text="{Binding Name}"
+                                        <TextBlock x:Name="CardName" services:FileNameTrimming.FileName="{Binding Name}"
                                                    FontSize="12"
                                                    FontWeight="Medium"
                                                    Foreground="#334155"
@@ -1095,9 +1166,10 @@
 
         <DataTemplate x:Key="DesktopRowTemplate">
             <Button Background="Transparent" BorderThickness="0" Cursor="Hand" Margin="4,2" Padding="0"
+                    FocusVisualStyle="{x:Null}"
                     HorizontalAlignment="Stretch" HorizontalContentAlignment="Stretch"
                     Opacity="{Binding Opacity}" ToolTip="{Binding FullPath}" Tag="{Binding FullPath}"
-                    Click="DesktopIcon_Click" ContextMenu="{StaticResource FileContextMenu}"
+                    PreviewMouseLeftButtonDown="FileTile_MouseLeftButtonDown" PreviewKeyDown="FileTile_KeyDown" ContextMenu="{StaticResource FileContextMenu}"
                     MouseRightButtonDown="FileItem_RightClick" MouseEnter="FileItem_MouseEnter" MouseLeave="FileItem_MouseLeave">
                 <Button.Template>
                     <ControlTemplate TargetType="Button">
@@ -1112,10 +1184,14 @@
                             <Trigger Property="IsKeyboardFocused" Value="True">
                                 <Setter TargetName="Row" Property="BorderBrush" Value="#007AFF"/>
                             </Trigger>
-                            <DataTrigger Binding="{Binding IsTransferSelected}" Value="True">
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsTransferSelected}" Value="True"/>
+                                    <Condition Binding="{Binding SelectionArriving}" Value="False"/>
+                                </MultiDataTrigger.Conditions>
                                 <Setter TargetName="Row" Property="Background" Value="#EFF6FF"/>
                                 <Setter TargetName="Row" Property="BorderBrush" Value="#007AFF"/>
-                            </DataTrigger>
+                            </MultiDataTrigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
                 </Button.Template>
@@ -1126,7 +1202,7 @@
                     </Grid.ColumnDefinitions>
                     <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="30" Height="30" Margin="0,0,14,0" VerticalAlignment="Center"/>
                     <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                        <TextBlock Text="{Binding Name}" FontSize="14" FontWeight="SemiBold" Foreground="#1E293B" TextTrimming="CharacterEllipsis"/>
+                        <TextBlock services:FileNameTrimming.FileName="{Binding Name}" FontSize="14" FontWeight="SemiBold" Foreground="#1E293B" TextTrimming="CharacterEllipsis"/>
                         <TextBlock Text="{Binding FullPath}" FontSize="11" Foreground="#64748B" TextTrimming="CharacterEllipsis" Margin="0,3,0,0"/>
                     </StackPanel>
                 </Grid>
@@ -1154,6 +1230,7 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/> <!-- Delta Sync Progress Row -->
@@ -1165,7 +1242,7 @@
 
             <Border x:Name="DualPane"
                     Grid.Column="1"
-                    Grid.RowSpan="5"
+                    Grid.RowSpan="6"
                     Width="460"
                     Visibility="Collapsed"
                     Background="#FFFFFF"
@@ -1332,7 +1409,7 @@
                         <Border.Effect>
                             <DropShadowEffect BlurRadius="8" ShadowDepth="1" Opacity="0.06" Color="#000000" Direction="270"/>
                         </Border.Effect>
-                        <Grid>
+                        <Grid x:Name="SearchBarLayout">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/> <!-- Search Icon -->
                                 <ColumnDefinition Width="*"/> <!-- Search Input -->
@@ -1341,17 +1418,49 @@
                             </Grid.ColumnDefinitions>
                             
                             <!-- Modern Search Icon -->
-                            <Viewbox Grid.Column="0" Width="20" Height="20" Margin="0,0,12,0" Opacity="0.5">
+                            <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <Viewbox Width="20" Height="20" Margin="0,0,12,0" Opacity="0.5">
                                 <Canvas Width="24" Height="24">
-                                    <Path Fill="#64748B" 
+                                    <Path Fill="#64748B"
                                           Data="M15.5 14h-.79l-.28-.27C15.41 12.59 16 11.11 16 9.5 16 5.91 13.09 3 9.5 3S3 5.91 3 9.5 5.91 16 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>
                                 </Canvas>
                             </Viewbox>
+                            <Border x:Name="SearchScopeChip"
+                                    Visibility="Collapsed"
+                                    Background="#FFFFFF"
+                                    BorderBrush="#D6DEEA"
+                                    BorderThickness="1"
+                                    CornerRadius="7"
+                                    Padding="7,2,3,2"
+                                    Margin="0,0,10,0"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="Arama kapsamı">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path x:Name="SearchScopeChipIcon"
+                                          Data="{StaticResource FolderBackGeometry}"
+                                          Stroke="#64748B" StrokeThickness="1.6" StrokeLineJoin="Round"
+                                          Width="14" Height="14" Stretch="Uniform"
+                                          VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="SearchScopeChipText"
+                                               FontSize="13" Foreground="#334155"
+                                               MaxWidth="120" TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"/>
+                                    <Button x:Name="SearchScopeChipClear"
+                                            Style="{StaticResource ChipCloseButton}"
+                                            Click="SearchScopeChipClear_Click"
+                                            ToolTip="Tüm bilgisayarda ara"
+                                            AutomationProperties.Name="Kapsamı kaldır"
+                                            Margin="4,0,0,0"
+                                            VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            </StackPanel>
                             
                             <!-- Search Input with Watermark -->
                             <Grid Grid.Column="1">
+                                <Grid x:Name="SearchHints" IsHitTestVisible="False">
                                 <TextBlock x:Name="SearchWatermark" 
-                                           Text="Dosya veya klasör ara..."
+                                           Text="Uygulama, dosya veya klasör ara..."
                                            FontSize="16" 
                                            Foreground="#94A3B8" 
                                            VerticalAlignment="Center" 
@@ -1364,6 +1473,7 @@
                                            VerticalAlignment="Center"
                                            Style="{StaticResource SearchWaitGlint}"
                                            Visibility="Collapsed"/>
+                                </Grid>
 
                                 <TextBox x:Name="SearchBox"
                                          IsEnabled="False"
@@ -1772,6 +1882,7 @@
                                     </MenuItem.Header>
                                 </MenuItem>
                                 <Separator Margin="6,3"/>
+                                <MenuItem x:Name="AllApplicationsMenuItem" Header="Tüm _uygulamalar" Click="AllApplications_Click"/>
                                 <MenuItem Header="_Ayarlar" Click="SettingsButton_Click"/>
                             </ContextMenu>
                         </Button.ContextMenu>
@@ -1832,7 +1943,9 @@
             </Border>
             
             <!-- Results Area -->
-            <Grid x:Name="FileContentArea" Grid.Row="2" Margin="0" Background="Transparent">
+            <ContentControl x:Name="StartMenuHost" Grid.Row="2" Visibility="Collapsed"
+                            Focusable="False" HorizontalContentAlignment="Stretch"/>
+            <Grid x:Name="FileContentArea" Grid.Row="3" Margin="0" Background="Transparent">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -1845,6 +1958,28 @@
                     <StackPanel x:Name="FolderPathSegments" Orientation="Horizontal" VerticalAlignment="Center" ClipToBounds="True"/>
                     <TextBlock x:Name="FolderItemCountText" Grid.Column="1" FontSize="12" Foreground="#94A3B8"
                                VerticalAlignment="Center" Margin="12,0,0,0"/>
+                </Grid>
+                <Grid x:Name="SearchScopeBar" Grid.Row="0" Margin="16,8,24,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                        <Path x:Name="SearchScopeBarIcon"
+                              Data="{StaticResource FolderBackGeometry}"
+                              Stroke="#94A3B8" StrokeThickness="1.6" StrokeLineJoin="Round"
+                              Width="13" Height="13" Stretch="Uniform"
+                              VerticalAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock FontSize="13" Foreground="#64748B" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                            <Run x:Name="SearchScopeBarName" Foreground="#1E293B"/><Run x:Name="SearchScopeBarSuffix"/>
+                        </TextBlock>
+                    </StackPanel>
+                    <Button x:Name="SearchScopeToggleButton"
+                            Grid.Column="1"
+                            Style="{StaticResource FolderPathSegmentButton}"
+                            Click="SearchScopeToggle_Click">
+                        <TextBlock x:Name="SearchScopeToggleText" Foreground="#2F62BF"/>
+                    </Button>
                 </Grid>
                 <!-- Desktop Icons (Hidden by default in Spotlight style) -->
                 <Border x:Name="DesktopIconsScroll"
@@ -1896,6 +2031,7 @@
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*" MinHeight="356"/>
+                            <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
                         
                         <!-- AI Fallback Warning Banner - En üstte, her zaman görünür -->
@@ -2011,12 +2147,20 @@
                                 </Grid>
                                 <TextBlock Text="Sonuç bulunamadı" Style="{StaticResource StateTitle}"/>
                                 <TextBlock x:Name="NoResultsHint" Text="Farklı anahtar kelimeler deneyin" Style="{StaticResource StateHint}"/>
+                                <Button x:Name="NoResultsWidenButton"
+                                        Content="Tüm bilgisayarda ara"
+                                        Style="{StaticResource StateGhostButton}"
+                                        Margin="0,18,0,0"
+                                        Visibility="Collapsed"
+                                        Click="SearchEverywhere_Click"/>
                             </StackPanel>
                         </Grid>
                         
                         <!-- List View - Modern Design -->
                         <ListView x:Name="ResultsList"
                                   ItemsSource="{Binding SearchResults}"
+                                  IsTabStop="False"
+                                  KeyboardNavigation.TabNavigation="None"
                                   Grid.Row="1"
                                   Background="Transparent" 
                                   BorderThickness="0" 
@@ -2034,6 +2178,7 @@
                                     <Setter Property="Margin" Value="0"/>
                                     <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                     <Setter Property="ContextMenu" Value="{StaticResource FileContextMenu}"/>
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
                                     <Setter Property="Template">
                                         <Setter.Value>
                                             <ControlTemplate TargetType="ListViewItem">
@@ -2051,18 +2196,22 @@
                                                         <Setter TargetName="border" Property="Background" Value="#F8FAFC"/>
                                                         <Setter TargetName="border" Property="BorderBrush" Value="#CBD5E1"/>
                                                     </Trigger>
-                                                    <Trigger Property="IsSelected" Value="True">
-                                                        <Setter TargetName="border" Property="Background" Value="#6366F1"/>
-                                                        <Setter TargetName="border" Property="BorderBrush" Value="#6366F1"/>
+                                                    <Trigger Property="IsKeyboardFocused" Value="True">
+                                                        <Setter TargetName="border" Property="BorderBrush" Value="#007AFF"/>
                                                     </Trigger>
+                                                    <MultiDataTrigger>
+                                                        <MultiDataTrigger.Conditions>
+                                                            <Condition Binding="{Binding IsTransferSelected}" Value="True"/>
+                                                            <Condition Binding="{Binding SelectionArriving}" Value="False"/>
+                                                        </MultiDataTrigger.Conditions>
+                                                        <Setter TargetName="border" Property="Background" Value="#EFF6FF"/>
+                                                        <Setter TargetName="border" Property="BorderBrush" Value="#007AFF"/>
+                                                    </MultiDataTrigger>
                                                 </ControlTemplate.Triggers>
                                             </ControlTemplate>
                                         </Setter.Value>
                                     </Setter>
                                     <Style.Triggers>
-                                        <Trigger Property="IsSelected" Value="True">
-                                            <Setter Property="Foreground" Value="White"/>
-                                        </Trigger>
                                         <DataTrigger Binding="{Binding IsCut}" Value="True">
                                             <Setter Property="Opacity" Value="0.5"/>
                                         </DataTrigger>
@@ -2089,7 +2238,7 @@
                                         
                                         <!-- File Info -->
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Name}" 
+                                            <TextBlock services:FileNameTrimming.FileName="{Binding Name}"
                                                        FontSize="14" 
                                                        FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis">
@@ -2097,9 +2246,6 @@
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="#1E293B"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=IsSelected}" Value="True">
-                                                                <Setter Property="Foreground" Value="White"/>
-                                                            </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
@@ -2112,9 +2258,6 @@
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="#64748B"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=IsSelected}" Value="True">
-                                                                <Setter Property="Foreground" Value="#E0E7FF"/>
-                                                            </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
@@ -2131,9 +2274,6 @@
                                                 <Style TargetType="Border">
                                                     <Setter Property="Background" Value="#F1F5F9"/>
                                                     <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=IsSelected}" Value="True">
-                                                            <Setter Property="Background" Value="#4F46E5"/>
-                                                        </DataTrigger>
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
@@ -2144,9 +2284,6 @@
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="#64748B"/>
                                                         <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=IsSelected}" Value="True">
-                                                                <Setter Property="Foreground" Value="White"/>
-                                                            </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
                                                 </TextBlock.Style>
@@ -2158,96 +2295,162 @@
                         </ListView>
                     
                     <!-- Grid View - Modern Design -->
-                    <ScrollViewer x:Name="ResultsGridScroll"
-                                 Grid.Row="1"
-                                 VerticalScrollBarVisibility="Visible"
-                                 MaxHeight="500"
-                                 Visibility="Collapsed"
-                                 Background="Transparent">
-                        <ItemsControl x:Name="ResultsGrid"
-                                     ItemsSource="{Binding ElementName=ResultsList, Path=ItemsSource}"
-                                     Margin="16,8,16,16"
-                                     HorizontalAlignment="Center">
-                            <ItemsControl.ItemsPanel>
-                                <ItemsPanelTemplate>
-                                    <WrapPanel Orientation="Horizontal" HorizontalAlignment="Center" Width="616"/>
-                                </ItemsPanelTemplate>
-                            </ItemsControl.ItemsPanel>
-                            <ItemsControl.ItemTemplate>
+                    <Border x:Name="ResultsGridScroll"
+                            Grid.Row="1"
+                            MaxHeight="500"
+                            Visibility="Collapsed"
+                            Background="Transparent">
+                        <ListBox x:Name="ResultsGrid"
+                                 Background="Transparent"
+                                 BorderThickness="0"
+                                 Padding="16,8,16,16"
+                                 Focusable="False"
+                                 KeyboardNavigation.TabNavigation="None"
+                                 HorizontalContentAlignment="Stretch"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.VerticalScrollBarVisibility="Visible"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
+                                 VirtualizingPanel.ScrollUnit="Pixel">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <Setter Property="Focusable" Value="False"/>
+                                    <Setter Property="Padding" Value="0"/>
+                                    <Setter Property="Margin" Value="0"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <ContentPresenter/>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Button Background="Transparent" 
-                                            BorderThickness="0" 
-                                            Cursor="Hand" 
-                                            Margin="10,10"
-                                            Padding="0"
-                                            Tag="{Binding FullPath}"
-                                            Click="GridItem_Click"
-                                            ContextMenu="{StaticResource FileContextMenu}">
-                                        <Button.Style>
-                                            <Style TargetType="Button">
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding IsCut}" Value="True">
-                                                        <Setter Property="Opacity" Value="0.5"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                                <Setter Property="Template">
-                                                    <Setter.Value>
-                                                        <ControlTemplate TargetType="Button">
-                                                            <Border x:Name="CardBorder" 
-                                                                    Background="White"
-                                                                    CornerRadius="16"
-                                                                    Padding="16,20,16,16"
-                                                                    BorderBrush="#E2E8F0"
-                                                                    BorderThickness="1"
-                                                                    RenderTransformOrigin="0.5,0.5">
-                                                                <ContentPresenter/>
-                                                            </Border>
-                                                            <ControlTemplate.Triggers>
-                                                                <Trigger Property="IsMouseOver" Value="True">
-                                                                    <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
-                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
-                                                                </Trigger>
-                                                                <DataTrigger Binding="{Binding IsTransferSelected}" Value="True">
-                                                                    <Setter TargetName="CardBorder" Property="Background" Value="#EFF6FF"/>
-                                                                    <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
+                                    <ItemsControl ItemsSource="{Binding Items}" Width="616" HorizontalAlignment="Center" Focusable="False">
+                                        <ItemsControl.ItemsPanel>
+                                            <ItemsPanelTemplate>
+                                                <StackPanel Orientation="Horizontal"/>
+                                            </ItemsPanelTemplate>
+                                        </ItemsControl.ItemsPanel>
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Background="Transparent"
+                                                        BorderThickness="0"
+                                                        Cursor="Hand"
+                                                        Margin="10,10"
+                                                        Padding="0"
+                                                        Tag="{Binding FullPath}"
+                                                        ToolTip="{Binding FullPath}"
+                                                        services:CardNameReveal.Enabled="True"
+                                                        PreviewMouseLeftButtonDown="FileTile_MouseLeftButtonDown" PreviewKeyDown="FileTile_KeyDown"
+                                                        ContextMenu="{StaticResource FileContextMenu}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button">
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding IsCut}" Value="True">
+                                                                    <Setter Property="Opacity" Value="0.5"/>
                                                                 </DataTrigger>
-                                                            </ControlTemplate.Triggers>
-                                                        </ControlTemplate>
-                                                    </Setter.Value>
-                                                </Setter>
-                                            </Style>
-                                        </Button.Style>
-                                        <StackPanel HorizontalAlignment="Center" Width="100">
-                                            <!-- Modern Icon Container -->
-                                            <Border Width="72" Height="72" 
-                                                    Margin="0,0,0,12"
-                                                    CornerRadius="16"
-                                                    HorizontalAlignment="Center">
-                                                <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="56" Height="56"/>
-                                            </Border>
-                                            
-                                            <!-- File Name -->
-                                            <TextBlock Text="{Binding Name}" 
-                                                       FontSize="12"
-                                                       FontWeight="Medium"
-                                                       Foreground="#334155"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       TextAlignment="Center"
-                                                       TextWrapping="Wrap"
-                                                       MaxHeight="36"
-                                                       LineHeight="16"/>
-                                        </StackPanel>
-                                    </Button>
+                                                            </Style.Triggers>
+                                                            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                                            <Setter Property="Template">
+                                                                <Setter.Value>
+                                                                    <ControlTemplate TargetType="Button">
+                                                                        <Border x:Name="CardBorder"
+                                                                                Background="White"
+                                                                                CornerRadius="16"
+                                                                                Padding="16,20,16,16"
+                                                                                BorderBrush="#E2E8F0"
+                                                                                BorderThickness="1"
+                                                                                RenderTransformOrigin="0.5,0.5">
+                                                                            <ContentPresenter/>
+                                                                        </Border>
+                                                                        <ControlTemplate.Triggers>
+                                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                                <Setter TargetName="CardBorder" Property="Background" Value="#F8FAFC"/>
+                                                                            <Setter TargetName="CardBorder" Property="BorderBrush" Value="#CBD5E1"/>
+                                                                            </Trigger>
+                                                                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
+                                                                            </Trigger>
+                                                                            <MultiDataTrigger>
+                                                                                <MultiDataTrigger.Conditions>
+                                                                                    <Condition Binding="{Binding IsTransferSelected}" Value="True"/>
+                                                                                    <Condition Binding="{Binding SelectionArriving}" Value="False"/>
+                                                                                </MultiDataTrigger.Conditions>
+                                                                                <Setter TargetName="CardBorder" Property="Background" Value="#EFF6FF"/>
+                                                                                <Setter TargetName="CardBorder" Property="BorderBrush" Value="#007AFF"/>
+                                                                            </MultiDataTrigger>
+                                                                        </ControlTemplate.Triggers>
+                                                                    </ControlTemplate>
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </Style>
+                                                    </Button.Style>
+                                                    <StackPanel HorizontalAlignment="Center" Width="100">
+                                                        <!-- Modern Icon Container -->
+                                                        <Border x:Name="CardIcon" Width="72" Height="72"
+                                                                Margin="0,0,0,12"
+                                                                CornerRadius="16"
+                                                                HorizontalAlignment="Center">
+                                                            <ContentPresenter Content="{Binding}" ContentTemplateSelector="{StaticResource ItemIconSelector}" Width="56" Height="56"/>
+                                                        </Border>
+
+                                                        <!-- File Name -->
+                                                        <TextBlock x:Name="CardName" services:FileNameTrimming.FileName="{Binding Name}"
+                                                                   FontSize="12"
+                                                                   FontWeight="Medium"
+                                                                   Foreground="#334155"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   TextAlignment="Center"
+                                                                   TextWrapping="Wrap"
+                                                                   MaxHeight="36"
+                                                                   LineHeight="16"/>
+                                                        <TextBlock x:Name="ResultLocation"
+                                                                   Text="{Binding Location}"
+                                                                   FontSize="11"
+                                                                   Foreground="#94A3B8"
+                                                                   TextAlignment="Center"
+                                                                   TextWrapping="Wrap"
+                                                                   TextTrimming="CharacterEllipsis"
+                                                                   MaxHeight="28"
+                                                                   LineHeight="14"
+                                                                   Margin="0,2,0,0">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Location}" Value="{x:Null}">
+                                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </StackPanel>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
                                 </DataTemplate>
-                            </ItemsControl.ItemTemplate>
-                        </ItemsControl>
-                    </ScrollViewer>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                    </Border>
+
+                    <TextBlock x:Name="SearchCountText"
+                               Grid.Row="2"
+                               FontSize="11.5" Foreground="#64748B"
+                               Margin="16,0,16,10"
+                               Visibility="Hidden"
+                               AutomationProperties.Name="Sonuç sayısı"/>
                     </Grid>
                 </Border>
                 
                 <!-- Folder Loading Indicator (Improved - more spacious) -->
                 <ProgressBar x:Name="FolderLoadingBar" Grid.RowSpan="2" Height="2" VerticalAlignment="Top" Margin="0" Panel.ZIndex="5"
                              Visibility="Collapsed" IsIndeterminate="False" Foreground="#007AFF" Background="Transparent" BorderThickness="0"/>
+                <Canvas x:Name="SelectionGlideLayer" Grid.Row="1" IsHitTestVisible="False" ClipToBounds="True" Panel.ZIndex="4"/>
                 <!-- Empty Folder Message -->
                 <Border x:Name="EmptyFolderPanel"
                         Grid.Row="1"
@@ -2429,7 +2632,7 @@
             </Grid>
 
             <Border x:Name="SelectionBar"
-                    Grid.Row="3"
+                    Grid.Row="4"
                     Visibility="Collapsed"
                     Background="#FFFFFF"
                     BorderBrush="#E2E8F0"
@@ -2455,7 +2658,57 @@
             </Border>
 
             <!-- Delta Sync Progress Row (Row 2) - Below content, extends window height -->
-            <Grid Grid.Row="4">
+            <StackPanel Grid.Row="5">
+                <Border x:Name="IndexHealthBanner" Background="#FFF7E8" BorderBrush="#F3E2BF"
+                        BorderThickness="0,1,0,0" Padding="14,10,14,10" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource BannerIconPill}" Background="#FBE9C3" VerticalAlignment="Top">
+                            <Grid Width="16" Height="15">
+                                <Path Data="{StaticResource WarningTriangleGeometry}" Fill="#D98A0C" Stroke="#D98A0C" StrokeThickness="2" StrokeLineJoin="Round" Stretch="Uniform"/>
+                                <Path Data="{StaticResource WarningMarkGeometry}" Stroke="#FFFFFF" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Width="2.2" Height="6.4" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                            </Grid>
+                        </Border>
+                        <Grid Grid.Column="1">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid Grid.ColumnSpan="2" MinHeight="28">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="IndexHealthTitle" Style="{StaticResource BannerTitle}" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                    <Button x:Name="IndexHealthRetryButton" Content="Yeniden başlat" Style="{StaticResource BannerActionButton}"
+                                            Visibility="Collapsed" Click="IndexHealthRetry_Click"/>
+                                    <Button Content="İndeks ayarlarını aç" Style="{StaticResource BannerActionButton}" Click="IndexHealthSettings_Click"/>
+                                    <Button Content="Teknik ayrıntılar" Style="{StaticResource BannerQuietButton}" Margin="2,0,-8,0" Click="IndexHealthDetails_Click"/>
+                                </StackPanel>
+                            </Grid>
+                            <Border x:Name="IndexHealthLocationChip" Grid.Row="1" Background="#FFFFFF" BorderBrush="#EAD6AE" BorderThickness="1"
+                                    CornerRadius="5" Padding="5,0,5,1" Margin="0,3,8,0" MaxWidth="240" VerticalAlignment="Top">
+                                <TextBlock x:Name="IndexHealthLocation" FontFamily="Consolas, Segoe UI" FontSize="12" Foreground="#111827"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </Border>
+                            <TextBlock x:Name="IndexHealthMessage" Grid.Row="1" Grid.Column="1" Margin="0,3,0,0" FontSize="12" LineHeight="18"
+                                       TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"><Run x:Name="IndexHealthEffect" FontWeight="SemiBold" Foreground="#8A5508"/><Run x:Name="IndexHealthCause" Foreground="#5B6472"/></TextBlock>
+                            <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Margin="0,1,0,0" FontSize="12" LineHeight="18" TextWrapping="Wrap"
+                                       Foreground="#1F2937"><Run x:Name="IndexHealthNextStep"/><Run x:Name="IndexHealthMore" Foreground="#5B6472"/></TextBlock>
+                        </Grid>
+                    </Grid>
+                </Border>
+                <Grid>
                 <!-- Search catalog build row -->
                 <Border x:Name="CatalogBuildPanel"
                         Background="#FFFFFF"
@@ -2558,15 +2811,69 @@
                                    VerticalAlignment="Center"/>
                     </StackPanel>
                 </Border>
-            </Grid>
-            <Canvas x:Name="FileTransferOverlay" Grid.RowSpan="5" Grid.ColumnSpan="2" Panel.ZIndex="10" IsHitTestVisible="False">
-                <Border x:Name="FileTransferLabel" Visibility="Collapsed" Padding="9,5" CornerRadius="6"
-                        Background="{DynamicResource {x:Static SystemColors.InfoBrushKey}}"
-                        BorderBrush="{DynamicResource {x:Static SystemColors.ActiveBorderBrushKey}}" BorderThickness="1">
-                    <TextBlock x:Name="FileTransferText" MaxWidth="340" TextTrimming="CharacterEllipsis"
-                               Foreground="{DynamicResource {x:Static SystemColors.InfoTextBrushKey}}" FontSize="12"/>
+                </Grid>
+            </StackPanel>
+            <Popup x:Name="ToastPopup" Grid.RowSpan="6" PlacementTarget="{Binding ElementName=Shell}" Placement="Custom"
+                   AllowsTransparency="True" StaysOpen="True" Focusable="False" PopupAnimation="None">
+            <Border Padding="24,8,24,30" Background="Transparent">
+            <Grid x:Name="Toast" Visibility="Collapsed" MaxWidth="600"
+                  AutomationProperties.Name="Bildirim" AutomationProperties.LiveSetting="Polite">
+                <Border CornerRadius="12" Background="#1E293B">
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="24" ShadowDepth="6" Direction="270" Opacity="0.22" Color="#0F172A"/>
+                    </Border.Effect>
                 </Border>
-            </Canvas>
+                <Border Padding="14,6,6,6" CornerRadius="12" Background="#1E293B">
+                <DockPanel>
+                    <Grid x:Name="ToastErrorIcon" DockPanel.Dock="Left" Width="16" Height="16" Margin="0,0,10,0"
+                          VerticalAlignment="Center" Visibility="Collapsed">
+                        <Ellipse Width="13" Height="13" Stroke="#F87171" StrokeThickness="1.5"/>
+                        <Path Data="M 5.8,5.8 L 10.2,10.2 M 10.2,5.8 L 5.8,10.2" Stroke="#F87171" StrokeThickness="1.5"
+                              StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                    </Grid>
+                    <Button x:Name="ToastClose" DockPanel.Dock="Right" Focusable="False" Cursor="Hand" Margin="4,0,0,0"
+                            ToolTip="Kapat" AutomationProperties.Name="Bildirimi kapat">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Surface" Width="28" Height="28" CornerRadius="8" Background="Transparent">
+                                    <Path Data="M 1.5,1.5 L 8.5,8.5 M 8.5,1.5 L 1.5,8.5" Stroke="#94A3B8" StrokeThickness="1.5"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round" Width="10" Height="10"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Surface" Property="Background" Value="#334155"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <Border x:Name="ToastShortcut" DockPanel.Dock="Right" Visibility="Collapsed" Margin="8,0,0,0"
+                            Padding="5,1" CornerRadius="5" BorderBrush="#475569" BorderThickness="1" VerticalAlignment="Center">
+                        <TextBlock x:Name="ToastShortcutText" FontSize="11" Foreground="#CBD5E1"/>
+                    </Border>
+                    <Button x:Name="ToastAction" DockPanel.Dock="Right" Visibility="Collapsed" Focusable="False" Cursor="Hand"
+                            Margin="12,0,0,0" FontSize="13" FontWeight="SemiBold" Foreground="#C7D2FE">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="Surface" Height="28" Padding="10,0" CornerRadius="8" Background="#24A5B4FC">
+                                    <ContentPresenter VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Surface" Property="Background" Value="#40A5B4FC"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                    <TextBlock x:Name="ToastText" Margin="0,5" FontSize="13" Foreground="#F8FAFC"
+                               TextWrapping="Wrap" VerticalAlignment="Center"/>
+                </DockPanel>
+                </Border>
+            </Grid>
+            </Border>
+            </Popup>
         </Grid>
     </Border>
 </Window>

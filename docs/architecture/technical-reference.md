@@ -18,6 +18,16 @@ Bu sınıf, uygulamanın "Bulanık Arama" (Fuzzy Search) yeteneğini sağlayan k
 
 ## 2. Servisler (Services)
 
+### MFT birim indeksi aktarımı
+
+`VolumeIndexLifecycleService`, protokol 9 `IndexVolumeScan` isteklerinde `BinaryVolumeEntries=true` gönderir. Destekleyen servis, Base64 kayıt metni yerine küçük JSON yanıt başlığı ve ham ikili kayıtları taşır. İlk 4 baytın negatif değeri ikili frame'in uzunluğunu belirtir; ardından 4 bayt JSON başlık uzunluğu, başlık ve kayıt baytları gelir. Toplam yanıt sınırı 16 MiB, JSON başlık sınırı 64 KiB'dır. Kayıt biçimi mevcut `IndexEntryCodec` ile aynıdır; geçersiz UTF-16 kod birimleri korunur. İstemci kayıtları ara liste ve kayıt başına byte dizisi oluşturmadan tüketir; kayıt sayısı ve eksik veri denetlenir.
+
+Bu alanı göndermeyen istemciye eski JSON/Base64 yanıtı verilir. Eski servis yeni alanı yok sayar; yeni istemci pozitif uzunluklu eski yanıtı da okuyabilir. Tarama işçisi, sayfa sırası, tek sayfa önden getirme, çağıran/servis kimlik denetimi, USN değişiklik yanıtı ve diskteki indeks biçimi aynı kalır.
+
+Paralel ham MFT taramasında her etkin işçi kendi 1 MiB tamponunu yeniden kullanır; son kısa blok yalnız geçerli bayt sayısıyla ayrıştırılır. Kanal ham tamponu değil, ayrıştırması tamamlanmış bağımsız kayıt dizisini taşır. Ad tekilleştirme kümesi ikinci görünür ad gerektiğinde oluşturulur; DOS adları, hardlink sırası ve büyük/küçük harf ayrımı korunur.
+
+`FileIndex` ilk kurulurken üst klasör kimliği iterator tahsisi olmadan bağlantı zincirinden çözülür. Boyut ve değiştirilme zamanı sıraları, ad sırasındaki dosya satırlarından başlayan kararlı byte radix sıralamasıyla hazırlanır. Signed `long` sırası ve eşit değerde mevcut ad/üst klasör/satır sırası korunur; v3 snapshot ve artımlı USN güncelleme sözleşmesi değişmez.
+
 ### Normal uygulamada Live katalog
 
 Normal `ApplicationCompositionRoot`, ölçüm profili seçilmediğinde `EnableLiveCatalog` ile Live backend'i kullanır. Aşağıdaki SQLite/Compact bootstrap ve watcher kira devri açıklamaları eski backend ve onu açıkça seçen ölçüm yolları içindir.

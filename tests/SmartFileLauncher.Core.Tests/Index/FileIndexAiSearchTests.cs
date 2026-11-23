@@ -52,6 +52,60 @@ public sealed class FileIndexAiSearchTests
     }
 
     [Fact]
+    public void KeywordSearchGivesTheSameResultsWithOneCombinedPassAsWithSeparateCalls()
+    {
+        string[] names =
+        [
+            "fatura_mart.pdf", "efatura2024.pdf", "faturalar-nisan.pdf", "fatura", "rapor.docx", "raporlar_2024.xlsx",
+            "mart_raporu.pdf", "Işık raporu.docx", "isik-notlari.txt", "notlar.txt", "nots.md", "x1", "x10.bin", "rapor 2024 (kopya).pdf"
+        ];
+        var time = DateTime.UtcNow.AddDays(-3).Ticks;
+        var entries = new List<IndexEntry> { new(Root, Root, ".", FileAttributes.Directory, 0, time, time) };
+        for (var folder = 0UL; folder < 6; folder++)
+        {
+            entries.Add(new(Reference(100 + folder), Root, $"Klasor {folder} rapor", FileAttributes.Directory, 0, time, time));
+            for (var file = 0; file < names.Length; file++)
+                entries.Add(new(Reference(1000 + folder * 100 + (ulong)file), Reference(100 + folder),
+                    folder % 2 == 0 ? names[file] : names[file].ToUpperInvariant(), FileAttributes.Archive, 100 + file, time, time));
+        }
+        using var index = FileIndex.Build(@"C:\Kok", Root, entries);
+        var combined = Engine(index);
+        var separate = new AdvancedSearchEngine(_ => new SeparateCalls(new FileIndexReader([(index, null)])), new BasicTokenizer(),
+            new BasicScoringStrategy());
+        var compared = 0;
+        foreach (var keywords in new List<string>[] { ["fatura"], ["rapor"], ["fatura", "mart"], ["isik"], ["efatura2024"], ["nots"],
+                     ["x1"], ["rapor", "2024"], ["faturs"], ["notlar", "rapor"], ["klasor"] })
+        {
+            var query = new StructuredQuery { Keywords = keywords };
+            var expected = separate.Search(query, 500).Select(result => (result.FullPath, result.Score)).ToArray();
+            var actual = combined.Search(query, 500).Select(result => (result.FullPath, result.Score)).ToArray();
+            Assert.Equal(expected, actual);
+            compared += expected.Length;
+        }
+        Assert.True(compared > 100, $"Karşılaştırılan sonuç çok az: {compared}");
+    }
+
+    private sealed class SeparateCalls(FileIndexReader inner) : ISearchStateReader, ITokenIndexSnapshot
+    {
+        public int ItemCount => inner.ItemCount;
+        public int TokenCount => inner.TokenCount;
+        public bool IsTokenIndexReady => true;
+        public IReadOnlyCollection<SearchItem> Get(string token, CancellationToken cancellationToken = default) => inner.Get(token, cancellationToken);
+        public IReadOnlyCollection<SearchItem> GetPartial(string token, CancellationToken cancellationToken = default) =>
+            inner.GetPartial(token, cancellationToken);
+        public IReadOnlyCollection<SearchItem> GetFuzzy(string token, int maxDistance = 2, CancellationToken cancellationToken = default) =>
+            inner.GetFuzzy(token, maxDistance, cancellationToken);
+        public IReadOnlyCollection<SearchItem> GetAllItems(CancellationToken cancellationToken = default) => inner.GetAllItems(cancellationToken);
+        public IReadOnlyCollection<SearchItem> GetDescendants(SearchItem item, CancellationToken cancellationToken = default) =>
+            inner.GetDescendants(item, cancellationToken);
+        public bool ContainsPath(string path) => inner.ContainsPath(path);
+        public ISearchStateReader WithUpserts(IEnumerable<FileSystemNode> nodes, ITokenizer tokenizer) => throw new NotSupportedException();
+        public ISearchStateReader WithoutPathAndDescendants(string path) => throw new NotSupportedException();
+        public ISearchStateReader WithChanges(IEnumerable<string> removedPaths, IEnumerable<FileSystemNode> upserts, ITokenizer tokenizer) =>
+            throw new NotSupportedException();
+    }
+
+    [Fact]
     public void FilterOnlyAiSearchFiltersByCreationDate()
     {
         using var index = Build();

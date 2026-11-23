@@ -14,7 +14,7 @@ namespace SmartFileLauncher.UI.Views;
 
 public partial class MainWindow
 {
-    private readonly FolderViewMemory _folderViews = new();
+    private readonly FolderViewMemory _folderViews;
     private readonly List<MenuItem> _filterMenuRoots = new();
     private readonly List<MenuItem> _sortMenuRoots = new();
     private readonly List<MenuItem> _filterClearItems = new();
@@ -27,6 +27,7 @@ public partial class MainWindow
 
     private ResultView _searchView = ResultView.SearchDefault;
     private IReadOnlyList<FolderEntry> _currentFolderEntries = Array.Empty<FolderEntry>();
+    private bool _folderLooksEmpty;
 
     private bool IsSearchSurfaceActive => ResultsContainer.Visibility == Visibility.Visible;
 
@@ -589,6 +590,30 @@ public partial class MainWindow
         AnimateFolderSwap(items.Count);
     }
 
+    private void SetFolderLooksEmpty(bool empty)
+    {
+        _folderLooksEmpty = empty;
+        SyncEmptyFolderPanel();
+    }
+
+    private void SyncEmptyFolderPanel()
+    {
+        var folderShown = DesktopIconsScroll.Visibility == Visibility.Visible &&
+            ResultsContainer.Visibility != Visibility.Visible;
+        EmptyFolderPanel.Visibility = !folderShown ? Visibility.Collapsed
+            : _folderLooksEmpty ? Visibility.Visible
+            : _currentFolderPath != null ? Visibility.Hidden
+            : Visibility.Collapsed;
+    }
+
+    private void ForgetRemovedFolderItem(string path)
+    {
+        if (_currentFolderPath == null) return;
+        _currentFolderEntries = _currentFolderEntries.Where(entry => !PathsEqual(entry.FullPath, path)).ToArray();
+        if (_desktopIcons.Count == 0)
+            UpdateEmptyFolderState(_currentFolderPath, 0, _currentFolderEntries.Count, _folderViews.Get(_currentFolderPath).Filter);
+    }
+
     private void UpdateEmptyFolderState(
         string? folderPath,
         int visibleCount,
@@ -597,7 +622,7 @@ public partial class MainWindow
     {
         if (visibleCount > 0)
         {
-            EmptyFolderPanel.Visibility = Visibility.Collapsed;
+            SetFolderLooksEmpty(false);
             return;
         }
 
@@ -616,6 +641,6 @@ public partial class MainWindow
                 : $"'{folderName}' klasörü boş";
         }
 
-        EmptyFolderPanel.Visibility = Visibility.Visible;
+        SetFolderLooksEmpty(true);
     }
 }

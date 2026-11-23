@@ -10,7 +10,7 @@ using SmartFileLauncher.Core.Services;
 
 namespace SmartFileLauncher.Core.Application.Indexing;
 
-public sealed class SharedIndexLifecycleService : IIndexLifecycleService
+public sealed class SharedIndexLifecycleService : IIndexLifecycleService, IIndexHealthSource
 {
     private readonly IChangeFeedRequestChannel _channel;
     private readonly IIndexedLocationProvider _locations;
@@ -30,12 +30,13 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
     private int _tokens;
     private int _partTokenCount = -1;
     private IndexLocations? _activeLocations;
+    private IndexHealth? _reportedHealth;
 
     public SharedIndexLifecycleService(IChangeFeedRequestChannel channel, IIndexedLocationProvider locations,
         IndexScanMethod method, string controlPath, IndexBuildOptions? buildOptions = null)
     {
         _channel = channel; _locations = locations; _method = method;
-        _buildOptions = IndexBuildOptions.Normalize(buildOptions);
+        _buildOptions = IndexBuildOptions.Normalize(buildOptions).ForService();
         DatabasePath = Path.GetFullPath(controlPath);
     }
 
@@ -43,6 +44,7 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
     public event Action<FileChangeEvent>? FileChanged;
     public event Action<string>? Error;
     public event Action<string>? Notice;
+    public event Action<IndexHealth>? HealthChanged;
     public event Action<int, int, int>? ReconciliationProgressChanged;
     public event Action<bool>? ReconciliationStateChanged;
     public bool IsInitialized { get; private set; }
@@ -77,6 +79,7 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
         File.WriteAllText(DatabasePath, CatalogDirectory);
         if (File.Exists(marker)) File.Delete(marker);
         IsInitialized = true;
+        ReportHealth(status);
         Notice?.Invoke("Ortak servis kataloğu hazır.");
         _polling = Task.Run(PollLoopAsync);
         return new(locations.DesktopPath, locations.RootPaths, GetStats());
@@ -91,10 +94,11 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
                 await Task.Delay(200, _stop.Token).ConfigureAwait(false);
                 try { await PollAsync(_stop.Token).ConfigureAwait(false); }
                 catch (ChangeFeedUntrustedServerException) { throw; }
-                catch (ChangeFeedPipeException)
+                catch (ChangeFeedPipeException failure)
                 {
                     DropState();
                     _session = null;
+                    ReportHealth(null, IndexIssue.FromException(failure, null, "Yeniden bağlanma"));
                     Notice?.Invoke("İndeks servisine yeniden bağlanılıyor.");
                     await Task.Delay(1000, _stop.Token).ConfigureAwait(false);
                 }
@@ -104,6 +108,7 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
         catch (Exception failure)
         {
             DropState();
+            ReportHealth(null, IndexIssue.FromException(failure, null, "Katalog güncellemesi"));
             Error?.Invoke("Servis kataloğu güncellenemedi: " + failure.Message);
         }
     }
@@ -128,9 +133,22 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
             var status = RequireStatus(response);
             await ApplyStatusAsync(status, ct).ConfigureAwait(false);
             if (status.Ready) IsInitialized = true;
+            ReportHealth(status);
             return status;
         }
         finally { _pollGate.Release(); }
+    }
+
+    private void ReportHealth(SharedCatalogStatus? status, IndexIssue? failure = null)
+    {
+        var issues = status?.ScanIssues ?? [];
+        if ((failure ?? status?.IndexIssue) is { } issue) issues = [issue, .. issues];
+        if (!IsInitialized && issues.Count == 0)
+            issues = _reportedHealth is { SearchAvailable: false } previous ? previous.Issues
+                : [new(IndexIssueReason.ServiceUnavailable, null, "Yeniden bağlanma", "İndeks yeniden hazırlanıyor.")];
+        if (_reportedHealth is { } last && last.SearchAvailable == IsInitialized && last.Issues.SequenceEqual(issues)) return;
+        _reportedHealth = new(issues, IsInitialized);
+        HealthChanged?.Invoke(_reportedHealth);
     }
 
     private async Task ApplyStatusAsync(SharedCatalogStatus status, CancellationToken cancellationToken)
@@ -142,7 +160,11 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
     private void ApplyStatus(SharedCatalogStatus status, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (status.Failure is not null) { DropState(); throw new IOException(status.Failure); }
+        if (status.Failure is not null)
+        {
+            DropState();
+            throw new IndexIssueException(status.IndexIssue ?? new(IndexIssueReason.Unknown, SingleRoot, "Katalog işlemi", status.Failure));
+        }
         if (!status.Ready)
         {
             ProgressChanged?.Invoke(new() { Status = status.Phase, Phase = status.Phase, ItemCount = status.Items,
@@ -210,19 +232,25 @@ public sealed class SharedIndexLifecycleService : IIndexLifecycleService
     private async Task RequireBuildCapabilitiesAsync(CancellationToken ct)
     {
         var response = await _channel.SendAsync(new(ChangeFeedProtocol.Version, ChangeFeedRequestKind.GetCapabilities), ct).ConfigureAwait(false);
-        if (response.Status == ChangeFeedResponseStatus.Unavailable) throw new ChangeFeedPipeException(response.Message ?? "İndeks servisi yanıt vermiyor.");
-        if (response.Status != ChangeFeedResponseStatus.Ok || response.Capabilities?.Contains("shared-build-options-v1") != true ||
-            response.Capabilities?.Contains("two-phase-index-v1") != true)
-            throw new IOException("Tarama ve sıralama ayarları için OmniSpot hizmeti güncellenmeli.");
+        if (response.Status == ChangeFeedResponseStatus.Ok && (response.Capabilities?.Contains("shared-build-options-v1") != true ||
+            response.Capabilities?.Contains("two-phase-index-v1") != true))
+            throw new IndexIssueException(new(IndexIssueReason.ServiceVersionMismatch, null, "GetCapabilities",
+                "Tarama ve sıralama ayarları için OmniSpot hizmeti güncellenmeli."));
+        if (response.Status != ChangeFeedResponseStatus.Ok) RequireStatus(response);
     }
+
+    private string? SingleRoot => _activeLocations?.RootPaths is { Count: 1 } roots ? roots[0] : null;
 
     private SharedCatalogStatus RequireStatus(ChangeFeedResponse response)
     {
-        if (response.Status == ChangeFeedResponseStatus.Unavailable) throw new ChangeFeedPipeException(response.Message ?? "İndeks servisi yanıt vermiyor.");
+        if (response.Status == ChangeFeedResponseStatus.Unavailable &&
+            response.IndexIssue is null or { Reason: IndexIssueReason.ServiceUnavailable })
+            throw new ChangeFeedPipeException(response.Message ?? "İndeks servisi yanıt vermiyor.");
         if (response.Catalog is { } catalog && catalog.AppliedBuildOptions != _buildOptions)
-            throw new IOException("OmniSpot hizmeti seçilen tarama ayarlarını uygulamadı.");
+            throw new IndexIssueException(new(IndexIssueReason.ServiceVersionMismatch, null, "OpenCatalog",
+                "OmniSpot hizmeti seçilen tarama ayarlarını uygulamadı."));
         return response.Status == ChangeFeedResponseStatus.Ok && response.Catalog is { } status ? status :
-            throw new IOException(response.Message ?? "Güncel OmniSpot katalog servisine erişilemiyor.");
+            throw new IndexIssueException(IndexIssue.FromResponse(response, SingleRoot, "Katalog isteği"));
     }
 
     public async Task<bool> EnsureSyncedAsync(string path, CancellationToken cancellationToken = default)

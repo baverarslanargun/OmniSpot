@@ -1039,7 +1039,7 @@ public sealed class ChangeFeedIpcRoundTripTests
             .ToArray();
 
         Assert.Equal(
-            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds", "InventoryRoots", "CatalogOptions", "Journal", "IndexBuild" },
+            new[] { "Version", "Kind", "RootPath", "Token", "LeaseSeconds", "InventoryRoots", "CatalogOptions", "Journal", "IndexBuild", "BinaryVolumeEntries" },
             members);
     }
 

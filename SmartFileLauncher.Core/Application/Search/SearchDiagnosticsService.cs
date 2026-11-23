@@ -5,6 +5,7 @@ namespace SmartFileLauncher.Core.Application.Search;
 
 public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
 {
+    private const int SampleCount = 3;
     private readonly ITokenizer _tokenizer;
     private readonly Func<CancellationToken, SearchSnapshot>? _snapshotProvider;
     private readonly Func<CancellationToken, ISearchStateReader>? _searchStateProvider;
@@ -47,6 +48,12 @@ public sealed class SearchDiagnosticsService : ISearchDiagnosticsService
             foreach (var token in Tokenize(query))
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                if (searchState is ITokenSummaryReader summaries)
+                {
+                    var summary = summaries.SummarizeToken(token, SampleCount, cancellationToken);
+                    diagnostics.Add(new SearchTokenDiagnostics(token, summary.Count, summary.SampleNames));
+                    continue;
+                }
                 var matches = searchState.Get(token, cancellationToken);
                 diagnostics.Add(new SearchTokenDiagnostics(
                     token,

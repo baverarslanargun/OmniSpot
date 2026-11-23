@@ -69,11 +69,13 @@ internal sealed partial class Catalog
         if (!filter.IsActive) return true; var dir = IsDirectory(id); var metadata = filter.Date != FilterDateRange.Any || filter.Size != FilterSizeRange.Any ? Meta(id) : default;
         return filter.Matches(filter.Categories == FileFilterCategory.None ? "" : Name(id), dir, dir ? null : metadata.Size, dir ? null : new DateTime(metadata.Modified, DateTimeKind.Utc).ToLocalTime(), now);
     }
+    bool Matches(uint id, ItemFilter filter, DateTime now, CatalogScope scope) => Matches(id, filter, now) && scope.Contains(id);
     internal Window Search(string query, int limit = 50, int offset = 0, ResultView? view = null, CancellationToken cancellationToken = default, bool excludeRoot = false)
     {
         var clock = Profile is null ? null : Stopwatch.StartNew(); void Phase(string label) { if (clock is null) return; Profile![label] = clock.Elapsed.TotalMilliseconds; clock.Restart(); }
         view ??= ResultView.SearchDefault; if (limit < 0 || offset < 0) throw new ArgumentOutOfRangeException(); cancellationToken.ThrowIfCancellationRequested();
         var allTokens = _tokenizer.Tokenize(query).ToArray(); if (allTokens.Length == 0) return new(Data.Generation, 0, []);
+        var scope = CatalogScope.For(this, view.Scope); if (scope.IsEmpty) return new(Data.Generation, 0, []);
         var tokens = allTokens.Distinct(StringComparer.Ordinal).ToArray();
         if (tokens.Length > 63) { var legacy = new SearchEngine(_ => new Reader(this), _tokenizer, new BasicScoringStrategy()).Search(query, int.MaxValue, view, cancellationToken); return new(Data.Generation, legacy.Count, legacy.Skip(offset).Take(limit).ToArray()); }
         using var candidates = new Bits(MaxId); var exact = new Dictionary<uint, ulong>();
@@ -83,7 +85,7 @@ internal sealed partial class Catalog
         Phase("Partial");
         if (excludeRoot) candidates.Remove(RootId);
         var trailingMask = 1UL << Array.IndexOf(tokens, trailing); var now = DateTime.Now; var count = 0; var history = HasHistory();
-        foreach (var id in candidates.Values()) { if ((id & 4095) == 0) cancellationToken.ThrowIfCancellationRequested(); if (!Matches(id, view.Filter, now)) candidates.Remove(id); else count++; }
+        foreach (var id in candidates.Values()) { if ((id & 4095) == 0) cancellationToken.ThrowIfCancellationRequested(); if (!Matches(id, view.Filter, now, scope)) candidates.Remove(id); else count++; }
         Phase("FilterCount");
         double Score(uint id)
         {

@@ -28,6 +28,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
     private readonly IFolderNavigationService _folderNavigation;
     private readonly IConnectivityMonitor _connectivity;
     private readonly IFileOperationService _fileOperations;
+    private readonly LocalOpenHistory? _openHistory;
     private readonly IApplicationShellService _shell;
     private readonly MainWindowViewModel _mainWindowViewModel;
     private readonly ApplicationStartupOptions _startupOptions;
@@ -98,17 +99,19 @@ public sealed class ApplicationCompositionRoot : IDisposable
             Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") != "1")
             locationProvider = new SettingsIndexedLocationProvider(_settings, locationProvider);
         _indexedLocations = locationProvider;
-        var useMft = SettingsIndexedLocationProvider.UsesMft(
-            _settings, Environment.GetEnvironmentVariable("OMNISPOT_INDEX_METHOD"));
-        _indexLifecycle = _measurementRun == null && useMft
+        var methodOverride = Environment.GetEnvironmentVariable("OMNISPOT_INDEX_METHOD");
+        _indexLifecycle = _measurementRun == null
             ? new VolumeIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "index.v2.live"), _settings.IndexBuild)
-            : _measurementRun == null
-            ? new SharedIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
-                useMft ? IndexScanMethod.Mft : IndexScanMethod.SelectedFolders,
-                Path.Combine(Environment.GetEnvironmentVariable("OMNISPOT_INDEX_PATH") is { Length: > 0 } sharedOverride
-                    ? Path.GetFullPath(sharedOverride) + ".live" : Path.Combine(appDataDirectory, "index.shared.live"), "control.bin"), _settings.IndexBuild)
-            : new IndexLifecycleService(indexManager!, locationProvider, preferDirectoryEnumeration: !useMft);
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "index.v2.live"), _settings.IndexBuild,
+                removeUnusedSnapshots: locationProvider is SettingsIndexedLocationProvider && _settings.IndexedFolders is { Count: > 0 },
+                policy: new SettingsIndexVolumePolicy(_settings, methodOverride))
+            : new IndexLifecycleService(indexManager!, locationProvider, preferDirectoryEnumeration: methodOverride?.ToLowerInvariant() switch
+            {
+                "mft" => false,
+                "directory" => true,
+                _ => _settings.IndexingMethod != IndexScanMethod.Mft
+            });
+        if (_indexLifecycle is VolumeIndexLifecycleService volumeIndex) volumeIndex.Preload();
         var indexMaintenance = new IndexMaintenanceService(
             _indexLifecycle.DatabasePath,
             _indexLifecycle is SharedIndexLifecycleService shared ? () => shared.CatalogDirectory : null);
@@ -120,6 +123,10 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 _startupOptions.Profile == MeasurementProfile.ProductionCopy);
 
         var scoring = new BasicScoringStrategy();
+        if (_measurementRun == null)
+            _openHistory = new LocalOpenHistory(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "open-history.db"),
+                _log.Write);
         var standardSearch = new SearchEngine(
             _indexLifecycle.CreateSearchState,
             tokenizer,
@@ -137,7 +144,10 @@ public sealed class ApplicationCompositionRoot : IDisposable
             standardSearch.Search,
             advancedSearch.Search,
             intentParser.ParseWithGroqEffortAsync,
-            intentParser.ParseIntent);
+            intentParser.ParseIntent,
+            standardSearch.SearchPage,
+            standardSearch.CountMatches,
+            literalRanking: _openHistory == null ? null : () => _openHistory.Snapshot);
         _searchDiagnostics = new SearchDiagnosticsService(
             tokenizer,
             _indexLifecycle.CreateSearchState);
@@ -152,7 +162,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             () => _indexLifecycle.ReconciliationStatus,
             _indexLifecycle.EnsureSyncedAsync);
         _connectivity = new ConnectivityMonitor();
-        var fileOperations = new FileOperationService(_indexLifecycle);
+        var fileOperations = new FileOperationService(_indexLifecycle, _openHistory == null ? null : _openHistory.RecordOpened);
         _fileOperations = _measurementRun == null
             ? fileOperations
             : _startupOptions.Profile == MeasurementProfile.ProductionCopy
@@ -191,7 +201,15 @@ public sealed class ApplicationCompositionRoot : IDisposable
             _shell,
             _log,
             _startupOptions,
-            _measurementRun);
+            _measurementRun,
+            recordFolderOpened: _openHistory == null ? null : _openHistory.RecordOpened,
+            startMenuShell: new WindowsStartMenuShell(),
+            folderSortsPath: _measurementRun == null
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OmniSpot",
+                    "folder-views.json")
+                : null);
     }
 
     public void Dispose()
@@ -205,6 +223,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
         _shell.Dispose();
         _connectivity.Dispose();
         _indexLifecycle.Dispose();
+        _openHistory?.Dispose();
         _measurementRun?.Dispose();
     }
 

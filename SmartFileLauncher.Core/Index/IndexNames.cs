@@ -1,4 +1,8 @@
 using System.Buffers;
+using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
+using System.Runtime.Intrinsics;
 using System.Text;
 using System.Text.Unicode;
 using SmartFileLauncher.Core.Search;
@@ -8,19 +12,22 @@ namespace SmartFileLauncher.Core.Index;
 internal sealed class IndexNames
 {
     private const byte WideFlag = 1;
+    private const byte ExactFlag = 2;
     private static readonly SearchValues<byte> WordBreaks = SearchValues.Create(" _-.,[]()"u8);
-    private byte[] _original = new byte[1 << 16];
-    private byte[] _folded = new byte[1 << 16];
-    private int _originalUsed;
-    private int _foldedUsed;
-    private int[] _originalOffset = new int[256];
-    private int[] _foldedOffset = new int[256];
-    private ushort[] _originalLength = new ushort[256];
-    private ushort[] _foldedLength = new ushort[256];
+    private byte[] _pool = new byte[1 << 16];
+    private int _poolUsed;
+    private int[] _offset = new int[256];
+    private ushort[] _length = new ushort[256];
     private byte[] _flags = new byte[256];
     private int _count;
     private int[] _buckets = new int[1024];
     private int[] _next = new int[256];
+    private byte[] _exact = new byte[1 << 12];
+    private int _exactUsed;
+    private int[] _exactName = new int[64];
+    private int[] _exactOffset = new int[64];
+    private ushort[] _exactLength = new ushort[64];
+    private int _exactCount;
     private byte[] _plain = new byte[1 << 12];
     private int _plainUsed;
     private int[] _plainOffset = new int[64];
@@ -29,27 +36,32 @@ internal sealed class IndexNames
 
     internal int Count => _count;
 
-    internal ReadOnlySpan<byte> Original(int id) => _original.AsSpan(_originalOffset[id], _originalLength[id]);
+    internal ReadOnlySpan<byte> Scanned(int id) => _pool.AsSpan(_offset[id], _length[id]);
 
-    internal ReadOnlySpan<byte> Folded(int id) => _folded.AsSpan(_foldedOffset[id], _foldedLength[id]);
+    internal ReadOnlySpan<byte> Original(int id)
+    {
+        if ((_flags[id] & ExactFlag) == 0) return Scanned(id);
+        var at = Array.BinarySearch(_exactName, 0, _exactCount, id);
+        return _exact.AsSpan(_exactOffset[at], _exactLength[at]);
+    }
 
     internal bool IsWide(int id) => (_flags[id] & WideFlag) != 0;
 
-    internal bool IsAscii(int id) => !IsWide(id) && Ascii.IsValid(Original(id));
+    internal bool IsAscii(int id) => (_flags[id] & ExactFlag) == 0;
 
     internal string Text(int id)
     {
         var bytes = Original(id);
-        return IsWide(id) ? new string(System.Runtime.InteropServices.MemoryMarshal.Cast<byte, char>(bytes)) : Encoding.UTF8.GetString(bytes);
+        return IsWide(id) ? new string(MemoryMarshal.Cast<byte, char>(bytes)) : Encoding.UTF8.GetString(bytes);
     }
 
     internal int Compare(int left, int right)
     {
         if (left == right) return 0;
-        var byFolded = Folded(left).SequenceCompareTo(Folded(right));
+        var byFolded = CompareIgnoreCase(Scanned(left), Scanned(right));
         if (byFolded != 0) return byFolded;
         var byOriginal = Original(left).SequenceCompareTo(Original(right));
-        return byOriginal != 0 ? byOriginal : _flags[left].CompareTo(_flags[right]);
+        return byOriginal != 0 ? byOriginal : (_flags[left] & WideFlag).CompareTo(_flags[right] & WideFlag);
     }
 
     internal int Intern(ReadOnlySpan<char> name)
@@ -65,11 +77,11 @@ internal sealed class IndexNames
             else
             {
                 flags = WideFlag;
-                original = System.Runtime.InteropServices.MemoryMarshal.AsBytes(name);
+                original = MemoryMarshal.AsBytes(name);
             }
             var hash = Hash(original, flags);
             for (var id = _buckets[hash & (_buckets.Length - 1)] - 1; id >= 0; id = _next[id] - 1)
-                if (_flags[id] == flags && Original(id).SequenceEqual(original)) return id;
+                if ((_flags[id] & WideFlag) == flags && Original(id).SequenceEqual(original)) return id;
             return Append(name, original, flags, hash);
         }
         finally { ArrayPool<byte>.Shared.Return(rented); }
@@ -79,29 +91,47 @@ internal sealed class IndexNames
     {
         if (original.Length > ushort.MaxValue) throw new ArgumentException("Dosya adı çok uzun.", nameof(name));
         var id = _count;
-        if (id == _originalOffset.Length) GrowEntries();
-        EnsureCapacity(ref _original, _originalUsed + original.Length);
-        original.CopyTo(_original.AsSpan(_originalUsed));
-        _originalOffset[id] = _originalUsed;
-        _originalLength[id] = checked((ushort)original.Length);
-        _originalUsed += original.Length;
-
-        var upper = ArrayPool<char>.Shared.Rent(name.Length);
-        try
+        if (id == _offset.Length) GrowEntries();
+        var exact = flags != 0 || !Ascii.IsValid(original);
+        _offset[id] = _poolUsed;
+        if (!exact)
         {
-            var upperName = upper.AsSpan(0, name.Length);
-            name.ToUpperInvariant(upperName);
-            EnsureCapacity(ref _folded, _foldedUsed + upperName.Length * 3 + 1);
-            Utf8.FromUtf16(upperName, _folded.AsSpan(_foldedUsed), out _, out var written, replaceInvalidSequences: true);
-            _foldedOffset[id] = _foldedUsed;
-            _foldedLength[id] = checked((ushort)written);
-            _foldedUsed += written;
-            _folded[_foldedUsed++] = 0;
+            EnsureCapacity(ref _pool, _poolUsed + original.Length + 1);
+            original.CopyTo(_pool.AsSpan(_poolUsed));
+            _length[id] = checked((ushort)original.Length);
+            _poolUsed += original.Length;
         }
-        finally { ArrayPool<char>.Shared.Return(upper); }
-
+        else
+        {
+            var upper = ArrayPool<char>.Shared.Rent(name.Length);
+            try
+            {
+                var upperName = upper.AsSpan(0, name.Length);
+                name.ToUpperInvariant(upperName);
+                EnsureCapacity(ref _pool, _poolUsed + upperName.Length * 3 + 1);
+                Utf8.FromUtf16(upperName, _pool.AsSpan(_poolUsed), out _, out var written, replaceInvalidSequences: true);
+                _length[id] = checked((ushort)written);
+                _poolUsed += written;
+            }
+            finally { ArrayPool<char>.Shared.Return(upper); }
+            if (_exactCount == _exactName.Length)
+            {
+                var size = _exactName.Length + Math.Max(64, _exactName.Length / 2);
+                Array.Resize(ref _exactName, size);
+                Array.Resize(ref _exactOffset, size);
+                Array.Resize(ref _exactLength, size);
+            }
+            EnsureCapacity(ref _exact, _exactUsed + original.Length);
+            original.CopyTo(_exact.AsSpan(_exactUsed));
+            _exactName[_exactCount] = id;
+            _exactOffset[_exactCount] = _exactUsed;
+            _exactLength[_exactCount++] = checked((ushort)original.Length);
+            _exactUsed += original.Length;
+            flags |= ExactFlag;
+        }
+        _pool[_poolUsed++] = 0;
         _flags[id] = flags;
-        if (flags == 0 && !Ascii.IsValid(original)) AppendPlain(id, name.ToString());
+        if (flags == ExactFlag) AppendPlain(id, name.ToString());
         _count++;
         if (_count > _buckets.Length) Rehash(_buckets.Length * 2);
         else Link(id, hash);
@@ -111,7 +141,7 @@ internal sealed class IndexNames
     private void AppendPlain(int id, string text)
     {
         var plain = Encoding.UTF8.GetBytes(Plain(text));
-        if (plain.Length == 0 || Array.IndexOf(plain, (byte)0) >= 0 || Folded(id).SequenceEqual(plain)) return;
+        if (plain.Length == 0 || Array.IndexOf(plain, (byte)0) >= 0 || Scanned(id).SequenceEqual(plain)) return;
         if (_plainCount == _plainOffset.Length)
         {
             var size = _plainOffset.Length + Math.Max(64, _plainOffset.Length / 2);
@@ -136,31 +166,31 @@ internal sealed class IndexNames
     private void Rehash(int size)
     {
         _buckets = new int[size];
-        for (var id = 0; id < _count; id++) Link(id, Hash(Original(id), _flags[id]));
+        for (var id = 0; id < _count; id++) Link(id, Hash(Original(id), (byte)(_flags[id] & WideFlag)));
     }
 
     private void GrowEntries()
     {
-        var size = Math.Max(256, _originalOffset.Length + _originalOffset.Length / 2);
-        Array.Resize(ref _originalOffset, size);
-        Array.Resize(ref _foldedOffset, size);
-        Array.Resize(ref _originalLength, size);
-        Array.Resize(ref _foldedLength, size);
+        var size = Math.Max(256, _offset.Length + _offset.Length / 2);
+        Array.Resize(ref _offset, size);
+        Array.Resize(ref _length, size);
         Array.Resize(ref _flags, size);
         Array.Resize(ref _next, size);
     }
 
     internal void Trim()
     {
-        Array.Resize(ref _original, _originalUsed + Math.Max(1 << 16, _originalUsed / 64));
-        Array.Resize(ref _folded, _foldedUsed + Math.Max(1 << 16, _foldedUsed / 64));
+        Array.Resize(ref _pool, _poolUsed + Math.Max(1 << 16, _poolUsed / 64));
         var size = _count + Math.Max(256, _count / 64);
-        Array.Resize(ref _originalOffset, size);
-        Array.Resize(ref _foldedOffset, size);
-        Array.Resize(ref _originalLength, size);
-        Array.Resize(ref _foldedLength, size);
+        Array.Resize(ref _offset, size);
+        Array.Resize(ref _length, size);
         Array.Resize(ref _flags, size);
         Array.Resize(ref _next, size);
+        Array.Resize(ref _exact, _exactUsed + Math.Max(1 << 12, _exactUsed / 64));
+        var exactSize = _exactCount + Math.Max(64, _exactCount / 64);
+        Array.Resize(ref _exactName, exactSize);
+        Array.Resize(ref _exactOffset, exactSize);
+        Array.Resize(ref _exactLength, exactSize);
         Array.Resize(ref _plain, _plainUsed + Math.Max(1 << 12, _plainUsed / 64));
         var plainSize = _plainCount + Math.Max(64, _plainCount / 64);
         Array.Resize(ref _plainOffset, plainSize);
@@ -196,29 +226,139 @@ internal sealed class IndexNames
 
     internal static bool IsWordBreak(byte value) => WordBreaks.Contains(value);
 
+    internal static byte Upper(byte value) => (uint)(value - 'a') <= 25 ? (byte)(value - 32) : value;
+
+    private static bool IsUpperLetter(byte value) => (uint)(value - 'A') <= 25;
+
+    internal static int CompareIgnoreCase(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right)
+    {
+        var shared = Math.Min(left.Length, right.Length);
+        var at = 0;
+        while (true)
+        {
+            at += left.Slice(at, shared - at).CommonPrefixLength(right.Slice(at, shared - at));
+            if (at == shared) return left.Length.CompareTo(right.Length);
+            var a = Upper(left[at]);
+            var b = Upper(right[at]);
+            if (a != b) return a.CompareTo(b);
+            at++;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static bool MatchesAt(ref byte text, ReadOnlySpan<byte> upperPattern)
+    {
+        for (var i = 0; i < upperPattern.Length; i++)
+        {
+            var have = Unsafe.Add(ref text, i);
+            var want = upperPattern[i];
+            if (have == want) continue;
+            if (IsUpperLetter(want) && have == (want | 0x20)) continue;
+            return false;
+        }
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    internal static int IndexOfIgnoreCase(ReadOnlySpan<byte> text, ReadOnlySpan<byte> upperPattern)
+    {
+        var length = upperPattern.Length;
+        if (length == 0) return 0;
+        if (text.Length < length) return -1;
+        var first = upperPattern[0];
+        if (length == 1)
+            return IsUpperLetter(first) ? text.IndexOfAny(first, (byte)(first | 0x20)) : text.IndexOf(first);
+        var offset = length - 1;
+        var second = upperPattern[offset];
+        var firstFold = IsUpperLetter(first) ? (byte)0x20 : (byte)0;
+        var secondFold = IsUpperLetter(second) ? (byte)0x20 : (byte)0;
+        ref var start = ref MemoryMarshal.GetReference(text);
+        var last = text.Length - length;
+        var at = 0;
+        if (Vector256.IsHardwareAccelerated && last >= Vector256<byte>.Count - 1)
+        {
+            var firstMask = Vector256.Create(firstFold);
+            var secondMask = Vector256.Create(secondFold);
+            var firstTarget = Vector256.Create((byte)(first | firstFold));
+            var secondTarget = Vector256.Create((byte)(second | secondFold));
+            for (; at <= last - (Vector256<byte>.Count - 1); at += Vector256<byte>.Count)
+            {
+                var left = Vector256.LoadUnsafe(ref start, (nuint)at) | firstMask;
+                var right = Vector256.LoadUnsafe(ref start, (nuint)(at + offset)) | secondMask;
+                var hits = (Vector256.Equals(left, firstTarget) & Vector256.Equals(right, secondTarget)).ExtractMostSignificantBits();
+                while (hits != 0)
+                {
+                    var position = at + BitOperations.TrailingZeroCount(hits);
+                    if (MatchesAt(ref Unsafe.Add(ref start, position), upperPattern)) return position;
+                    hits &= hits - 1;
+                }
+            }
+        }
+        else if (Vector128.IsHardwareAccelerated && last >= Vector128<byte>.Count - 1)
+        {
+            var firstMask = Vector128.Create(firstFold);
+            var secondMask = Vector128.Create(secondFold);
+            var firstTarget = Vector128.Create((byte)(first | firstFold));
+            var secondTarget = Vector128.Create((byte)(second | secondFold));
+            for (; at <= last - (Vector128<byte>.Count - 1); at += Vector128<byte>.Count)
+            {
+                var left = Vector128.LoadUnsafe(ref start, (nuint)at) | firstMask;
+                var right = Vector128.LoadUnsafe(ref start, (nuint)(at + offset)) | secondMask;
+                var hits = (Vector128.Equals(left, firstTarget) & Vector128.Equals(right, secondTarget)).ExtractMostSignificantBits();
+                while (hits != 0)
+                {
+                    var position = at + BitOperations.TrailingZeroCount(hits);
+                    if (MatchesAt(ref Unsafe.Add(ref start, position), upperPattern)) return position;
+                    hits &= hits - 1;
+                }
+            }
+        }
+        for (; at <= last; at++)
+            if (MatchesAt(ref Unsafe.Add(ref start, at), upperPattern)) return at;
+        return -1;
+    }
+
     internal ulong[] Match(byte[] pattern, CancellationToken cancellationToken)
     {
         var bits = new ulong[(_count + 63) >> 6];
-        Scan(_folded, _foldedUsed, _foldedOffset, null, _count, pattern, false, bits, cancellationToken);
+        Scan(_pool, _poolUsed, _offset, null, _count, pattern, false, bits, cancellationToken);
         return bits;
+    }
+
+    internal void MatchLiteralRemainder(byte[] pattern, ulong[] masks, int wordStartOffset, CancellationToken cancellationToken) =>
+        Scan(_pool, _poolUsed, _offset, null, _count, pattern, false, masks, cancellationToken, wordStartOffset);
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    internal static bool HasLiteralWordStart(ReadOnlySpan<byte> name, ReadOnlySpan<byte> pattern, int matchedAt)
+    {
+        while (matchedAt > 0)
+        {
+            if (name[matchedAt - 1] is (byte)' ' or (byte)'_' or (byte)'-' or (byte)'.') return true;
+            if (matchedAt == name.Length - pattern.Length) return false;
+            var next = IndexOfIgnoreCase(name[(matchedAt + 1)..], pattern);
+            if (next < 0) return false;
+            matchedAt += next + 1;
+        }
+        return false;
     }
 
     internal ulong[] Find(byte[] upper, byte[] plain, bool wholeWord, CancellationToken cancellationToken)
     {
         var bits = new ulong[(_count + 63) >> 6];
-        Scan(_folded, _foldedUsed, _foldedOffset, null, _count, upper, wholeWord, bits, cancellationToken);
+        Scan(_pool, _poolUsed, _offset, null, _count, upper, wholeWord, bits, cancellationToken);
         if (!plain.AsSpan().SequenceEqual(upper))
-            Scan(_folded, _foldedUsed, _foldedOffset, null, _count, plain, wholeWord, bits, cancellationToken);
+            Scan(_pool, _poolUsed, _offset, null, _count, plain, wholeWord, bits, cancellationToken);
         Scan(_plain, _plainUsed, _plainOffset, _plainName, _plainCount, plain, wholeWord, bits, cancellationToken);
         return bits;
     }
 
     private static void Scan(byte[] pool, int used, int[] offsets, int[]? owners, int count, byte[] pattern, bool wholeWord,
-        ulong[] bits, CancellationToken cancellationToken)
+        ulong[] bits, CancellationToken cancellationToken, int wordStartOffset = 0)
     {
         if (pattern.Length == 0 || count == 0 || Array.IndexOf(pattern, (byte)0) >= 0) return;
         var chunks = used < (1 << 20) ? 1 : Math.Clamp(Environment.ProcessorCount, 1, 16);
-        Parallel.For(0, chunks, new ParallelOptions { CancellationToken = cancellationToken }, chunk =>
+        Parallel.For(0, chunks, new ParallelOptions { CancellationToken = cancellationToken },
+            [MethodImpl(MethodImplOptions.AggressiveOptimization)] (int chunk) =>
         {
             var start = (int)((long)used * chunk / chunks);
             var end = (int)((long)used * (chunk + 1) / chunks);
@@ -236,22 +376,31 @@ internal sealed class IndexNames
             }
             var at = start;
             var steps = 0;
+            var entry = 0;
             while (at < limit)
             {
                 if ((++steps & 1023) == 0) cancellationToken.ThrowIfCancellationRequested();
-                var found = pool.AsSpan(at, limit - at).IndexOf(pattern);
+                var found = IndexOfIgnoreCase(pool.AsSpan(at, limit - at), pattern);
                 if (found < 0) break;
                 var position = at + found;
-                var entry = EntryAt(offsets, count, position);
+                entry = EntryAt(offsets, count, entry, position);
                 var entryEnd = entry + 1 < count ? offsets[entry + 1] - 1 : used - 1;
                 if (wholeWord && !IsWholeWord(pool, offsets[entry], entryEnd, position, pattern.Length))
                 {
                     at = position + 1;
                     continue;
                 }
-                var id = owners is null ? entry : owners[entry];
-                Interlocked.Or(ref bits[id >> 6], 1UL << (id & 63));
                 at = entryEnd + 1;
+                var maskOffset = 0;
+                if (wordStartOffset != 0)
+                {
+                    var entryStart = offsets[entry];
+                    if (position == entryStart) continue;
+                    if (HasLiteralWordStart(pool.AsSpan(entryStart, entryEnd - entryStart), pattern, position - entryStart))
+                        maskOffset = wordStartOffset;
+                }
+                var id = owners is null ? entry : owners[entry];
+                Interlocked.Or(ref bits[maskOffset + (id >> 6)], 1UL << (id & 63));
             }
         });
     }
@@ -260,10 +409,17 @@ internal sealed class IndexNames
         (position == entryStart || WordBreaks.Contains(pool[position - 1])) &&
         (position + length == entryEnd || WordBreaks.Contains(pool[position + length]));
 
-    private static int EntryAt(int[] offsets, int count, int position)
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private static int EntryAt(int[] offsets, int count, int from, int position)
     {
-        var lo = 0;
-        var hi = count - 1;
+        var lo = from;
+        var step = 1;
+        while (step < count - lo && offsets[lo + step] <= position)
+        {
+            lo += step;
+            step <<= 1;
+        }
+        var hi = Math.Min(lo + step, count) - 1;
         while (lo < hi)
         {
             var mid = (lo + hi + 1) >>> 1;
@@ -272,62 +428,90 @@ internal sealed class IndexNames
         return lo;
     }
 
-    internal ReadOnlySpan<byte> FoldedExtension(int id)
+    internal ReadOnlySpan<byte> Extension(int id)
     {
-        var folded = Folded(id);
-        var dot = folded.LastIndexOf((byte)'.');
-        return dot < 0 || dot == folded.Length - 1 ? [] : folded[dot..];
+        var name = Scanned(id);
+        var dot = name.LastIndexOf((byte)'.');
+        return dot < 0 || dot == name.Length - 1 ? [] : name[dot..];
     }
 
     internal void Write(BinaryWriter writer)
     {
         writer.Write(_count);
-        writer.Write(_originalUsed);
-        writer.Write(_foldedUsed);
-        writer.Write(_original, 0, _originalUsed);
-        writer.Write(_folded, 0, _foldedUsed);
-        IndexArrays.Write(writer, _originalOffset.AsSpan(0, _count));
-        IndexArrays.Write(writer, _foldedOffset.AsSpan(0, _count));
-        IndexArrays.Write(writer, _originalLength.AsSpan(0, _count));
-        IndexArrays.Write(writer, _foldedLength.AsSpan(0, _count));
+        writer.Write(_poolUsed);
+        writer.Write(_exactCount);
+        writer.Write(_exactUsed);
+        writer.Write(_pool, 0, _poolUsed);
+        IndexArrays.Write(writer, _offset.AsSpan(0, _count));
+        IndexArrays.Write(writer, _length.AsSpan(0, _count));
         writer.Write(_flags, 0, _count);
+        IndexArrays.Write(writer, _exactName.AsSpan(0, _exactCount));
+        IndexArrays.Write(writer, _exactOffset.AsSpan(0, _exactCount));
+        IndexArrays.Write(writer, _exactLength.AsSpan(0, _exactCount));
+        writer.Write(_exact, 0, _exactUsed);
     }
 
     internal static IndexNames Read(BinaryReader reader)
     {
+        var names = ReadArrays(reader);
+        names.Complete();
+        return names;
+    }
+
+    internal static IndexNames ReadArrays(BinaryReader reader)
+    {
         var names = new IndexNames();
         var count = reader.ReadInt32();
-        var originalUsed = reader.ReadInt32();
-        var foldedUsed = reader.ReadInt32();
-        if (count < 0 || originalUsed < 0 || foldedUsed < 0) throw new InvalidDataException("Ad havuzu başlığı geçersiz.");
-        names._original = IndexArrays.ReadBytes(reader, originalUsed, originalUsed + Math.Max(1 << 16, originalUsed / 64));
-        names._folded = IndexArrays.ReadBytes(reader, foldedUsed, foldedUsed + Math.Max(1 << 16, foldedUsed / 64));
-        names._originalUsed = originalUsed;
-        names._foldedUsed = foldedUsed;
+        var poolUsed = reader.ReadInt32();
+        var exactCount = reader.ReadInt32();
+        var exactUsed = reader.ReadInt32();
+        if (count < 0 || poolUsed < 0 || exactCount < 0 || exactUsed < 0 || exactCount > count)
+            throw new InvalidDataException("Ad havuzu başlığı geçersiz.");
+        names._pool = IndexArrays.ReadBytes(reader, poolUsed, poolUsed + Math.Max(1 << 16, poolUsed / 64));
+        names._poolUsed = poolUsed;
         var capacity = count + Math.Max(256, count / 64);
-        names._originalOffset = IndexArrays.Read<int>(reader, count, capacity);
-        names._foldedOffset = IndexArrays.Read<int>(reader, count, capacity);
-        names._originalLength = IndexArrays.Read<ushort>(reader, count, capacity);
-        names._foldedLength = IndexArrays.Read<ushort>(reader, count, capacity);
+        names._offset = IndexArrays.Read<int>(reader, count, capacity);
+        names._length = IndexArrays.Read<ushort>(reader, count, capacity);
         names._flags = IndexArrays.ReadBytes(reader, count, capacity);
+        var exactCapacity = exactCount + Math.Max(64, exactCount / 64);
+        names._exactName = IndexArrays.Read<int>(reader, exactCount, exactCapacity);
+        names._exactOffset = IndexArrays.Read<int>(reader, exactCount, exactCapacity);
+        names._exactLength = IndexArrays.Read<ushort>(reader, exactCount, exactCapacity);
+        names._exact = IndexArrays.ReadBytes(reader, exactUsed, exactUsed + Math.Max(1 << 12, exactUsed / 64));
+        names._exactCount = exactCount;
+        names._exactUsed = exactUsed;
         names._next = new int[capacity];
         names._count = count;
-        var expected = 0L;
-        for (var id = 0; id < count; id++)
-        {
-            if ((long)names._originalOffset[id] + names._originalLength[id] > originalUsed ||
-                names._foldedOffset[id] != expected ||
-                (long)names._foldedOffset[id] + names._foldedLength[id] >= foldedUsed ||
-                names._folded[names._foldedOffset[id] + names._foldedLength[id]] != 0)
-                throw new InvalidDataException("Ad havuzu kaydı geçersiz.");
-            expected = names._foldedOffset[id] + names._foldedLength[id] + 1L;
-        }
-        if (expected != foldedUsed) throw new InvalidDataException("Ad havuzu uzunluğu geçersiz.");
-        var buckets = 1024;
-        while (buckets < count) buckets *= 2;
-        names.Rehash(buckets);
-        for (var id = 0; id < count; id++)
-            if (!names.IsWide(id) && !Ascii.IsValid(names.Original(id))) names.AppendPlain(id, names.Text(id));
         return names;
+    }
+
+    internal void Complete()
+    {
+        var expected = 0L;
+        var exact = 0;
+        for (var id = 0; id < _count; id++)
+        {
+            if (_offset[id] != expected ||
+                (long)_offset[id] + _length[id] >= _poolUsed ||
+                _pool[_offset[id] + _length[id]] != 0 ||
+                (_flags[id] & ~(WideFlag | ExactFlag)) != 0 ||
+                (_flags[id] & WideFlag) != 0 && (_flags[id] & ExactFlag) == 0)
+                throw new InvalidDataException("Ad havuzu kaydı geçersiz.");
+            expected = _offset[id] + _length[id] + 1L;
+            if ((_flags[id] & ExactFlag) == 0) continue;
+            if (exact == _exactCount || _exactName[exact] != id ||
+                _exactOffset[exact] < 0 || (long)_exactOffset[exact] + _exactLength[exact] > _exactUsed)
+                throw new InvalidDataException("Ad havuzu özgün yazım kaydı geçersiz.");
+            exact++;
+        }
+        if (expected != _poolUsed || exact != _exactCount) throw new InvalidDataException("Ad havuzu uzunluğu geçersiz.");
+        var buckets = 1024;
+        while (buckets < _count) buckets *= 2;
+        Rehash(buckets);
+        for (var at = 0; at < _exactCount; at++)
+        {
+            var id = _exactName[at];
+            if (!IsWide(id)) AppendPlain(id, Text(id));
+        }
     }
 }

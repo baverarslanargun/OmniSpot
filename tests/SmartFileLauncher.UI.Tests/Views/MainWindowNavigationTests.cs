@@ -2,6 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Threading;
 using SmartFileLauncher.Core.Application.Connectivity;
 using SmartFileLauncher.Core.Application.Files;
@@ -9,6 +10,7 @@ using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Application.Search;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Diagnostics;
+using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.UI.Services;
 using SmartFileLauncher.UI.ViewModels;
@@ -21,6 +23,20 @@ namespace SmartFileLauncher.UI.Tests.Views;
 public sealed class MainWindowNavigationTests
 {
     private const string Root = @"C:\Test";
+
+    [Fact]
+    public Task OpeningASearchFolderRecordsUsageOnceAcrossBackAndForward() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        await fixture.Search("fatura", false);
+        var path = Assert.Single(fixture.Model.SearchResults).FullPath;
+
+        await fixture.Invoke("OpenFolderItemAsync", path, false);
+        await fixture.Back();
+        await fixture.Forward();
+
+        Assert.Equal(path, Assert.Single(fixture.OpenedFolders));
+    });
 
     [Theory]
     [InlineData(false)]
@@ -132,6 +148,86 @@ public sealed class MainWindowNavigationTests
         Assert.Equal("2 öğe", ((TextBlock)fixture.Element("FolderItemCountText")).Text);
     });
 
+    [Fact]
+    public Task TheEmptyFolderNoticeOnlyShowsWithTheFolderView() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        var empty = Path.Combine(Root, "Yeni klasör");
+        fixture.EmptyFolders.Add(empty);
+        await fixture.Navigate(empty);
+        var notice = fixture.Element("EmptyFolderPanel");
+        Assert.Equal(Visibility.Visible, notice.Visibility);
+
+        await fixture.Search("fatura", naturalLanguage: false);
+        Assert.Equal(Visibility.Visible, fixture.Element("ResultsContainer").Visibility);
+        Assert.Equal(Visibility.Collapsed, notice.Visibility);
+
+        await fixture.Invoke("RefreshCurrentFolderIconsAsync");
+        Assert.Equal(Visibility.Collapsed, notice.Visibility);
+
+        fixture.SearchBox.Text = string.Empty;
+        for (var attempt = 0; attempt < 100 && fixture.Element("DesktopIconsScroll").Visibility != Visibility.Visible; attempt++)
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(Visibility.Visible, notice.Visibility);
+    });
+
+    [Fact]
+    public Task AFolderKeepsItsSortButNotItsFilterWhenTheWindowIsRecreated() => RunSta(async () =>
+    {
+        var directory = Path.Combine(Path.GetTempPath(), "omnispot-folder-sort-window-" + Guid.NewGuid().ToString("N"));
+        var store = Path.Combine(directory, "folder-views.json");
+        var folder = Path.Combine(Root, "Belgeler");
+        var newestFirst = new ItemSort(SortField.Modified, Descending: true);
+        try
+        {
+            using (var first = new Fixture(store))
+            {
+                await first.Navigate(folder);
+                first.Click("SortField_Click", new MenuItem { Tag = SortField.Modified });
+                first.Click("FilterCategory_Click", new MenuItem { Tag = FileFilterCategory.Image });
+
+                Assert.Equal(newestFirst, first.ActiveView.Sort);
+                Assert.True(first.ActiveView.Filter.IsActive);
+            }
+
+            using var second = new Fixture(store);
+            await second.Navigate(folder);
+            Assert.Equal(newestFirst, second.ActiveView.Sort);
+            Assert.False(second.ActiveView.Filter.IsActive);
+
+            await second.Navigate(Path.Combine(Root, "Muzik"));
+            Assert.Equal(ResultView.FolderDefault, second.ActiveView);
+        }
+        finally
+        {
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    });
+
+    [Fact]
+    public Task APressThatArrivesAfterTheButtonIsReleasedDoesNotThrow() => RunSta(() =>
+    {
+        using var fixture = new Fixture();
+        fixture.Window.Loaded -= (RoutedEventHandler)Delegate.CreateDelegate(
+            typeof(RoutedEventHandler), fixture.Window, "MainWindow_Loaded");
+        fixture.Window.Left = -30000;
+        fixture.Window.Top = -30000;
+        fixture.Window.ShowActivated = false;
+        fixture.Window.Show();
+        var reachedShell = false;
+        fixture.Element("Shell").AddHandler(UIElement.MouseLeftButtonDownEvent,
+            new MouseButtonEventHandler((_, _) => reachedShell = true), handledEventsToo: true);
+        Assert.Equal(MouseButtonState.Released, Mouse.LeftButton);
+
+        fixture.Element("FolderItemCountText").RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+        {
+            RoutedEvent = Mouse.MouseDownEvent
+        });
+
+        Assert.True(reachedShell);
+        return Task.CompletedTask;
+    });
+
     internal static Task RunSta(Func<Task> action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -156,14 +252,17 @@ public sealed class MainWindowNavigationTests
     {
         internal readonly MainWindowViewModel Model = new() { IsIndexed = true, IndexedRootPaths = [Root] };
         internal readonly HashSet<string> Missing = new(StringComparer.OrdinalIgnoreCase);
+        internal readonly HashSet<string> EmptyFolders = new(StringComparer.OrdinalIgnoreCase);
+        internal readonly List<string> OpenedFolders = [];
         internal int ParserCalls;
         internal int LocalCalls;
         internal int StandardCalls;
         internal string RefreshedName = "ilk-fatura";
         internal SearchResult[] StandardResults = [Result("ilk-fatura")];
+        internal Func<string, object?[], object?>? Files;
         internal MainWindow Window { get; }
 
-        internal Fixture()
+        internal Fixture(string? folderSortsPath = null)
         {
             var search = new SearchApplicationService(
                 (_, _, _, _) => { Interlocked.Increment(ref StandardCalls); return StandardResults; },
@@ -194,7 +293,9 @@ public sealed class MainWindowNavigationTests
                 Stub<IThumbnailService>(),
                 Stub<IFolderNavigationService>((method, args) => method.Name switch
                 {
-                    "OpenAsync" => Task.FromResult(Page((string)args[0]!)),
+                    "OpenAsync" => Task.FromResult(EmptyFolders.Contains((string)args[0]!)
+                        ? new FolderPage([], false)
+                        : Page((string)args[0]!)),
                     "GetParentWithinRoots" => Parent((string)args[0]!),
                     _ => throw new NotSupportedException(method.Name)
                 }),
@@ -202,12 +303,21 @@ public sealed class MainWindowNavigationTests
                     ? true : throw new NotSupportedException(method.Name)),
                 Stub<IFileOperationService>((method, args) => method.Name == "GetItemKind"
                     ? Missing.Contains((string)args[0]!) ? FileItemKind.Missing : FileItemKind.Directory
-                    : throw new NotSupportedException(method.Name)),
+                    : Files != null ? Files(method.Name, args) : throw new NotSupportedException(method.Name)),
                 Stub<IApplicationShellService>(), new ApplicationLog(),
-                ApplicationStartupOptions.Default, null);
+                ApplicationStartupOptions.Default, null, OpenedFolders.Add,
+                folderSortsPath: folderSortsPath);
         }
 
         internal TextBox SearchBox => (TextBox)Window.FindName("SearchBox");
+
+        internal ResultView ActiveView =>
+            (ResultView)typeof(MainWindow).GetProperty("ActiveView", BindingFlags.NonPublic | BindingFlags.Instance)!
+                .GetValue(Window)!;
+
+        internal void Click(string handler, object sender) =>
+            typeof(MainWindow).GetMethod(handler, BindingFlags.NonPublic | BindingFlags.Instance)!
+                .Invoke(Window, [sender, new RoutedEventArgs()]);
 
         internal FrameworkElement Element(string name) => (FrameworkElement)Window.FindName(name);
 

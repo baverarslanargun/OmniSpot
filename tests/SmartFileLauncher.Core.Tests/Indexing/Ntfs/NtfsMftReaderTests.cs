@@ -7,6 +7,21 @@ namespace SmartFileLauncher.Core.Tests.Indexing.Ntfs;
 public sealed class NtfsMftReaderTests
 {
     [Fact]
+    public void NameDeduplicationKeepsFirstVisiblePairAndDistinctParentsAndCase()
+    {
+        var source = LinearSource();
+        source.Add(1, Record(Basic(), Name("DOS~1.TXT", nameSpace: 2),
+            Name("dosya.txt"), Name("dosya.txt"), Name("dosya.txt", 6),
+            Name("Dosya.txt"), Resident(0x80, [1])), 5120);
+        using var reader = new NtfsMftReader(source);
+
+        var entries = reader.ReadEntries().Where(entry => entry.FileReference == Reference(1)).ToArray();
+
+        Assert.Equal(new[] { "dosya.txt", "dosya.txt", "Dosya.txt" }, entries.Select(entry => entry.Name));
+        Assert.Equal(new[] { Reference(5), Reference(6), Reference(5) }, entries.Select(entry => entry.ParentFileReference));
+    }
+
+    [Fact]
     public void CurrentReferenceRejectsReusedSequenceAndReadsReparseTag()
     {
         var source = LinearSource();

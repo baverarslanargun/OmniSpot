@@ -14,4 +14,6 @@ public sealed record IndexVolumePageDto(
     string? States = null,
     int Count = 0,
     bool Done = false,
-    bool RescanRequired = false);
+    bool RescanRequired = false,
+    [property: System.Text.Json.Serialization.JsonIgnore]
+    ReadOnlyMemory<byte>? BinaryEntries = null);

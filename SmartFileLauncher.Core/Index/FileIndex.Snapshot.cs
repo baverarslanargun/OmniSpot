@@ -6,8 +6,8 @@ namespace SmartFileLauncher.Core.Index;
 public sealed partial class FileIndex
 {
     private const ulong SnapshotMagic = 0x3158444E49494D4FUL;
-    private const int SnapshotVersion = 3;
-    private const int UnsortedSnapshotVersion = 2;
+    private const int SnapshotVersion = 7;
+    private const int UnsortedSnapshotVersion = 6;
 
     internal void CompactNow(CancellationToken cancellationToken = default)
     {
@@ -35,9 +35,9 @@ public sealed partial class FileIndex
         var frn = new ulong[alive + 1024];
         var parent = new uint[alive + 1024];
         var name = new int[alive + 1024];
-        var attributes = new uint[alive + 1024];
-        var size = new long[alive + 1024];
-        var modified = new long[alive + 1024];
+        var attributes = new byte[alive + 1024];
+        var size = new IndexSizes(alive + 1024);
+        var modified = new uint[alive + 1024];
         var created = new uint[alive + 1024];
         var next = 0u;
         for (var row = 0u; row < _count; row++)
@@ -55,6 +55,7 @@ public sealed partial class FileIndex
             next++;
         }
         for (var row = 0u; row < next; row++) parent[row] = parent[row] == NoRow ? NoRow : map[parent[row]];
+        _openedRowCache?.Clear();
         _names = names;
         _frn = frn;
         _parent = parent;
@@ -115,8 +116,8 @@ public sealed partial class FileIndex
                     IndexArrays.Write(writer, _frn.AsSpan(0, _count));
                     IndexArrays.Write(writer, _parent.AsSpan(0, _count));
                     IndexArrays.Write(writer, _name.AsSpan(0, _count));
-                    IndexArrays.Write(writer, _attributes.AsSpan(0, _count));
-                    IndexArrays.Write(writer, _size.AsSpan(0, _count));
+                    writer.Write(_attributes, 0, _count);
+                    _size.Write(writer, _count);
                     IndexArrays.Write(writer, _modified.AsSpan(0, _count));
                     IndexArrays.Write(writer, _created.AsSpan(0, _count));
                     writer.Write(_byName.Count);
@@ -141,6 +142,7 @@ public sealed partial class FileIndex
     {
         checkpoint = default;
         if (!File.Exists(path)) return null;
+        var pending = new List<Task>(5);
         try
         {
             using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 20);
@@ -156,15 +158,23 @@ public sealed partial class FileIndex
             var dead = reader.ReadInt32();
             var root = reader.ReadUInt32();
             if (count <= 0 || dead < 0 || dead >= count || root >= count) return null;
-            index._names = IndexNames.Read(reader);
+            var names = IndexNames.ReadArrays(reader);
+            index._names = names;
+            var namesReady = Task.Run(names.Complete);
+            pending.Add(namesReady);
             var capacity = count + Math.Max(1024, count / 64);
             index._frn = IndexArrays.Read<ulong>(reader, count, capacity);
             index._parent = IndexArrays.Read<uint>(reader, count, capacity);
             index._name = IndexArrays.Read<int>(reader, count, capacity);
-            index._attributes = IndexArrays.Read<uint>(reader, count, capacity);
-            index._size = IndexArrays.Read<long>(reader, count, capacity);
-            index._modified = IndexArrays.Read<long>(reader, count, capacity);
+            index._attributes = IndexArrays.ReadBytes(reader, count, capacity);
+            index._size = IndexSizes.Read(reader, count, capacity);
+            index._modified = IndexArrays.Read<uint>(reader, count, capacity);
             index._created = IndexArrays.Read<uint>(reader, count, capacity);
+            index._count = count;
+            index._dead = dead;
+            index._root = root;
+            var rowsReady = Task.Run(index.CountLoadedFiles);
+            pending.Add(rowsReady);
             var ordered = reader.ReadInt32();
             if (ordered != count - dead) return null;
             var byName = IndexArrays.Read<uint>(reader, ordered, ordered + Math.Max(1024, ordered / 64));
@@ -175,24 +185,19 @@ public sealed partial class FileIndex
             Span<byte> stored = stackalloc byte[8];
             if (file.ReadAtLeast(stored, 8, throwOnEndOfStream: false) != 8 || BitConverter.ToUInt64(stored) != expected ||
                 file.Position != file.Length) return null;
-            index._count = count;
-            index._dead = dead;
-            index._root = root;
-            var files = 0;
-            for (var row = 0; row < count; row++)
-            {
-                var parent = index._parent[row];
-                if (index._name[row] < 0 || index._name[row] >= index._names.Count ||
-                    parent != NoRow && parent >= count ||
-                    index.IsAlive((uint)row) && (parent == NoRow) != (row == root)) return null;
-                if (index.IsAlive((uint)row) && !index.IsDirectory((uint)row)) files++;
-            }
-            for (var i = 0; i < ordered; i++)
-                if (byName[i] >= count || !index.IsAlive(byName[i])) return null;
-            if (bySize is not null && !index.IsFileOrder(bySize, files) ||
-                byModified is not null && !index.IsFileOrder(byModified, files)) return null;
+            namesReady.GetAwaiter().GetResult();
+            var files = rowsReady.GetAwaiter().GetResult();
+            if (files < 0) return null;
+            var linksReady = Task.Run(index.RebuildRecordLinks);
+            pending.Add(linksReady);
+            var sizeReady = Task.Run(() => bySize is null || index.IsFileOrder(bySize, files));
+            pending.Add(sizeReady);
+            var modifiedReady = Task.Run(() => byModified is null || index.IsFileOrder(byModified, files));
+            pending.Add(modifiedReady);
+            var namesInOrder = index.IsLiveOrder(byName, ordered);
+            linksReady.GetAwaiter().GetResult();
+            if (!namesInOrder || !sizeReady.GetAwaiter().GetResult() || !modifiedReady.GetAwaiter().GetResult()) return null;
             index._byName = new RowOrder(byName, ordered);
-            index.RebuildRecordLinks();
             index._bySize = bySize ?? index.BuildOrder(SortField.Size, CancellationToken.None);
             index._byModified = byModified ?? index.BuildOrder(SortField.Modified, CancellationToken.None);
             return index;
@@ -202,6 +207,36 @@ public sealed partial class FileIndex
             checkpoint = default;
             return null;
         }
+        finally
+        {
+            foreach (var task in pending)
+            {
+                try { task.Wait(); }
+                catch (AggregateException) { }
+            }
+        }
+    }
+
+    private int CountLoadedFiles()
+    {
+        var names = _names.Count;
+        var files = 0;
+        for (var row = 0; row < _count; row++)
+        {
+            var parent = _parent[row];
+            if (_name[row] < 0 || _name[row] >= names ||
+                parent != NoRow && parent >= _count ||
+                IsAlive((uint)row) && (parent == NoRow) != (row == _root)) return -1;
+            if (IsAlive((uint)row) && !IsDirectory((uint)row)) files++;
+        }
+        return files;
+    }
+
+    private bool IsLiveOrder(uint[] rows, int count)
+    {
+        for (var i = 0; i < count; i++)
+            if (rows[i] >= _count || !IsAlive(rows[i])) return false;
+        return true;
     }
 
     private static void WriteOrder(BinaryWriter writer, RowOrder order)

@@ -2,6 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using SmartFileLauncher.UI.ViewModels;
 using SmartFileLauncher.UI.Views;
 using Xunit;
@@ -78,6 +79,38 @@ public sealed class MainWindowBatchTests
         Assert.Equal(
             [fixture.Model.SearchResults[0].FullPath, fixture.Model.SearchResults[2].FullPath],
             Targets(fixture, "KeyboardTargets", null));
+    });
+
+    [Fact]
+    public Task ShiftSelectionStartsWithTheFirstFolderItem() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        await fixture.Navigate(Folder);
+        var icons = fixture.Model.DesktopIcons;
+
+        Call(fixture, "SelectFileItem", icons[0], ModifierKeys.Shift);
+        Assert.True(icons[0].IsTransferSelected);
+        Call(fixture, "SelectFileItem", icons[1], ModifierKeys.Shift);
+
+        Assert.All(icons, icon => Assert.True(icon.IsTransferSelected));
+    });
+
+    [Fact]
+    public Task ShiftSelectionStartsWithTheFirstSearchResultAndKeepsItsAnchor() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        fixture.StandardResults = [Fixture.Result("fatura-1"), Fixture.Result("fatura-2"), Fixture.Result("fatura-3")];
+        await fixture.Search("fatura", naturalLanguage: false);
+        var results = fixture.Model.SearchResults;
+
+        Call(fixture, "SelectFileItem", results[2], ModifierKeys.Shift);
+        Call(fixture, "SelectFileItem", results[0], ModifierKeys.Shift);
+        Assert.All(results, result => Assert.True(result.IsTransferSelected));
+
+        Call(fixture, "SelectFileItem", results[1], ModifierKeys.Shift);
+        Assert.False(results[0].IsTransferSelected);
+        Assert.True(results[1].IsTransferSelected);
+        Assert.True(results[2].IsTransferSelected);
     });
 
     private static void Select(Fixture fixture, DesktopIconViewModel icon) =>

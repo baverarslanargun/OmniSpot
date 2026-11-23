@@ -27,7 +27,7 @@ internal sealed partial class SharedCatalogBuilder
             ct.ThrowIfCancellationRequested();
             IEnumerator<FileSystemInfo> iterator;
             try { iterator = caller.Run(_ => new DirectoryInfo(current.Path).EnumerateFileSystemInfos().GetEnumerator()); }
-            catch (Exception failure) when (MissingOrDenied(failure)) { continue; }
+            catch (Exception failure) when (MissingOrDenied(failure)) { ReportSkipped(current.Path, failure); continue; }
             using (iterator)
             {
                 while (true)
@@ -35,7 +35,7 @@ internal sealed partial class SharedCatalogBuilder
                     ct.ThrowIfCancellationRequested();
                     NtfsMftEntry[] batch;
                     try { batch = caller.Run(_ => ReadPortableBatch(iterator, current.Parent)); }
-                    catch (Exception failure) when (MissingOrDenied(failure)) { break; }
+                    catch (Exception failure) when (MissingOrDenied(failure)) { ReportSkipped(current.Path, failure); break; }
                     if (batch.Length == 0) break;
                     foreach (var item in batch)
                     {
@@ -61,7 +61,7 @@ internal sealed partial class SharedCatalogBuilder
                 var parent = caller.Run(_ => NtfsDirectoryReader.ReadPhysicalPath(link.Parent));
                 ReadPart(link.Path, true, new HashSet<string>(ancestors, StringComparer.OrdinalIgnoreCase) { physical, parent }, parts, ct);
             }
-            catch (Exception failure) when (MissingOrDenied(failure)) { }
+            catch (Exception failure) when (MissingOrDenied(failure)) { ReportSkipped(link.Path, failure); }
         }
     }
 

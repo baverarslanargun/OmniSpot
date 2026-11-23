@@ -10,16 +10,21 @@ public sealed class SearchApplicationService : ISearchApplicationService
     private readonly Func<StructuredQuery, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> _advancedSearch;
     private readonly Func<string, string?, CancellationToken, Task<StructuredQuery>> _onlineIntentParser;
     private readonly Func<string, StructuredQuery> _ruleBasedIntentParser;
+    private readonly Func<string, int, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>>? _standardPage;
+    private readonly Func<string, ResultView, CancellationToken, int?>? _standardCount;
+    private readonly Func<LiteralRanking>? _literalRanking;
 
     public SearchApplicationService(
         Func<string, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
         Func<StructuredQuery, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
         Func<string, CancellationToken, Task<StructuredQuery>> onlineIntentParser,
-        Func<string, StructuredQuery> ruleBasedIntentParser)
+        Func<string, StructuredQuery> ruleBasedIntentParser,
+        Func<string, int, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>>? standardPage = null,
+        Func<string, ResultView, CancellationToken, int?>? standardCount = null)
         : this(standardSearch, advancedSearch,
             onlineIntentParser == null ? throw new ArgumentNullException(nameof(onlineIntentParser)) :
                 (query, _, cancellationToken) => onlineIntentParser(query, cancellationToken),
-            ruleBasedIntentParser)
+            ruleBasedIntentParser, standardPage, standardCount)
     {
     }
 
@@ -27,12 +32,54 @@ public sealed class SearchApplicationService : ISearchApplicationService
         Func<string, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
         Func<StructuredQuery, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> advancedSearch,
         Func<string, string?, CancellationToken, Task<StructuredQuery>> onlineIntentParser,
-        Func<string, StructuredQuery> ruleBasedIntentParser)
+        Func<string, StructuredQuery> ruleBasedIntentParser,
+        Func<string, int, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>>? standardPage = null,
+        Func<string, ResultView, CancellationToken, int?>? standardCount = null,
+        Func<LiteralRanking>? literalRanking = null)
     {
         _standardSearch = standardSearch ?? throw new ArgumentNullException(nameof(standardSearch));
         _advancedSearch = advancedSearch ?? throw new ArgumentNullException(nameof(advancedSearch));
         _onlineIntentParser = onlineIntentParser ?? throw new ArgumentNullException(nameof(onlineIntentParser));
         _ruleBasedIntentParser = ruleBasedIntentParser ?? throw new ArgumentNullException(nameof(ruleBasedIntentParser));
+        _standardPage = standardPage;
+        _standardCount = standardCount;
+        _literalRanking = literalRanking;
+    }
+
+    public Task<IReadOnlyList<SearchResult>> LoadPageAsync(
+        SearchRequest request,
+        SearchOutcome outcome,
+        int offset,
+        int limit,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(outcome);
+        ArgumentOutOfRangeException.ThrowIfNegative(offset);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!outcome.IsPageable || limit <= 0)
+            return Task.FromResult<IReadOnlyList<SearchResult>>(Array.Empty<SearchResult>());
+        return Task.Run(() =>
+        {
+            var view = request.View with { LiteralRanking = outcome.LiteralRanking };
+            if (_standardPage != null)
+                return _standardPage(request.Query, offset, limit, view, cancellationToken);
+            var window = _standardSearch(request.Query, (int)Math.Min(int.MaxValue, (long)offset + limit),
+                view, cancellationToken);
+            return window.Count <= offset ? Array.Empty<SearchResult>() : (IReadOnlyList<SearchResult>)window.Skip(offset).ToArray();
+        }, cancellationToken);
+    }
+
+    public Task<int?> CountAsync(
+        SearchRequest request,
+        SearchOutcome outcome,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(outcome);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!outcome.IsPageable || _standardCount == null) return Task.FromResult<int?>(null);
+        return Task.Run(() => _standardCount(request.Query, request.View, cancellationToken), cancellationToken);
     }
 
     public async Task<SearchOutcome> SearchAsync(
@@ -44,30 +91,14 @@ public sealed class SearchApplicationService : ISearchApplicationService
 
         if (!request.NaturalLanguageMode)
         {
-            var standardResults = await RunStandardSearchAsync(request, cancellationToken)
+            return await StandardOutcomeAsync(request, SearchExecutionMode.Standard, null, cancellationToken)
                 .ConfigureAwait(false);
-            return new SearchOutcome(
-                standardResults,
-                SearchExecutionMode.Standard,
-                false,
-                null,
-                null,
-                null,
-                null);
         }
 
         if (!request.HasInternetConnection)
         {
-            var fallbackResults = await RunStandardSearchAsync(request, cancellationToken)
-                .ConfigureAwait(false);
-            return new SearchOutcome(
-                fallbackResults,
-                SearchExecutionMode.OfflineFallback,
-                true,
-                "İnternet bağlantısı yok",
-                null,
-                null,
-                null);
+            return await StandardOutcomeAsync(request, SearchExecutionMode.OfflineFallback,
+                "İnternet bağlantısı yok", cancellationToken).ConfigureAwait(false);
         }
 
         var mode = SearchExecutionMode.Advanced;
@@ -107,8 +138,8 @@ public sealed class SearchApplicationService : ISearchApplicationService
         }
         catch (TokenIndexNotReadyException failure)
         {
-            var fallback = await RunStandardSearchAsync(request, cancellationToken).ConfigureAwait(false);
-            return new(fallback, SearchExecutionMode.Standard, true, failure.Message, null, null, null);
+            return await StandardOutcomeAsync(request, SearchExecutionMode.Standard, failure.Message, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         cancellationToken.ThrowIfCancellationRequested();
@@ -139,20 +170,32 @@ public sealed class SearchApplicationService : ISearchApplicationService
             ? await Task.Run(
                 () => _advancedSearch(structuredQuery, request.MaxResults, request.View, cancellationToken),
                 cancellationToken).ConfigureAwait(false)
-            : await RunStandardSearchAsync(request, cancellationToken).ConfigureAwait(false);
+            : await RunStandardSearchAsync(request, previousOutcome.LiteralRanking, cancellationToken).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
         return previousOutcome with { Results = results, AutoOpenPath = null };
     }
 
+    private async Task<SearchOutcome> StandardOutcomeAsync(
+        SearchRequest request, SearchExecutionMode mode, string? fallbackReason, CancellationToken cancellationToken)
+    {
+        var ranking = request.View.Sort.IsRelevance ? _literalRanking?.Invoke() : null;
+        var results = await RunStandardSearchAsync(request, ranking, cancellationToken).ConfigureAwait(false);
+        return new SearchOutcome(results, mode, fallbackReason != null, fallbackReason, null, null, null)
+        {
+            LiteralRanking = ranking
+        };
+    }
+
     private Task<IReadOnlyList<SearchResult>> RunStandardSearchAsync(
         SearchRequest request,
+        LiteralRanking? ranking,
         CancellationToken cancellationToken) =>
         Task.Run(
             () => _standardSearch(
                 request.Query,
                 request.MaxResults,
-                request.View,
+                request.View with { LiteralRanking = ranking },
                 cancellationToken),
             cancellationToken);
 
