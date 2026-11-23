@@ -20,8 +20,40 @@ namespace SmartFileLauncher.UI.Tests.Views;
 public sealed class MainWindowSearchCollection { }
 
 [Collection("MainWindow search")]
-public sealed class MainWindowSearchRefreshTests
+public sealed partial class MainWindowSearchRefreshTests
 {
+    [Fact]
+    public Task IndexWarningReflectsSearchAvailabilityAndClearsAfterRecovery() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        var window = fixture.Window;
+        var show = typeof(MainWindow).GetMethod("ShowIndexHealth", BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var banner = (Border)window.FindName("IndexHealthBanner");
+        var search = (TextBox)window.FindName("SearchBox");
+        var issue = new IndexIssue(IndexIssueReason.JournalInactive, @"E:\", "FSCTL_QUERY_USN_JOURNAL", "1179", 1179);
+
+        show.Invoke(window, [new IndexHealth([issue], SearchAvailable: false)]);
+        Assert.Equal(System.Windows.Visibility.Visible, banner.Visibility);
+        Assert.False(search.IsEnabled);
+        await fixture.Search("rapor", naturalLanguage: false);
+        Assert.Equal(0, fixture.StandardCalls);
+        string Text(string name) => ((System.Windows.Documents.Run)window.FindName(name)).Text;
+        Assert.Contains("kullanılamıyor", Text("IndexHealthEffect"));
+        Assert.Contains("günlüğü etkin değil", Text("IndexHealthCause"));
+        Assert.Equal(@"E:\", ((TextBlock)window.FindName("IndexHealthLocation")).Text);
+        Assert.Equal(System.Windows.Visibility.Visible, ((Border)window.FindName("IndexHealthLocationChip")).Visibility);
+        Assert.StartsWith("Ayarlar’da bu disk için", Text("IndexHealthNextStep"));
+
+        search.Clear();
+        show.Invoke(window, [new IndexHealth([issue], SearchAvailable: true)]);
+        Assert.True(search.IsEnabled);
+        Assert.Contains("güncel olmayabilir", Text("IndexHealthEffect"));
+        show.Invoke(window, [new IndexHealth([], SearchAvailable: true)]);
+        Assert.Equal(System.Windows.Visibility.Collapsed, banner.Visibility);
+        await fixture.Search("rapor", naturalLanguage: false);
+        Assert.Equal(1, fixture.StandardCalls);
+    });
+
     [Fact]
     public Task AiTypingWaitsForTheLastKeystrokeAndSubmitsOnlyTheCompleteQuery() => RunSta(async () =>
     {
@@ -188,6 +220,186 @@ public sealed class MainWindowSearchRefreshTests
     });
 
     [Fact]
+    public Task StandardResultsLoadPageByPageUntilTheCountedTotal() => RunSta(async () =>
+    {
+        using var fixture = new Fixture { StandardTotal = 450 };
+        await fixture.Search("fatura", naturalLanguage: false);
+        Assert.Equal(100, fixture.Model.SearchResults.Count);
+        Assert.Equal("450 sonuç", await fixture.WaitForCount("450 sonuç"));
+
+        await fixture.LoadNextPage();
+        Assert.Equal(300, fixture.Model.SearchResults.Count);
+        await fixture.LoadNextPage();
+        Assert.Equal(450, fixture.Model.SearchResults.Count);
+        await fixture.LoadNextPage();
+
+        Assert.Equal(new[] { (100, 200), (300, 200) }, fixture.PageCalls);
+        Assert.Equal(450, fixture.Model.SearchResults.Select(result => result.FullPath).Distinct().Count());
+        Assert.Equal("fatura-0449", fixture.Model.SearchResults[^1].Name);
+    });
+
+    [Fact]
+    public Task ARefreshReloadsEveryLoadedPageAndANewQueryStartsOver() => RunSta(async () =>
+    {
+        using var fixture = new Fixture { StandardTotal = 450 };
+        await fixture.Search("fatura", naturalLanguage: false);
+        await fixture.LoadNextPage();
+        Assert.Equal(300, fixture.Model.SearchResults.Count);
+
+        await fixture.Refresh();
+        Assert.Equal(300, fixture.LastStandardLimit);
+        Assert.Equal(300, fixture.Model.SearchResults.Count);
+        await fixture.LoadNextPage();
+        Assert.Equal(450, fixture.Model.SearchResults.Count);
+
+        fixture.StandardTotal = 40;
+        await fixture.Search("rapor", naturalLanguage: false);
+        Assert.Equal(100, fixture.LastStandardLimit);
+        Assert.Equal(40, fixture.Model.SearchResults.Count);
+        Assert.Equal("40 sonuç", await fixture.WaitForCount("40 sonuç"));
+        await fixture.LoadNextPage();
+        Assert.Equal(new[] { (100, 200), (300, 200) }, fixture.PageCalls);
+    });
+
+    [Fact]
+    public Task AiResultsAreNotPagedOrCounted() => RunSta(async () =>
+    {
+        using var fixture = new Fixture { StandardTotal = 450 };
+        fixture.ReleaseParser.TrySetResult();
+        await fixture.Search("fatura", naturalLanguage: true);
+        await fixture.LoadNextPage();
+
+        Assert.Single(fixture.Model.SearchResults);
+        Assert.Empty(fixture.PageCalls);
+        Assert.NotEqual(System.Windows.Visibility.Visible, ((TextBlock)fixture.Window.FindName("SearchCountText")).Visibility);
+    });
+
+    [Fact]
+    public Task GridViewRealizesOnlyTheVisibleRowsOfEveryLoadedPage() => RunSta(async () =>
+    {
+        using var fixture = new Fixture(gridView: true) { StandardTotal = 450 };
+        await fixture.Search("fatura", naturalLanguage: false);
+        await fixture.LoadNextPage();
+        await fixture.LoadNextPage();
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+
+        var grid = (ListBox)fixture.Window.FindName("ResultsGrid");
+        var rows = grid.Items.Cast<SearchResultRowViewModel>().ToArray();
+        Assert.Equal(113, rows.Length);
+        Assert.All(rows[..^1], row => Assert.Equal(MainWindow.SearchGridColumns, row.Items.Count));
+        Assert.Equal(fixture.Model.SearchResults, rows.SelectMany(row => row.Items));
+
+        var host = (System.Windows.FrameworkElement)fixture.Window.FindName("ResultsGridScroll");
+        Assert.Equal(System.Windows.Visibility.Visible, host.Visibility);
+        Layout(host);
+        Assert.NotNull(grid.ItemContainerGenerator.ContainerFromIndex(0));
+        Assert.InRange(Realized(grid), 1, 12);
+
+        var scroll = (ScrollViewer)typeof(MainWindow)
+            .GetMethod("SearchResultsScroll", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(fixture.Window, null)!;
+        Assert.Same(grid, scroll.TemplatedParent);
+        for (var pass = 0; pass < 5 && grid.ItemContainerGenerator.ContainerFromIndex(rows.Length - 1) == null; pass++)
+        {
+            scroll.ScrollToBottom();
+            Layout(host);
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        }
+        Assert.NotNull(grid.ItemContainerGenerator.ContainerFromIndex(rows.Length - 1));
+        Assert.Null(grid.ItemContainerGenerator.ContainerFromIndex(0));
+        Assert.InRange(Realized(grid), 1, 12);
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task ANewQueryAfterDeepPagingNeverPresentsTheStaleResultsAgain(bool gridView) => RunSta(async () =>
+    {
+        using var fixture = new Fixture(gridView: gridView) { StandardTotal = 10_100 };
+        await fixture.Search("fatura", naturalLanguage: false);
+        for (var page = 0; page < 50; page++) await fixture.LoadNextPage();
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(10_100, fixture.Model.SearchResults.Count);
+        var list = (ListBox)fixture.Window.FindName(gridView ? "ResultsGrid" : "ResultsList");
+        var host = gridView ? (System.Windows.FrameworkElement)fixture.Window.FindName("ResultsGridScroll") : list;
+        Layout(host);
+        var scroll = (ScrollViewer)typeof(MainWindow)
+            .GetMethod("SearchResultsScroll", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .Invoke(fixture.Window, null)!;
+        for (var pass = 0; pass < 5 && list.ItemContainerGenerator.ContainerFromIndex(list.Items.Count - 1) == null; pass++)
+        {
+            scroll.ScrollToBottom();
+            Layout(host);
+            await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        }
+        Assert.NotNull(list.ItemContainerGenerator.ContainerFromIndex(list.Items.Count - 1));
+        Assert.True(scroll.VerticalOffset > 0);
+
+        var stale = fixture.Model.SearchResults.ToHashSet();
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var staleYields = 0;
+        var rendering = false;
+        fixture.Model.SearchResults.CollectionChanged += (_, _) => rendering = true;
+        void Posted(object? sender, DispatcherHookEventArgs e)
+        {
+            if (e.Operation.Priority == DispatcherPriority.ApplicationIdle && dispatcher.CheckAccess() &&
+                rendering && fixture.Model.SearchResults.Any(stale.Contains)) staleYields++;
+        }
+        dispatcher.Hooks.OperationPosted += Posted;
+        fixture.StandardPrefix = "rapor";
+        await fixture.Search("rapor", naturalLanguage: false);
+        dispatcher.Hooks.OperationPosted -= Posted;
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Layout(host);
+
+        Assert.Equal(100, fixture.Model.SearchResults.Count);
+        Assert.DoesNotContain(fixture.Model.SearchResults, stale.Contains);
+        Assert.Equal(0, staleYields);
+        Assert.Equal(0, scroll.VerticalOffset);
+        Assert.NotNull(list.ItemContainerGenerator.ContainerFromIndex(0));
+    });
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public Task TypingNeverChangesTheTrayHeight(bool gridView) => RunSta(async () =>
+    {
+        using var fixture = new Fixture(gridView: gridView) { StandardTotal = 450 };
+        var root = (System.Windows.FrameworkElement)fixture.Window.Content;
+        double Height()
+        {
+            root.Measure(new System.Windows.Size(680, double.PositiveInfinity));
+            return root.DesiredSize.Height;
+        }
+        fixture.Type("fatura", naturalLanguage: false);
+        await fixture.CurrentSearchCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal("450 sonuç", await fixture.WaitForCount("450 sonuç"));
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        var steady = Height();
+
+        var dispatcher = Dispatcher.CurrentDispatcher;
+        var heights = new HashSet<double>();
+        void Posted(object? sender, DispatcherHookEventArgs e)
+        {
+            if (e.Operation.Priority <= DispatcherPriority.Background && dispatcher.CheckAccess()) heights.Add(Height());
+        }
+        dispatcher.Hooks.OperationPosted += Posted;
+        foreach (var (text, prefix) in new[] { ("fatural", "fatura"), ("faturala", "rapor"), ("faturalar", "belge") })
+        {
+            fixture.StandardPrefix = prefix;
+            fixture.Type(text, naturalLanguage: false);
+            await fixture.CurrentSearchCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal("450 sonuç", await fixture.WaitForCount("450 sonuç"));
+        }
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        dispatcher.Hooks.OperationPosted -= Posted;
+
+        Assert.NotEmpty(heights);
+        Assert.All(heights, height => Assert.Equal(steady, height, 1));
+        Assert.Equal("ilk-belge", fixture.Model.SearchResults[0].Name);
+    });
+
+    [Fact]
     public Task UnrelatedFileChangesDoNotExecuteAnOpenLiteralSearch() => RunSta(async () =>
     {
         using var fixture = new Fixture();
@@ -250,6 +462,16 @@ public sealed class MainWindowSearchRefreshTests
         await initialization.WaitAsync(TimeSpan.FromSeconds(5));
     });
 
+    private static void Layout(System.Windows.FrameworkElement element)
+    {
+        element.Measure(new System.Windows.Size(680, 500));
+        element.Arrange(new System.Windows.Rect(0, 0, 680, 500));
+        element.UpdateLayout();
+    }
+
+    private static int Realized(ListBox list) =>
+        Enumerable.Range(0, list.Items.Count).Count(i => list.ItemContainerGenerator.ContainerFromIndex(i) != null);
+
     private static Task RunSta(Func<Task> action)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -284,12 +506,24 @@ public sealed class MainWindowSearchRefreshTests
         internal int StandardCalls;
         internal string RefreshedName = "ilk-fatura";
         internal bool FailRefresh;
+        internal int StandardTotal = 1;
+        internal string StandardPrefix = "fatura";
+        internal int LastStandardLimit;
+        internal readonly List<(int Offset, int Limit)> PageCalls = [];
+        internal readonly List<string?> StandardScopes = [];
         internal MainWindow Window { get; }
 
-        internal Fixture(IConnectivityMonitor? connectivity = null)
+        internal Fixture(IConnectivityMonitor? connectivity = null, bool gridView = false,
+            IStartMenuShell? startMenuShell = null, IFileOperationService? fileOperations = null)
         {
             var search = new SearchApplicationService(
-                (_, _, _, _) => { Interlocked.Increment(ref StandardCalls); return [Result("ilk-fatura")]; },
+                (_, limit, view, _) =>
+                {
+                    Interlocked.Increment(ref StandardCalls);
+                    lock (StandardScopes) StandardScopes.Add(view.Scope);
+                    LastStandardLimit = limit;
+                    return Standard(0, limit);
+                },
                 (query, _, _, _) =>
                 {
                     var call = Interlocked.Increment(ref LocalCalls);
@@ -305,8 +539,14 @@ public sealed class MainWindowSearchRefreshTests
                     await ReleaseParser.Task.WaitAsync(token);
                     return new StructuredQuery { Keywords = [query] };
                 },
-                _ => throw new InvalidOperationException("Rule-based parser çağrılmamalı"));
-            var settings = new AppSettings { AnimationsEnabled = false, ThumbnailPreviewsEnabled = false };
+                _ => throw new InvalidOperationException("Rule-based parser çağrılmamalı"),
+                (_, offset, limit, _, _) =>
+                {
+                    lock (PageCalls) PageCalls.Add((offset, limit));
+                    return Standard(offset, limit);
+                },
+                (_, _, _) => StandardTotal);
+            var settings = new AppSettings { AnimationsEnabled = false, ThumbnailPreviewsEnabled = false, GridViewEnabled = gridView };
             Window = new MainWindow(Model, settings,
                 Stub<ISettingsApplicationService>(), Stub<IIndexMaintenanceService>(),
                 Stub<IIndexLifecycleService>(method => method.Name switch
@@ -322,8 +562,8 @@ public sealed class MainWindowSearchRefreshTests
                 Stub<IThumbnailService>(), Stub<IFolderNavigationService>(),
                 connectivity ?? Stub<IConnectivityMonitor>(method => method.Name == "get_IsConnected"
                     ? true : throw new NotSupportedException(method.Name)),
-                Stub<IFileOperationService>(), Stub<IApplicationShellService>(), Log,
-                ApplicationStartupOptions.Default, null) { SearchTimeProvider = Clock };
+                fileOperations ?? Stub<IFileOperationService>(), Stub<IApplicationShellService>(), Log,
+                ApplicationStartupOptions.Default, null, startMenuShell: startMenuShell) { SearchTimeProvider = Clock };
         }
 
         internal Task Search(string query, bool naturalLanguage = true)
@@ -368,6 +608,19 @@ public sealed class MainWindowSearchRefreshTests
         {
             Window.PrepareForShutdown();
             Window.Close();
+        }
+
+        private SearchResult[] Standard(int offset, int limit) =>
+            Enumerable.Range(offset, Math.Max(0, Math.Min(limit, StandardTotal - offset)))
+                .Select(i => Result(i == 0 ? $"ilk-{StandardPrefix}" : $"{StandardPrefix}-{i:D4}")).ToArray();
+
+        internal Task LoadNextPage() => Invoke("LoadNextSearchPageAsync");
+
+        internal async Task<string> WaitForCount(string expected)
+        {
+            var text = (TextBlock)Window.FindName("SearchCountText");
+            for (var i = 0; i < 200 && text.Text != expected; i++) await Task.Delay(10);
+            return text.Text;
         }
 
         private static SearchResult Result(string name) => new()

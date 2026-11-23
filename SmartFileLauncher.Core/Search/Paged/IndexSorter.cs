@@ -9,9 +9,10 @@ internal static class IndexSorter
     {
         ct.ThrowIfCancellationRequested();
         if (values.Length < 2) return 1;
-        var workers = options is { AdaptiveSort: true } ? SelectWorkers(values, compare, options.SortMethod, ct)
+        var method = options is null || options.SortMethod == IndexSortMethod.Merge ? IndexSortMethod.Merge : IndexSortMethod.Pivot;
+        var workers = options is { AdaptiveSort: true } ? SelectWorkers(values, compare, method, ct)
             : options?.SortWorkers ?? 1;
-        Execute(values, compare, workers, options?.SortMethod ?? IndexSortMethod.Merge, ct);
+        Execute(values, compare, workers, method, ct);
         ct.ThrowIfCancellationRequested();
         return workers;
     }
@@ -113,7 +114,7 @@ internal static class IndexSorter
         return Comparer<T>.Create((a, b) => { if ((++count & 4095) == 0) ct.ThrowIfCancellationRequested(); return compare(a, b); });
     }
 
-    private static void RangeSort<T>(T[] values, int start, int length, Comparison<T> compare, CancellationToken ct)
+    internal static void RangeSort<T>(T[] values, int start, int length, Comparison<T> compare, CancellationToken ct)
     {
         try { Array.Sort(values, start, length, CheckedComparer(compare, ct)); }
         catch (InvalidOperationException) when (ct.IsCancellationRequested) { ct.ThrowIfCancellationRequested(); throw; }

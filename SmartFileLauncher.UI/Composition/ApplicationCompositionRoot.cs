@@ -28,6 +28,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
     private readonly IFolderNavigationService _folderNavigation;
     private readonly IConnectivityMonitor _connectivity;
     private readonly IFileOperationService _fileOperations;
+    private readonly LocalOpenHistory? _openHistory;
     private readonly IApplicationShellService _shell;
     private readonly MainWindowViewModel _mainWindowViewModel;
     private readonly ApplicationStartupOptions _startupOptions;
@@ -122,6 +123,10 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 _startupOptions.ProfileName ?? "ölçüm",
                 _startupOptions.Profile == MeasurementProfile.ProductionCopy);
 
+        if (_measurementRun == null)
+            _openHistory = new LocalOpenHistory(Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "open-history.db"),
+                _log.Write);
         var scoring = new BasicScoringStrategy();
         var standardSearch = new SearchEngine(
             _indexLifecycle.CreateSearchState,
@@ -140,7 +145,10 @@ public sealed class ApplicationCompositionRoot : IDisposable
             standardSearch.Search,
             advancedSearch.Search,
             intentParser.ParseWithGroqEffortAsync,
-            intentParser.ParseIntent);
+            intentParser.ParseIntent,
+            standardSearch.SearchPage,
+            standardSearch.CountMatches,
+            literalRanking: _openHistory == null ? null : () => _openHistory.Snapshot);
         _searchDiagnostics = new SearchDiagnosticsService(
             tokenizer,
             _indexLifecycle.CreateSearchState);
@@ -155,7 +163,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
             () => _indexLifecycle.ReconciliationStatus,
             _indexLifecycle.EnsureSyncedAsync);
         _connectivity = new ConnectivityMonitor();
-        var fileOperations = new FileOperationService(_indexLifecycle);
+        var fileOperations = new FileOperationService(_indexLifecycle, _openHistory == null ? null : _openHistory.RecordOpened);
         _fileOperations = _measurementRun == null
             ? fileOperations
             : _startupOptions.Profile == MeasurementProfile.ProductionCopy
@@ -215,6 +223,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
     {
         public void Apply(bool enabled)
         {
+        _openHistory?.Dispose();
         }
     }
 

@@ -203,6 +203,9 @@ public partial class MainWindow : Window {
         InitializeThumbnailViewport();
         InitializeFilters();
         InitializeNavigation();
+        InitializeSearchPaging();
+        InitializeSearchGrid();
+        InitializeFolderKeyboard();
         InitializeBatchCommands();
         InitializeTabs();
         InitializeShelf();
@@ -219,6 +222,8 @@ public partial class MainWindow : Window {
         } catch (OperationCanceledException)
             when (_lifetimeCancellation.IsCancellationRequested) {
         }
+        InitializeSearchScope();
+        InitializeMarquee();
     }
     
     private void ApplyDefaultSettings() {
@@ -1274,7 +1279,8 @@ public partial class MainWindow : Window {
         if (!_isIndexed || _isPreparedForShutdown) return Task.CompletedTask;
 
         request ??= new SearchRequest(query, _isNaturalLanguageMode, _connectivityMonitor.IsConnected,
-            ReasoningEffort: _appSettings.AiReasoningEffort, Filter: _searchView.Filter, Sort: _searchView.Sort);
+            ReasoningEffort: _appSettings.AiReasoningEffort, Filter: _searchView.Filter, Sort: _searchView.Sort,
+            Scope: ActiveSearchScope);
         Volatile.Write(ref _refreshSearchRequest, request);
         if (previousOutcome == null) {
             _completedSearchRequest = null;
@@ -1321,6 +1327,7 @@ public partial class MainWindow : Window {
             }
 
             await RunSearchAsync(query, version, cancellationToken, request, operation.StartedTimestamp, updateLatency, previousOutcome);
+        ResetSearchPaging();
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
             if (!IsCurrentSearch(version)) return;
@@ -1403,6 +1410,7 @@ public partial class MainWindow : Window {
     }
     
     private void ShowError(string title, string message) {
+        ResetSearchPaging();
         SearchingPanel.Visibility = Visibility.Collapsed;
         NoResultsPanel.Visibility = Visibility.Collapsed;
         ResultsList.Visibility = Visibility.Collapsed;
@@ -1594,7 +1602,8 @@ public partial class MainWindow : Window {
                     _connectivityMonitor.IsConnected,
                     ReasoningEffort: reasoningEffort,
                     Filter: _searchView.Filter,
-                    Sort: _searchView.Sort);
+                    Sort: _searchView.Sort,
+                    Scope: ActiveSearchScope);
             if (previousOutcome == null && !_indexLifecycle.IsTokenIndexReady && request.NaturalLanguageMode)
                 request = request with { NaturalLanguageMode = false };
             var naturalLanguageMode = request.NaturalLanguageMode;
@@ -1676,6 +1685,7 @@ public partial class MainWindow : Window {
     private string NoResultsHintText() => _searchView.Filter.IsActive
         ? "Etkin filtre sonuçları gizliyor olabilir"
         : "Farklı anahtar kelimeler deneyin";
+                StartSearchPaging(request, outcome, searchVersion);
 
     private static bool HaveSameSearchResults(SearchOutcome previous, SearchOutcome current) {
         if (previous.Mode != current.Mode || previous.UsedFallback != current.UsedFallback ||
@@ -1706,6 +1716,8 @@ public partial class MainWindow : Window {
             var diagnostics = await Task.Run(
                 () => _searchDiagnostics.Inspect(query, cancellationToken), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
+            StartSearchPaging(request, outcome, searchVersion);
+            UpdateFileAreaForApplications();
             if (!IsCurrentSearch(version) || _isPreparedForShutdown) return;
             foreach (var diagnostic in diagnostics) {
                 Log($"   Token '{diagnostic.Token}' → indekste {diagnostic.MatchCount} eşleşme");
@@ -1958,6 +1970,55 @@ public partial class MainWindow : Window {
             e.Handled = true;
             return;
         }
+    private bool HasCurrentFileSearch => SearchSurfaceVisible && !_tabSwitchInProgress &&
+        !BrowsingApplications && _presentedFileQuery == SearchBox.Text;
+
+    private void SearchBox_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
+        if (HandleSearchScopeKey(e)) return;
+        if (HandleSearchBoxSelectionKey(e.Key, Keyboard.Modifiers)) {
+            e.Handled = true;
+            return;
+        }
+        if (Keyboard.Modifiers != ModifierKeys.None) return;
+        if (e.Key == Key.Tab && HasCurrentFileSearch && _searchResults.Count > 0) {
+            if (ResultsList.SelectedIndex < 0) SelectFileSearchResult(0);
+            e.Handled = FocusSelectedFileSearchResult();
+            RevealKeyboardCard(FileSearchFocusTarget(ResultsList.SelectedIndex));
+            return;
+        }
+        if (e.Key == Key.Tab && FolderItemsShown) {
+            e.Handled = FocusFolderItemsFromSearchBox();
+            return;
+        }
+        if (!HasCurrentFileSearch && MoveFolderSelectionFromSearchBox(e.Key)) {
+            e.Handled = true;
+            return;
+        }
+        var selected = HasCurrentFileSearch ? ResultsList.SelectedIndex : -1;
+        if (_isGridViewMode && selected >= 0 && MoveFileSearchGridSelection(selected, e.Key)) {
+            e.Handled = true;
+            return;
+        }
+        if (e.Key is Key.Left or Key.Right) {
+            HandleApplicationKey(e);
+            return;
+        }
+        if (e.Key is not (Key.Up or Key.Down)) return;
+        if (HandleApplicationKey(e)) return;
+        if (!HasCurrentFileSearch || _searchResults.Count == 0) return;
+
+        if (selected < 0) {
+            MoveSearchSelection(-1, 0, focusFollows: false);
+        } else if (e.Key == Key.Up && selected < (_isGridViewMode ? SearchGridColumns : 1)) {
+            ClearFileSearchSelection();
+        } else if (!_isGridViewMode) {
+            var step = e.Key == Key.Down ? 1 : -1;
+            var target = Math.Clamp(selected + step, 0, _searchResults.Count - 1);
+            if (target != selected) MoveSearchSelection(selected, target, focusFollows: false);
+        }
+        e.Handled = true;
+    }
+
         
         if (e.Key == Key.Delete && KeyboardTargets(targetPath) is { Count: > 0 } deleteTargets) {
             DeleteItems(deleteTargets);

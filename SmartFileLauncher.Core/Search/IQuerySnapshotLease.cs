@@ -11,6 +11,14 @@ internal interface ILiteralNameQuerySnapshot
         string query, int limit, ResultView view, CancellationToken cancellationToken);
 }
 
+internal interface ILiteralNamePageSnapshot
+{
+    IReadOnlyList<SearchResult> SearchLiteralNames(
+        string query, int offset, int limit, ResultView view, CancellationToken cancellationToken);
+
+    int CountLiteralNames(string query, ResultView view, CancellationToken cancellationToken);
+}
+
 internal interface IStandardQuerySnapshot
 {
     IReadOnlyList<SearchResult> SearchStandard(

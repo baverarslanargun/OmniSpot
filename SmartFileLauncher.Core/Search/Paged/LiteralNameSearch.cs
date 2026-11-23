@@ -13,6 +13,12 @@ internal sealed partial class Catalog
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(query) || limit <= 0) return [];
         var index = Volatile.Read(ref _literalNameIndex);
+        if (view.Sort.IsRelevance && view.LiteralRanking is { } ranking)
+        {
+            return index is null || char.IsHighSurrogate(query[^1])
+                ? SearchRankedLiteralNamesLinear(query, limit, view, ranking, cancellationToken, excludeRoot)
+                : SearchPreparedRankedLiteralNames(index, query, limit, view, ranking, cancellationToken, excludeRoot);
+        }
         return index is null
             ? SearchLiteralNamesLinear(query, limit, view, cancellationToken, excludeRoot)
             : SearchPreparedLiteralNames(index, query, limit, view, cancellationToken, excludeRoot);
@@ -24,6 +30,8 @@ internal sealed partial class Catalog
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(query) || limit <= 0) return [];
+        var scope = CatalogScope.For(this, view.Scope);
+        if (scope.IsEmpty) return [];
         var ascii = query.All(character => character <= 127);
         var pattern = ascii ? Encoding.ASCII.GetBytes(query) : [];
         for (var i = 0; i < pattern.Length; i++) pattern[i] = LowerAscii(pattern[i]);
@@ -42,7 +50,7 @@ internal sealed partial class Catalog
             var found = ascii && !wide
                 ? ContainsAsciiIgnoreCase(name, pattern)
                 : MemoryExtensions.Contains(characters[..DecodeName(name, wide, characters)], query.AsSpan(), StringComparison.OrdinalIgnoreCase);
-            if (!found || !Matches(id, view.Filter, now)) continue;
+            if (!found || !Matches(id, view.Filter, now, scope)) continue;
             var hit = new Hit(id, 0);
             if (selected.Count < limit) selected.Enqueue(hit, hit);
             else if (comparer.Compare(hit, selected.Peek()) < 0)

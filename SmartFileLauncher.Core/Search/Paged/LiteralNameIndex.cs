@@ -226,21 +226,13 @@ internal sealed partial class Catalog
     private IReadOnlyList<SearchResult> SearchPreparedLiteralNames(LiteralNameIndex index, string query,
         int limit, ResultView view, CancellationToken cancellationToken, bool excludeRoot)
     {
+        var scope = CatalogScope.For(this, view.Scope);
+        if (scope.IsEmpty) return [];
         var ascii = query.All(character => character <= 127);
         var pattern = ascii ? Encoding.ASCII.GetBytes(query) : [];
         for (var i = 0; i < pattern.Length; i++) pattern[i] = LowerAscii(pattern[i]);
         var order = LiteralOrder(index, view.Sort, cancellationToken);
-        bool[]? candidateBlocks = null;
-        if (pattern.Length >= 3)
-        {
-            var candidates = CandidateLiteralGramBlocks(pattern, index.Grams, cancellationToken);
-            var blockCount = index.Grams.Length / LiteralGramWords;
-            if ((long)candidates.Count * 5 < (long)blockCount * 4)
-            {
-                candidateBlocks = new bool[blockCount];
-                foreach (var block in candidates) candidateBlocks[block] = true;
-            }
-        }
+        var candidateBlocks = LiteralGramCandidates(index, pattern, cancellationToken);
         var selected = new List<uint>(Math.Min(limit, index.Rows.Length));
         var now = DateTime.Now;
         Span<char> characters = stackalloc char[1024];
@@ -259,7 +251,7 @@ internal sealed partial class Catalog
             var found = ascii && !row.Wide ? ContainsAsciiIgnoreCase(name, pattern)
                 : MemoryExtensions.Contains(characters[..DecodeName(name, row.Wide, characters)],
                     query.AsSpan(), StringComparison.OrdinalIgnoreCase);
-            if (!found || !Matches(row.Id, view.Filter, now)) continue;
+            if (!found || !Matches(row.Id, view.Filter, now, scope)) continue;
             selected.Add(row.Id);
             if (selected.Count == limit) break;
         }
@@ -276,5 +268,16 @@ internal sealed partial class Catalog
             });
         }
         return results;
+    }
+
+    private static bool[]? LiteralGramCandidates(LiteralNameIndex index, byte[] pattern, CancellationToken cancellationToken)
+    {
+        if (pattern.Length < 3) return null;
+        var candidates = CandidateLiteralGramBlocks(pattern, index.Grams, cancellationToken);
+        var blockCount = index.Grams.Length / LiteralGramWords;
+        if ((long)candidates.Count * 5 >= (long)blockCount * 4) return null;
+        var candidateBlocks = new bool[blockCount];
+        foreach (var block in candidates) candidateBlocks[block] = true;
+        return candidateBlocks;
     }
 }

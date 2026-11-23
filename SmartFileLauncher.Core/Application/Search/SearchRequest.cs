@@ -9,7 +9,11 @@ public sealed record SearchRequest(
     int MaxResults = 100,
     string? ReasoningEffort = null,
     ItemFilter? Filter = null,
-    ItemSort? Sort = null)
+    ItemSort? Sort = null,
+    string? Scope = null)
 {
-    public ResultView View => new(Filter ?? ItemFilter.None, Sort ?? ItemSort.Relevance);
+    public ResultView View => new(Filter ?? ItemFilter.None, Sort ?? ItemSort.Relevance)
+    {
+        Scope = PathScope.Normalize(Scope)
+    };
 }

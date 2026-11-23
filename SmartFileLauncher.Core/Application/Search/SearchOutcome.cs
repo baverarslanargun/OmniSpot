@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.Models;
+using SmartFileLauncher.Core.Search;
 
 namespace SmartFileLauncher.Core.Application.Search;
 
@@ -17,4 +18,8 @@ public sealed record SearchOutcome(
     string? FallbackReason,
     string? WarningMessage,
     string? AutoOpenPath,
-    StructuredQuery? StructuredQuery);
+    StructuredQuery? StructuredQuery)
+{
+    public bool IsPageable => StructuredQuery is null;
+    internal LiteralRanking? LiteralRanking { get; init; }
+}

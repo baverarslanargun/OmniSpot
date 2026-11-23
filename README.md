@@ -55,6 +55,9 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 - Doğal Dil modu, sorguyu yapılandırmak için Groq API'ına iki paralel istek göndermeyi dener. Bu mod kullanıldığında sorgu metni harici servise aktarılabilir.
 - Groq anahtarı eksik/geçersizse veya servis yanıt vermezse uygulama kural tabanlı yerel parser'a döner. Fallback daha sınırlı sorgu semantiği sunar.
 - Yapılandırma ve güncel mimari için [doğal dil arama rehberine](docs/guides/llm-setup.md) bakın.
+- “İlgililik” sıralamasında önce tam ad, ardından uzantısız sorgularda tam dosya gövdesi, ad başlangıcı, sözcük başlangıcı ve diğer eşleşmeler gelir. Örneğin `cmd.exe`, `appcmd.exe` dosyasından önce görünür.
+- Aynı düzeyde eşleşen sonuçlarda OmniSpot üzerinden açtığınız öğeler öne çıkar. Açılan yol, açılma sayısı ve son açılış zamanı kullanıcıya ait `%LOCALAPPDATA%\OmniSpot\open-history.db` dosyasında tutulur. İndeksi yeniden oluşturmak bu geçmişi korur.
+- Klasör görünümünde seçilen sıralama o klasöre özel hatırlanır ve yeniden başlatmadan sonra da geçerlidir. Son değiştirilen en çok 1000 klasörün yolu ve sıralaması `%LOCALAPPDATA%\OmniSpot\folder-views.json` dosyasında tutulur. Filtreler klasöre özeldir ama yalnız uygulama açıkken hatırlanır.
 
 ## 📦 Kurulum
 

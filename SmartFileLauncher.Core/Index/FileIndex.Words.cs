@@ -41,6 +41,33 @@ public sealed partial class FileIndex
         finally { _lock.ExitReadLock(); }
     }
 
+    internal IReadOnlyList<(SearchItem Item, bool Exact)> TokenItemsWithPartial(string token, IReadOnlyList<string>? scope,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return [];
+        var upper = Encoding.UTF8.GetBytes(token.ToUpperInvariant());
+        var plain = Encoding.UTF8.GetBytes(IndexNames.Plain(token));
+        _lock.EnterReadLock();
+        try
+        {
+            var rows = ResolveScope(scope);
+            var result = new List<(SearchItem Item, bool Exact)>();
+            var partial = _names.Find(upper, plain, false, cancellationToken);
+            if (!partial.AsSpan().ContainsAnyExcept(0UL)) return result;
+            var exact = _names.Find(upper, plain, true, cancellationToken);
+            for (var row = 0u; row < _count; row++)
+            {
+                if ((row & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+                var name = _name[row];
+                var bit = 1UL << (name & 63);
+                if ((partial[name >> 6] & bit) == 0 || row == _root || !IsAlive(row) || !InScope(row, rows)) continue;
+                result.Add((ToItem(row), (exact[name >> 6] & bit) != 0));
+            }
+            return result;
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
     internal void PrepareWords(CancellationToken cancellationToken)
     {
         while (true)
@@ -71,6 +98,32 @@ public sealed partial class FileIndex
         }
     }
 
+    internal TokenSummary SummarizeToken(string token, int sampleCount, IReadOnlyList<string>? scope,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return new TokenSummary(0, []);
+        var upper = Encoding.UTF8.GetBytes(token.ToUpperInvariant());
+        var plain = Encoding.UTF8.GetBytes(IndexNames.Plain(token));
+        _lock.EnterReadLock();
+        try
+        {
+            var rows = ResolveScope(scope);
+            var bits = _names.Find(upper, plain, true, cancellationToken);
+            var samples = new List<string>(Math.Max(0, sampleCount));
+            if (!bits.AsSpan().ContainsAnyExcept(0UL)) return new TokenSummary(0, samples);
+            var count = 0;
+            for (var row = 0u; row < _count; row++)
+            {
+                if ((row & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+                if (!IsNamedRow(bits, row, rows)) continue;
+                if (samples.Count < sampleCount) samples.Add(ToItem(row).Name);
+                count++;
+            }
+            return new TokenSummary(count, samples);
+        }
+        finally { _lock.ExitReadLock(); }
+    }
+
     private List<SearchItem> ItemsNamed(ulong[] bits, HashSet<uint>? scope, CancellationToken cancellationToken)
     {
         var result = new List<SearchItem>();
@@ -78,11 +131,15 @@ public sealed partial class FileIndex
         for (var row = 0u; row < _count; row++)
         {
             if ((row & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
-            var name = _name[row];
-            if ((bits[name >> 6] & 1UL << (name & 63)) == 0 || row == _root || !IsAlive(row) || !InScope(row, scope)) continue;
-            result.Add(ToItem(row));
+            if (IsNamedRow(bits, row, scope)) result.Add(ToItem(row));
         }
         return result;
+    }
+
+    private bool IsNamedRow(ulong[] bits, uint row, HashSet<uint>? scope)
+    {
+        var name = _name[row];
+        return (bits[name >> 6] & 1UL << (name & 63)) != 0 && row != _root && IsAlive(row) && InScope(row, scope);
     }
 
     internal IEnumerable<SearchItem> Items(QueryCatalogFilter filter, IReadOnlyList<string>? scope, CancellationToken cancellationToken)
@@ -111,21 +168,65 @@ public sealed partial class FileIndex
             if (generation >= 0 && generation != _generation) return (NoRow, generation);
             names?.Prepare(_names, cancellationToken);
             var rows = ResolveScope(scope);
-            var dates = filter.CreatedAfter is not null || filter.CreatedBeforeExclusive is not null ||
-                filter.ModifiedAfter is not null || filter.ModifiedBeforeExclusive is not null;
+            var hasCreatedAfter = filter.CreatedAfter is not null;
+            var hasCreatedBefore = filter.CreatedBeforeExclusive is not null;
+            var hasModifiedAfter = filter.ModifiedAfter is not null;
+            var hasModifiedBefore = filter.ModifiedBeforeExclusive is not null;
+            var createdAfter = new LocalTimeBound(filter.CreatedAfter ?? default);
+            var createdBefore = new LocalTimeBound(filter.CreatedBeforeExclusive ?? default);
+            var modifiedAfter = new LocalTimeBound(filter.ModifiedAfter ?? default);
+            var modifiedBefore = new LocalTimeBound(filter.ModifiedBeforeExclusive ?? default);
+            var dates = hasCreatedAfter || hasCreatedBefore || hasModifiedAfter || hasModifiedBefore;
+            var undated = filter with { CreatedAfter = null, CreatedBeforeExclusive = null, ModifiedAfter = null, ModifiedBeforeExclusive = null };
             var end = (uint)Math.Min(_count, (long)start + ItemBlock);
             for (var row = start; row < end; row++)
             {
                 if ((row & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                 if (row == _root || !IsAlive(row)) continue;
                 var directory = IsDirectory(row);
-                if (!filter.Matches(directory, directory ? null : _size[row], dates ? CreatedOf(row) : null, dates ? ModifiedOf(row) : null) ||
-                    !InScope(row, rows)) continue;
+                if (dates && (!directory || filter.FilterDirectoryDates))
+                {
+                    if (hasCreatedAfter || hasCreatedBefore)
+                    {
+                        var created = _created[row];
+                        if (created == 0 || hasCreatedAfter && createdAfter.IsBefore(created) ||
+                            hasCreatedBefore && !createdBefore.IsBefore(created)) continue;
+                    }
+                    var modified = _modified[row];
+                    if (hasModifiedAfter && modifiedAfter.IsBefore(modified) ||
+                        hasModifiedBefore && !modifiedBefore.IsBefore(modified)) continue;
+                }
+                if (!undated.Matches(directory, directory ? null : _size[row], null, null) || !InScope(row, rows)) continue;
                 if (names is not null && !names.Matches(this, row, directory)) continue;
                 block.Add(ToItem(row));
             }
             return (end >= _count ? NoRow : end, _generation);
         }
         finally { _lock.ExitReadLock(); }
+    }
+
+    private readonly struct LocalTimeBound
+    {
+        private static readonly long Margin = TimeSpan.FromHours(14).Ticks;
+        private readonly DateTime _bound;
+        private readonly long _surelyBefore;
+        private readonly long _surelyNotBefore;
+
+        internal LocalTimeBound(DateTime bound)
+        {
+            _bound = bound;
+            _surelyBefore = WholeSeconds(bound.Ticks - Margin);
+            _surelyNotBefore = WholeSeconds(bound.Ticks + Margin);
+        }
+
+        private static long WholeSeconds(long ticks)
+        {
+            var quotient = Math.DivRem(ticks - DateTime.UnixEpoch.Ticks, TimeSpan.TicksPerSecond, out var remainder);
+            return remainder > 0 ? quotient + 1 : quotient;
+        }
+
+        internal bool IsBefore(uint seconds) =>
+            seconds < _surelyBefore ||
+            seconds < _surelyNotBefore && DateTime.UnixEpoch.AddSeconds(seconds).ToLocalTime() < _bound;
     }
 }

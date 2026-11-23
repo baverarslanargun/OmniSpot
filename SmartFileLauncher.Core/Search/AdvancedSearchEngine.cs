@@ -249,6 +249,11 @@ public class AdvancedSearchEngine
             finalResults = ApplyItemFilter(finalResults, filter, cancellationToken);
         }
 
+        if (view.Scope is { } scope)
+        {
+            finalResults = finalResults.Where(candidate => PathScope.Contains(scope, candidate.node.FullPath)).ToList();
+        }
+
         var scoringContext = CreateScoringContext(query, searchTerms);
         var scoredResults = new List<SearchResult>(finalResults.Count);
         foreach (var (node, matches) in finalResults)
@@ -401,6 +406,7 @@ public class AdvancedSearchEngine
         void Offer(SearchItem item)
         {
             if ((seen != null && !seen.Add(item.FullPath)) ||
+                !PathScope.Contains(view.Scope, item.FullPath) ||
                 !PassesFilterOnlyDate(item, query.DateFilter) ||
                 !PassesFilterOnlySize(item, query.SizeFilter) ||
                 !userFilter.Matches(
@@ -698,20 +704,38 @@ public class AdvancedSearchEngine
     {
         var matches = new Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>(
             StringComparer.OrdinalIgnoreCase);
-        foreach (var node in state.Get(token, cancellationToken))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            AddMatch(matches, node, token, weight);
-        }
-
         var allowPartial = token.Length >= 4 ||
             (token.Length >= 3 && token.Any(char.IsDigit));
-        if (allowPartial)
+        if (allowPartial && state is ITokenPartialSnapshot combined)
         {
-            foreach (var node in state.GetPartial(token, cancellationToken))
+            var found = combined.GetWithPartial(token, cancellationToken);
+            foreach (var (node, exact) in found)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (exact) AddMatch(matches, node, token, weight);
+            }
+
+            foreach (var (node, _) in found)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 AddMatch(matches, node, token, weight * 0.7);
+            }
+        }
+        else
+        {
+            foreach (var node in state.Get(token, cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                AddMatch(matches, node, token, weight);
+            }
+
+            if (allowPartial)
+            {
+                foreach (var node in state.GetPartial(token, cancellationToken))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    AddMatch(matches, node, token, weight * 0.7);
+                }
             }
         }
 

@@ -1425,6 +1425,36 @@
                                        PlacementTarget="{Binding ElementName=FilterBadge}"
                                        Placement="Bottom"
                                        VerticalOffset="6"
+                            <Border x:Name="SearchScopeChip"
+                                    Visibility="Collapsed"
+                                    Background="#FFFFFF"
+                                    BorderBrush="#D6DEEA"
+                                    BorderThickness="1"
+                                    CornerRadius="7"
+                                    Padding="7,2,3,2"
+                                    Margin="0,0,10,0"
+                                    VerticalAlignment="Center"
+                                    AutomationProperties.Name="Arama kapsamı">
+                                <StackPanel Orientation="Horizontal">
+                                    <Path x:Name="SearchScopeChipIcon"
+                                          Data="{StaticResource FolderBackGeometry}"
+                                          Stroke="#64748B" StrokeThickness="1.6" StrokeLineJoin="Round"
+                                          Width="14" Height="14" Stretch="Uniform"
+                                          VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <TextBlock x:Name="SearchScopeChipText"
+                                               FontSize="13" Foreground="#334155"
+                                               MaxWidth="120" TextTrimming="CharacterEllipsis"
+                                               VerticalAlignment="Center"/>
+                                    <Button x:Name="SearchScopeChipClear"
+                                            Style="{StaticResource ChipCloseButton}"
+                                            Click="SearchScopeChipClear_Click"
+                                            ToolTip="Tüm bilgisayarda ara"
+                                            AutomationProperties.Name="Kapsamı kaldır"
+                                            Margin="4,0,0,0"
+                                            VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Border>
+                            </StackPanel>
                                        HorizontalOffset="-6"
                                        AllowsTransparency="True"
                                        StaysOpen="True"
@@ -1929,6 +1959,28 @@
                                 </Button>
                             </Grid>
                         </Border>
+                <Grid x:Name="SearchScopeBar" Grid.Row="0" Margin="16,8,24,0" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                        <Path x:Name="SearchScopeBarIcon"
+                              Data="{StaticResource FolderBackGeometry}"
+                              Stroke="#94A3B8" StrokeThickness="1.6" StrokeLineJoin="Round"
+                              Width="13" Height="13" Stretch="Uniform"
+                              VerticalAlignment="Center" Margin="0,0,7,0"/>
+                        <TextBlock FontSize="13" Foreground="#64748B" VerticalAlignment="Center" TextTrimming="CharacterEllipsis">
+                            <Run x:Name="SearchScopeBarName" Foreground="#1E293B"/><Run x:Name="SearchScopeBarSuffix"/>
+                        </TextBlock>
+                    </StackPanel>
+                    <Button x:Name="SearchScopeToggleButton"
+                            Grid.Column="1"
+                            Style="{StaticResource FolderPathSegmentButton}"
+                            Click="SearchScopeToggle_Click">
+                        <TextBlock x:Name="SearchScopeToggleText" Foreground="#2F62BF"/>
+                    </Button>
+                </Grid>
 
                         <!-- Delta Sync Warning Banner (during search) -->
                         <Border x:Name="DeltaSyncWarningBanner"

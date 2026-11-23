@@ -20,10 +20,17 @@ internal sealed class IndexWords(IndexNames source)
     internal void Extend(int limit, CancellationToken cancellationToken)
     {
         var end = (int)Math.Min(source.Count, (long)_built + limit);
+        Span<byte> buffer = stackalloc byte[256];
         for (var id = _built; id < end; id++)
         {
             if ((id & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
-            if (source.IsAscii(id)) AddParts(source.Folded(id));
+            if (source.IsAscii(id))
+            {
+                var name = source.Scanned(id);
+                Span<byte> upper = name.Length <= buffer.Length ? buffer[..name.Length] : new byte[name.Length];
+                Ascii.ToUpper(name, upper, out _);
+                AddParts(upper);
+            }
             else
                 foreach (var part in source.Text(id).Split(Separators, StringSplitOptions.RemoveEmptyEntries))
                     Add(Encoding.UTF8.GetBytes(IndexNames.Plain(part)));
