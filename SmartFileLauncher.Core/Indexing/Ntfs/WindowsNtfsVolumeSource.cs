@@ -10,9 +10,18 @@ internal sealed class WindowsNtfsVolumeSource : INtfsVolumeSource
 {
     private const uint GetNtfsVolumeData = 0x00090064;
     private const uint GetNtfsFileRecord = 0x00090068;
+    private const uint OverlappedFile = 0x40000000;
     private readonly SafeFileHandle _handle;
+    private readonly SafeFileHandle _data;
+    private readonly bool _ownsData;
+    private readonly string _volumeRootPath;
 
     public WindowsNtfsVolumeSource(string volumeRootPath)
+        : this(volumeRootPath, null)
+    {
+    }
+
+    private WindowsNtfsVolumeSource(string volumeRootPath, SafeFileHandle? sharedData)
     {
         if (!OperatingSystem.IsWindows())
             throw new PlatformNotSupportedException("Ham MFT okuma yalnız Windows üzerinde destekleniyor.");
@@ -24,19 +33,20 @@ internal sealed class WindowsNtfsVolumeSource : INtfsVolumeSource
                 Path.TrimEndingDirectorySeparator(root), StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException("Ham MFT okuyucusu yerel sürücü kökü bekliyor.");
 
-        _handle = CreateFile(@"\\.\" + root[..2], 0x80000000, 7,
-            IntPtr.Zero, 3, 0, IntPtr.Zero);
-        if (_handle.IsInvalid)
+        _volumeRootPath = volumeRootPath;
+        _handle = Open(root, 0);
+        try
         {
-            var error = Marshal.GetLastWin32Error();
-            _handle.Dispose();
-            throw new Win32Exception(error, "MFT için birim okuma tutamağı açılamadı.");
+            Geometry = ReadGeometry();
+            _data = sharedData ?? Open(root, OverlappedFile);
+            _ownsData = sharedData is null;
         }
-        try { Geometry = ReadGeometry(); }
         catch { _handle.Dispose(); throw; }
     }
 
     public NtfsVolumeGeometry Geometry { get; }
+
+    internal WindowsNtfsVolumeSource Share() => new(_volumeRootPath, _data);
 
     public byte[]? ReadFileRecord(ulong reference)
     {
@@ -77,7 +87,23 @@ internal sealed class WindowsNtfsVolumeSource : INtfsVolumeSource
         finally { ArrayPool<byte>.Shared.Return(buffer, clearArray: true); }
     }
 
-    public void Dispose() => _handle.Dispose();
+    public void Dispose()
+    {
+        _handle.Dispose();
+        if (_ownsData)
+            _data.Dispose();
+    }
+
+    private static SafeFileHandle Open(string root, uint flags)
+    {
+        var handle = CreateFile(@"\\.\" + root[..2], 0x80000000, 7,
+            IntPtr.Zero, 3, flags, IntPtr.Zero);
+        if (!handle.IsInvalid)
+            return handle;
+        var error = Marshal.GetLastWin32Error();
+        handle.Dispose();
+        throw new Win32Exception(error, "MFT için birim okuma tutamağı açılamadı.");
+    }
 
     private NtfsVolumeGeometry ReadGeometry()
     {
@@ -114,7 +140,7 @@ internal sealed class WindowsNtfsVolumeSource : INtfsVolumeSource
     {
         while (!destination.IsEmpty)
         {
-            var count = RandomAccess.Read(_handle, destination, offset);
+            var count = RandomAccess.Read(_data, destination, offset);
             if (count == 0)
                 throw new EndOfStreamException("MFT okunurken birim verisi beklenmedik biçimde bitti.");
             destination = destination[count..];

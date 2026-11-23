@@ -18,11 +18,34 @@ public sealed class SettingsIndexedLocationProvider(
         return new IndexLocations(standard.DesktopPath, paths);
     }
 
-    public static bool UsesMft(AppSettings settings, string? methodOverride = null) =>
-        methodOverride?.ToLowerInvariant() switch
+    public static string VolumeRoot(string path)
+    {
+        var root = Path.GetPathRoot(Path.GetFullPath(path));
+        if (string.IsNullOrEmpty(root)) throw new ArgumentException("Konumun kökü belirlenemedi.", nameof(path));
+        root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (root.Length == 2 && root[1] == ':') root = char.ToUpperInvariant(root[0]) + ":";
+        return root + Path.DirectorySeparatorChar;
+    }
+
+    public static IndexVolumeMethod MethodFor(AppSettings settings, string volume, string? methodOverride = null)
+    {
+        switch (methodOverride?.ToLowerInvariant())
         {
-            "mft" => true,
-            "directory" => false,
-            _ => settings.IndexingMethod == IndexScanMethod.Mft
-        };
+            case "mft": return IndexVolumeMethod.Mft;
+            case "directory": return IndexVolumeMethod.Folders;
+        }
+        var key = VolumeRoot(volume);
+        if (settings.IndexVolumeMethods is { } methods)
+            foreach (var (path, method) in methods)
+                if (Enum.IsDefined(method) && !string.IsNullOrWhiteSpace(path) &&
+                    string.Equals(TryVolumeRoot(path), key, StringComparison.OrdinalIgnoreCase))
+                    return method;
+        return settings.IndexingMethod == IndexScanMethod.Mft ? IndexVolumeMethod.Automatic : IndexVolumeMethod.Folders;
+    }
+
+    private static string? TryVolumeRoot(string path)
+    {
+        try { return VolumeRoot(path); }
+        catch (Exception failure) when (failure is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
+    }
 }

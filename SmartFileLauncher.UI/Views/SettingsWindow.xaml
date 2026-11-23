@@ -625,6 +625,11 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <Style x:Key="LocationMethod" TargetType="ComboBox" BasedOn="{StaticResource Select}">
+            <Setter Property="Width" Value="152"/>
+            <Setter Property="Height" Value="28"/>
+            <Setter Property="Margin" Value="12,0,0,0"/>
+        </Style>
         <Style x:Key="EmptyListText" TargetType="TextBlock">
             <Setter Property="FontSize" Value="12"/>
             <Setter Property="Foreground" Value="{StaticResource Ink3}"/>
@@ -1113,7 +1118,7 @@
 
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
-                        <TextBlock Text="Arama indeksi" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock x:Name="IndexSettingsHeading" Text="Arama indeksi" Style="{StaticResource SectionHeader}"/>
                         <Grid Style="{StaticResource Row}">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
@@ -1131,7 +1136,7 @@
                             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <StackPanel VerticalAlignment="Center">
                                 <TextBlock Text="İndekslenecek konumlar" Style="{StaticResource RowLabel}"/>
-                                <TextBlock Text="Klasör veya disk; birden fazlasını seçip kaldırabilirsiniz." Style="{StaticResource Hint}"/>
+                                <TextBlock Text="Her disk için tarama yöntemini seçin. Otomatik, MFT kullanılamayan diskte klasör taramasına geçer." Style="{StaticResource Hint}"/>
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" Style="{StaticResource Control}">
                                 <Button Content="Ekle" Style="{StaticResource SecondaryButton}" Click="AddIndexedFolder_Click" Margin="0,0,8,0"/>
@@ -1149,8 +1154,23 @@
                             </StackPanel>
                         </Grid>
                         <Grid>
-                            <ListBox x:Name="IndexedFoldersList" Style="{StaticResource FolderList}" SelectionMode="Extended" MinHeight="44" MaxHeight="168"
-                                     AutomationProperties.Name="İndekslenecek konumlar"/>
+                            <ListBox x:Name="IndexedFoldersList" Style="{StaticResource FolderList}" SelectionMode="Extended" MinHeight="44" MaxHeight="208"
+                                     AutomationProperties.Name="İndekslenecek konumlar">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBlock Text="{Binding Path}" ToolTip="{Binding Path}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                            <ComboBox Grid.Column="1" Style="{StaticResource LocationMethod}" SelectedIndex="{Binding MethodIndex, Mode=TwoWay}"
+                                                      ToolTip="{Binding MethodHint}" AutomationProperties.Name="{Binding Path, StringFormat={}{0} tarama yöntemi}">
+                                                <ComboBoxItem Content="Otomatik"/>
+                                                <ComboBoxItem Content="MFT" IsEnabled="{Binding MftAvailable}"/>
+                                                <ComboBoxItem Content="Klasör taraması"/>
+                                            </ComboBox>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
                             <TextBlock Text="Henüz konum eklenmedi.">
                                     <TextBlock.Style>
                                         <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyListText}">
@@ -1175,22 +1195,7 @@
                 <Border Style="{StaticResource Card}">
                     <StackPanel x:Name="IndexingScopePanel">
                         <TextBlock Text="Tarama ve sıralama" Style="{StaticResource SectionHeader}"/>
-                        <Grid Style="{StaticResource Row}">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                            <StackPanel VerticalAlignment="Center">
-                                <TextBlock Text="Tarama yöntemi" Style="{StaticResource RowLabel}"/>
-                                <TextBlock Text="İkisi de yukarıdaki konumları tarar. MFT yerel NTFS disk ve OmniSpot hizmeti ister; geniş kapsamlarda daha hızlıdır." Style="{StaticResource Hint}"/>
-                            </StackPanel>
-                            <Border Grid.Column="1" Style="{StaticResource SegmentTrack}">
-                                <StackPanel Orientation="Horizontal">
-                                    <RadioButton x:Name="IndexMethodFolders" Content="Klasör taraması" Style="{StaticResource Segment}" GroupName="IndexMethod"
-                                                 AutomationProperties.Name="Tarama yöntemi: klasör taraması"/>
-                                    <RadioButton x:Name="IndexMethodMft" Content="MFT" Style="{StaticResource Segment}" GroupName="IndexMethod"
-                                                 AutomationProperties.Name="Tarama yöntemi: MFT"/>
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-                        <StackPanel Visibility="{Binding IsChecked, ElementName=IndexMethodMft, Converter={StaticResource BoolToVis}}">
+                        <StackPanel x:Name="MftOptionsPanel">
                             <Grid Style="{StaticResource Row}">
                                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                                 <StackPanel VerticalAlignment="Center">
@@ -1232,6 +1237,7 @@
                             </StackPanel>
                             <ComboBox Grid.Column="1" x:Name="IndexSortAlgorithm" Style="{StaticResource Select}" AutomationProperties.Name="İndeks sıralama yöntemi">
                                 <ComboBoxItem Content="Pivot"/><ComboBoxItem Content="Birleştir"/>
+                                <ComboBoxItem Content="pS⁵"/>
                             </ComboBox>
                         </Grid>
                         <Grid Style="{StaticResource Row}">

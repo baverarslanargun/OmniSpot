@@ -120,6 +120,7 @@ public sealed partial class FileIndex
 
     private IndexApplyResult ApplyCore(IReadOnlyList<IndexChange> changes, CancellationToken cancellationToken)
     {
+        _openedRowCache?.Clear();
         var touched = new HashSet<uint>();
         var moved = new HashSet<uint>();
         var deletedFolders = new HashSet<uint>();
@@ -209,9 +210,10 @@ public sealed partial class FileIndex
             return true;
         }
         var name = _names.Intern(entry.Name);
-        var attributes = (uint)entry.Attributes & ~DeadBit;
+        var attributes = Pack(entry.Attributes);
         var size = entry.IsDirectory ? 0 : entry.SizeBytes;
-        var created = CreatedSeconds(entry.CreatedTimeUtc);
+        var created = Seconds(entry.CreatedTimeUtc);
+        var modified = Seconds(entry.LastWriteTimeUtc);
         if (name != _name[row] || parent != _parent[row])
         {
             changed = true;
@@ -222,12 +224,12 @@ public sealed partial class FileIndex
         }
         foreach (var link in RowsOf(entry.FileReference).ToArray())
         {
-            if (_size[link] == size && _modified[link] == entry.LastWriteTimeUtc && _attributes[link] == attributes &&
+            if (_size[link] == size && _modified[link] == modified && _attributes[link] == attributes &&
                 _created[link] == created) continue;
             changed = true;
             touched.Add(link);
             _size[link] = size;
-            _modified[link] = entry.LastWriteTimeUtc;
+            _modified[link] = modified;
             _created[link] = created;
             _attributes[link] = attributes;
         }

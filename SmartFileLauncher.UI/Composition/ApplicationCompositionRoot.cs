@@ -102,13 +102,16 @@ public sealed class ApplicationCompositionRoot : IDisposable
             _settings, Environment.GetEnvironmentVariable("OMNISPOT_INDEX_METHOD"));
         _indexLifecycle = _measurementRun == null && useMft
             ? new VolumeIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
-                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "index.v2.live"), _settings.IndexBuild)
-            : _measurementRun == null
-            ? new SharedIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
-                useMft ? IndexScanMethod.Mft : IndexScanMethod.SelectedFolders,
-                Path.Combine(Environment.GetEnvironmentVariable("OMNISPOT_INDEX_PATH") is { Length: > 0 } sharedOverride
-                    ? Path.GetFullPath(sharedOverride) + ".live" : Path.Combine(appDataDirectory, "index.shared.live"), "control.bin"), _settings.IndexBuild)
-            : new IndexLifecycleService(indexManager!, locationProvider, preferDirectoryEnumeration: !useMft);
+                Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "index.v2.live"), _settings.IndexBuild,
+                removeUnusedSnapshots: locationProvider is SettingsIndexedLocationProvider && _settings.IndexedFolders is { Count: > 0 },
+                policy: new SettingsIndexVolumePolicy(_settings, methodOverride))
+            : new IndexLifecycleService(indexManager!, locationProvider, preferDirectoryEnumeration: methodOverride?.ToLowerInvariant() switch
+            {
+                "mft" => false,
+                "directory" => true,
+                _ => _settings.IndexingMethod != IndexScanMethod.Mft
+            });
+        if (_indexLifecycle is VolumeIndexLifecycleService volumeIndex) volumeIndex.Preload();
         var indexMaintenance = new IndexMaintenanceService(
             _indexLifecycle.DatabasePath,
             _indexLifecycle is SharedIndexLifecycleService shared ? () => shared.CatalogDirectory : null);

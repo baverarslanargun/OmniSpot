@@ -1,7 +1,9 @@
+using System.Buffers;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.Cryptography;
+using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.ChangeFeed.Usn;
 using SmartFileLauncher.Core.Index;
@@ -51,27 +53,58 @@ internal sealed class IndexVolumeService : IDisposable
         try
         {
             volume = UsnVolumeJournalReader.ResolveVolumeRoot(request.RootPath);
-            if (!new DriveInfo(volume).DriveFormat.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
+            var drive = new DriveInfo(volume);
+            if (!drive.IsReady)
+            {
+                const string detail = "Sürücü hazır değil.";
+                return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnusable, detail) with
+                {
+                    IndexIssue = new(IndexIssueReason.LocationUnavailable, volume, request.Kind.ToString(), detail)
+                };
+            }
+            if (!drive.DriveFormat.Equals("NTFS", StringComparison.OrdinalIgnoreCase))
                 return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.UnsupportedFileSystem, "Bu dosya sisteminde MFT/USN desteklenmiyor.");
         }
-        catch (Exception failure) when (failure is ArgumentException or NotSupportedException or IOException)
-        { return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.UnsupportedFileSystem, failure.Message); }
-        if (!caller.Run(_ => SharedCatalogService.CanList(request.RootPath)))
-            return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnauthorized, "İndeks kökü okunamıyor.");
+        catch (Exception failure) when (failure is ArgumentException or NotSupportedException or IOException or UnauthorizedAccessException)
+        { return Failed(failure, request.RootPath, request.Kind); }
+        if (caller.Run(_ => SharedCatalogService.CheckRoot(request.RootPath)) is { } rootIssue)
+            return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnauthorized, rootIssue.Detail) with { IndexIssue = rootIssue };
         try
         {
             return request.Kind switch
             {
                 ChangeFeedRequestKind.IndexVolumeOpen => Open(volume),
-                ChangeFeedRequestKind.IndexVolumeScan => Scan(owner, volume, request.Token, request.IndexBuild),
+                ChangeFeedRequestKind.IndexVolumeScan => Scan(owner, volume, request.Token, request.IndexBuild, request.BinaryVolumeEntries),
                 ChangeFeedRequestKind.IndexVolumeChanges => Changes(volume, request.Journal, cancellationToken),
                 _ => ChangeFeedResponse.Failed(ChangeFeedResponseStatus.InvalidRequest, "Bilinmeyen birim isteği.")
             };
         }
         catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or InvalidDataException or
-            UsnJournalUnavailableException or UsnProtocolRejectedException or System.ComponentModel.Win32Exception)
+            UsnJournalUnavailableException or UsnProtocolRejectedException or Win32Exception)
         {
-            return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.Unavailable, failure.Message);
+            return Failed(failure, volume, request.Kind);
+        }
+    }
+
+    private static ChangeFeedResponse Failed(Exception failure, string root, ChangeFeedRequestKind operation) =>
+        ChangeFeedResponse.Failed(ChangeFeedResponseStatus.Unavailable, failure.Message) with
+        {
+            IndexIssue = IndexIssue.FromException(failure, root, operation.ToString())
+        };
+
+    internal static IndexIssue? CheckJournal(string root)
+    {
+        var volume = UsnVolumeJournalReader.ResolveVolumeRoot(root);
+        try
+        {
+            using var journal = new UsnVolumeJournalReader(volume);
+            journal.QueryJournal();
+            return null;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or
+            UsnJournalUnavailableException or UsnProtocolRejectedException or Win32Exception)
+        {
+            return IndexIssue.FromException(failure, volume, "USN günlüğü denetimi");
         }
     }
 
@@ -85,7 +118,7 @@ internal sealed class IndexVolumeService : IDisposable
             descriptor.JournalId, descriptor.FirstUsn, descriptor.NextUsn));
     }
 
-    private ChangeFeedResponse Scan(string owner, string volume, string? token, IndexBuildOptions? options)
+    private ChangeFeedResponse Scan(string owner, string volume, string? token, IndexBuildOptions? options, bool binary)
     {
         ScanSession session;
         lock (_gate)
@@ -110,14 +143,18 @@ internal sealed class IndexVolumeService : IDisposable
         lock (session.Gate)
         {
             session.LastSeen = DateTime.UtcNow;
-            var batch = new List<IndexEntry>();
+            var batch = binary ? null : new List<IndexEntry>();
+            var payload = binary ? new ArrayBufferWriter<byte>(64 * 1024) : null;
+            var count = 0;
             var bytes = 0L;
             var done = false;
             while (bytes < PageBudgetBytes)
             {
                 if (!session.Entries.MoveNext()) { done = true; break; }
                 var entry = IndexEntry.FromMft(session.Entries.Current);
-                batch.Add(entry);
+                if (payload is not null) IndexEntryCodec.WriteBinary(payload, entry);
+                else batch!.Add(entry);
+                count++;
                 bytes += 48 + entry.Name.Length * 3;
             }
             if (done)
@@ -127,7 +164,8 @@ internal sealed class IndexVolumeService : IDisposable
                 ReleaseLater();
             }
             return Page(new IndexVolumePageDto(volume, 0, 0, 0, 0, 0, done ? null : token,
-                IndexEntryCodec.PackEntries(batch), Count: batch.Count, Done: done));
+                batch is null ? null : IndexEntryCodec.PackEntries(batch), Count: count, Done: done,
+                BinaryEntries: payload is null ? (ReadOnlyMemory<byte>?)null : payload.WrittenMemory));
         }
     }
 

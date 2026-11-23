@@ -1,3 +1,4 @@
+using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Application.Settings;
 
 namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
@@ -12,4 +13,10 @@ public sealed record SharedCatalogStatus(string Session, string Phase, int Items
     bool Ready, long Revision, IReadOnlyList<SharedCatalogPart> Parts, string? Failure = null,
     int Files = 0, int Directories = 0, int Tokens = 0,
     long AcceptedOperation = 0, long CompletedOperation = 0, bool Closed = false, SharedCatalogBuildMetrics? Build = null,
-    IndexBuildOptions? AppliedBuildOptions = null, bool TokenIndexReady = true);
+    IndexBuildOptions? AppliedBuildOptions = null, bool TokenIndexReady = true)
+{
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IndexIssue? IndexIssue { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public IReadOnlyList<IndexIssue>? ScanIssues { get; init; }
+}

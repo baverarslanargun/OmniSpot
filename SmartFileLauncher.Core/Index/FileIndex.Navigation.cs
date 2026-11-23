@@ -114,9 +114,9 @@ public sealed partial class FileIndex
         var full = Path.TrimEndingDirectorySeparator(path);
         var root = Path.TrimEndingDirectorySeparator(RootPath);
         if (full.Equals(root, StringComparison.OrdinalIgnoreCase)) return _root;
-        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return NoRow;
+        if (!full.StartsWith(RootPath, StringComparison.OrdinalIgnoreCase)) return NoRow;
         var at = _root;
-        foreach (var part in full[(root.Length + 1)..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+        foreach (var part in full[RootPath.Length..].Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
         {
             at = FindChild(at, part);
             if (at == NoRow) return NoRow;
@@ -132,13 +132,13 @@ public sealed partial class FileIndex
         while (lo < hi)
         {
             var mid = (lo + hi) >>> 1;
-            if (_names.Folded(_name[_byName.Rows[mid]]).SequenceCompareTo(target) < 0) lo = mid + 1; else hi = mid;
+            if (IndexNames.CompareIgnoreCase(_names.Scanned(_name[_byName.Rows[mid]]), target) < 0) lo = mid + 1; else hi = mid;
         }
         var fallback = NoRow;
         for (var i = lo; i < _byName.Count; i++)
         {
             var row = _byName.Rows[i];
-            if (!_names.Folded(_name[row]).SequenceEqual(target)) break;
+            if (IndexNames.CompareIgnoreCase(_names.Scanned(_name[row]), target) != 0) break;
             if (_parent[row] != parent) continue;
             if (string.Equals(_names.Text(_name[row]), name, StringComparison.Ordinal)) return row;
             if (fallback == NoRow) fallback = row;
@@ -149,6 +149,7 @@ public sealed partial class FileIndex
     private bool InScope(uint row, HashSet<uint>? scope)
     {
         if (scope is null) return true;
+        if (scope is FolderRows folder && row == folder.Folder) return false;
         for (var at = row; at != NoRow; at = _parent[at])
         {
             if (scope.Contains(at)) return true;
@@ -168,6 +169,39 @@ public sealed partial class FileIndex
             if (row != NoRow) rows.Add(row);
         }
         return rows;
+    }
+
+    private HashSet<uint>? ResolveScope(IReadOnlyList<string>? scope, string? folderScope)
+    {
+        var rows = ResolveScope(scope);
+        if (folderScope is null) return rows;
+        var folder = FindPath(folderScope);
+        if (folder == NoRow || !IsAlive(folder) || !IsDirectory(folder)) return [];
+        var narrowed = new FolderRows(folder);
+        if (rows is null || InScope(folder, rows))
+        {
+            narrowed.Add(folder);
+            return narrowed;
+        }
+        foreach (var row in rows)
+            if (IsBelow(row, folder)) narrowed.Add(row);
+        return narrowed;
+    }
+
+    private bool IsBelow(uint row, uint ancestor)
+    {
+        if (row == _root) return false;
+        for (var at = _parent[row]; at != NoRow; at = _parent[at])
+        {
+            if (at == ancestor) return true;
+            if (at == _root) return false;
+        }
+        return false;
+    }
+
+    private sealed class FolderRows(uint folder) : HashSet<uint>
+    {
+        internal uint Folder { get; } = folder;
     }
 
     private SearchItem ToItem(uint row)

@@ -187,6 +187,7 @@ public partial class MainWindow : Window {
         SearchBox.KeyDown += SearchBox_KeyDown;
         ResultsList.MouseDoubleClick += (_, __) => OpenSelected();
         ConsoleToggleButton.Click += (_, __) => ToggleDiagnosticsWindow();
+        if (_indexLifecycle is IIndexHealthSource healthSource) healthSource.HealthChanged += HandleIndexHealth;
         InitializeDiagnostics();
         NaturalLanguageToggle.Checked += (_, __) => EnableNaturalLanguageMode();
         NaturalLanguageToggle.Unchecked += (_, __) => DisableNaturalLanguageMode();
@@ -412,6 +413,7 @@ public partial class MainWindow : Window {
         _connectivityMonitor.Start();
     }
 
+        if (_indexLifecycle is IIndexHealthSource healthSource) healthSource.HealthChanged -= HandleIndexHealth;
     private void HandleConnectivityChanged(bool isConnected) {
         if (_isPreparedForShutdown ||
             Dispatcher.HasShutdownStarted ||
@@ -822,8 +824,8 @@ public partial class MainWindow : Window {
                 ex.GetType().Name);
             Log($"❌ HATA: {ex.Message}");
             Log($"Stack trace: {ex.StackTrace}");
-            ModernDialog.Show(this, "İndeksleme başarısız",
-                $"{ex.Message}{Environment.NewLine}{Environment.NewLine}Ayrıntılar için konsolu kontrol edin.", DialogKind.Danger);
+            var issue = IndexIssue.FromException(ex, null, "İlk açılış");
+            ShowIndexHealth(new([issue], SearchAvailable: false, InitialStartup: true));
         } finally {
             _indexProgressTimer.Stop();
             _indexProgressClock.Stop();

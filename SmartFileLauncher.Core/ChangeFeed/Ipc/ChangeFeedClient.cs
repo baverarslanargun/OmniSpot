@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using SmartFileLauncher.Core.Application.Indexing;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -76,17 +77,20 @@ public sealed class ChangeFeedClient
         }
         catch (OperationCanceledException)
         {
-            return ChangeFeedResponse.Failed(
-                ChangeFeedResponseStatus.Unavailable,
-                $"{_pipeName} adlı kanal ayrılan süre içinde yanıt vermedi.");
+            return ConnectionUnavailable($"{_pipeName} adlı kanal ayrılan süre içinde yanıt vermedi.");
         }
         catch (ChangeFeedPipeException failure)
         {
-            return ChangeFeedResponse.Failed(
-                ChangeFeedResponseStatus.Unavailable,
-                failure.Message);
+            return ConnectionUnavailable(failure.Message);
         }
     }
+
+    private static ChangeFeedResponse ConnectionUnavailable(string detail) =>
+        ChangeFeedResponse.Failed(ChangeFeedResponseStatus.Unavailable, detail) with
+        {
+            IndexIssue = new(IndexIssueReason.ServiceUnavailable,
+                null, "Servis bağlantısı", detail)
+        };
 
     private void VerifyServerOwner(NamedPipeClientStream pipe)
     {

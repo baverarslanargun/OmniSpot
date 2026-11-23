@@ -2455,7 +2455,57 @@
             </Border>
 
             <!-- Delta Sync Progress Row (Row 2) - Below content, extends window height -->
-            <Grid Grid.Row="4">
+            <StackPanel Grid.Row="5">
+                <Border x:Name="IndexHealthBanner" Background="#FFF7E8" BorderBrush="#F3E2BF"
+                        BorderThickness="0,1,0,0" Padding="14,10,14,10" Visibility="Collapsed">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Border Style="{StaticResource BannerIconPill}" Background="#FBE9C3" VerticalAlignment="Top">
+                            <Grid Width="16" Height="15">
+                                <Path Data="{StaticResource WarningTriangleGeometry}" Fill="#D98A0C" Stroke="#D98A0C" StrokeThickness="2" StrokeLineJoin="Round" Stretch="Uniform"/>
+                                <Path Data="{StaticResource WarningMarkGeometry}" Stroke="#FFFFFF" StrokeThickness="2.2" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                      Width="2.2" Height="6.4" Stretch="Uniform" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="0,3,0,0"/>
+                            </Grid>
+                        </Border>
+                        <Grid Grid.Column="1">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid Grid.ColumnSpan="2" MinHeight="28">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock x:Name="IndexHealthTitle" Style="{StaticResource BannerTitle}" VerticalAlignment="Center"/>
+                                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="12,0,0,0">
+                                    <Button x:Name="IndexHealthRetryButton" Content="Yeniden başlat" Style="{StaticResource BannerActionButton}"
+                                            Visibility="Collapsed" Click="IndexHealthRetry_Click"/>
+                                    <Button Content="İndeks ayarlarını aç" Style="{StaticResource BannerActionButton}" Click="IndexHealthSettings_Click"/>
+                                    <Button Content="Teknik ayrıntılar" Style="{StaticResource BannerQuietButton}" Margin="2,0,-8,0" Click="IndexHealthDetails_Click"/>
+                                </StackPanel>
+                            </Grid>
+                            <Border x:Name="IndexHealthLocationChip" Grid.Row="1" Background="#FFFFFF" BorderBrush="#EAD6AE" BorderThickness="1"
+                                    CornerRadius="5" Padding="5,0,5,1" Margin="0,3,8,0" MaxWidth="240" VerticalAlignment="Top">
+                                <TextBlock x:Name="IndexHealthLocation" FontFamily="Consolas, Segoe UI" FontSize="12" Foreground="#111827"
+                                           TextTrimming="CharacterEllipsis"/>
+                            </Border>
+                            <TextBlock x:Name="IndexHealthMessage" Grid.Row="1" Grid.Column="1" Margin="0,3,0,0" FontSize="12" LineHeight="18"
+                                       TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"><Run x:Name="IndexHealthEffect" FontWeight="SemiBold" Foreground="#8A5508"/><Run x:Name="IndexHealthCause" Foreground="#5B6472"/></TextBlock>
+                            <TextBlock Grid.Row="2" Grid.ColumnSpan="2" Margin="0,1,0,0" FontSize="12" LineHeight="18" TextWrapping="Wrap"
+                                       Foreground="#1F2937"><Run x:Name="IndexHealthNextStep"/><Run x:Name="IndexHealthMore" Foreground="#5B6472"/></TextBlock>
+                        </Grid>
+                    </Grid>
+                </Border>
+                <Grid>
                 <!-- Search catalog build row -->
                 <Border x:Name="CatalogBuildPanel"
                         Background="#FFFFFF"

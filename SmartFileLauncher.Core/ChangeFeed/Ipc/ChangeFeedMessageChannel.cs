@@ -19,7 +19,7 @@ public sealed class ChangeFeedProtocolException : Exception
     }
 }
 
-public static class ChangeFeedMessageChannel
+public static partial class ChangeFeedMessageChannel
 {
     private static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -32,7 +32,9 @@ public static class ChangeFeedMessageChannel
     {
         ArgumentNullException.ThrowIfNull(message);
 
-        return JsonSerializer.SerializeToUtf8Bytes(message, SerializerOptions).Length;
+        var metadataBytes = JsonSerializer.SerializeToUtf8Bytes(message, SerializerOptions).Length;
+        return message is ChangeFeedResponse { Volume.BinaryEntries: { } binary }
+            ? sizeof(int) + (long)metadataBytes + binary.Length : metadataBytes;
     }
 
     public static Task WriteRequestAsync<T>(Stream stream, T message, CancellationToken cancellationToken) =>
@@ -42,10 +44,12 @@ public static class ChangeFeedMessageChannel
         ReadAsync<T>(stream, ChangeFeedProtocol.MaximumRequestBytes, cancellationToken);
 
     public static Task WriteResponseAsync<T>(Stream stream, T message, CancellationToken cancellationToken) =>
-        WriteAsync(stream, message, ChangeFeedProtocol.MaximumResponseBytes, cancellationToken);
+        message is ChangeFeedResponse { Volume.BinaryEntries: not null } response
+            ? WriteBinaryVolumeAsync(stream, response, cancellationToken)
+            : WriteAsync(stream, message, ChangeFeedProtocol.MaximumResponseBytes, cancellationToken);
 
     public static Task<T> ReadResponseAsync<T>(Stream stream, CancellationToken cancellationToken) =>
-        ReadAsync<T>(stream, ChangeFeedProtocol.MaximumResponseBytes, cancellationToken);
+        ReadAsync<T>(stream, ChangeFeedProtocol.MaximumResponseBytes, cancellationToken, allowBinary: true);
 
     private static async Task WriteAsync<T>(
         Stream stream,
@@ -74,7 +78,8 @@ public static class ChangeFeedMessageChannel
     private static async Task<T> ReadAsync<T>(
         Stream stream,
         int maximumBytes,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowBinary = false)
     {
         ArgumentNullException.ThrowIfNull(stream);
 
@@ -82,6 +87,12 @@ public static class ChangeFeedMessageChannel
         await ReadExactAsync(stream, prefix, cancellationToken).ConfigureAwait(false);
 
         var length = BinaryPrimitives.ReadInt32LittleEndian(prefix);
+        if (length < 0 && allowBinary && typeof(T) == typeof(ChangeFeedResponse))
+        {
+            if (length < -maximumBytes || length >= -sizeof(int))
+                throw new ChangeFeedProtocolException($"İleti uzunluğu geçersiz: {length}");
+            return (T)(object)await ReadBinaryVolumeAsync(stream, -length, cancellationToken).ConfigureAwait(false);
+        }
         if (length <= 0 || length > maximumBytes)
         {
             throw new ChangeFeedProtocolException(

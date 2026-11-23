@@ -21,6 +21,7 @@ public sealed class AppSettings
     public IndexScanMethod IndexingMethod { get; set; } = IndexScanMethod.SelectedFolders;
     public IndexBuildOptions IndexBuild { get; set; } = new();
     public List<string>? IndexedFolders { get; set; }
+    public Dictionary<string, IndexVolumeMethod>? IndexVolumeMethods { get; set; }
     public bool ThumbnailPreviewsEnabled { get; set; } = true;
     public bool ThumbnailCacheUseRamRatio { get; set; }
     public int ThumbnailCacheMaxCount { get; set; } = 1000;
@@ -51,6 +52,7 @@ public sealed class AppSettings
         IndexBuild = new();
         IndexedFolders = null;
         ThumbnailPreviewsEnabled = true;
+        IndexVolumeMethods = null;
         ThumbnailCacheUseRamRatio = false;
         ThumbnailCacheMaxCount = 1000;
         ThumbnailCacheRamPercent = 0.1;

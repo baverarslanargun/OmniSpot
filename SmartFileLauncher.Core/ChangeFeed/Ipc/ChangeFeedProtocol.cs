@@ -1,3 +1,5 @@
+using SmartFileLauncher.Core.Application.Indexing;
+
 namespace SmartFileLauncher.Core.ChangeFeed.Ipc;
 
 public static class ChangeFeedProtocol
@@ -80,7 +82,9 @@ public sealed record ChangeFeedRequest(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     IndexJournalPositionDto? Journal = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    SmartFileLauncher.Core.Application.Settings.IndexBuildOptions? IndexBuild = null);
+    SmartFileLauncher.Core.Application.Settings.IndexBuildOptions? IndexBuild = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    bool BinaryVolumeEntries = false);
 
 public sealed record ChangeFeedResponse(
     int Version,
@@ -95,7 +99,9 @@ public sealed record ChangeFeedResponse(
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     IReadOnlyList<string>? Capabilities = null,
     [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
-    IndexVolumePageDto? Volume = null)
+    IndexVolumePageDto? Volume = null,
+    [property: System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    IndexIssue? IndexIssue = null)
 {
     public static ChangeFeedResponse Ok(IReadOnlyList<string>? roots = null) =>
         new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, null, roots);

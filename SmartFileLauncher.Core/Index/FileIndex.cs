@@ -1,3 +1,4 @@
+using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Indexing.Ntfs;
 using SmartFileLauncher.Core.Models;
 
@@ -29,7 +30,8 @@ public readonly record struct IndexCheckpoint(ulong VolumeSerial, ulong JournalI
 public sealed partial class FileIndex : IDisposable
 {
     internal const uint NoRow = uint.MaxValue;
-    private const uint DeadBit = 0x8000_0000;
+    private const byte DeadBit = 0x80;
+    private const byte AttributeMask = 0x7F;
     private const ulong RecordMask = 0x0000_FFFF_FFFF_FFFF;
     private const int FirstUserRecord = 16;
     private readonly ReaderWriterLockSlim _lock = new(LockRecursionPolicy.NoRecursion);
@@ -37,9 +39,9 @@ public sealed partial class FileIndex : IDisposable
     private ulong[] _frn = new ulong[1024];
     private uint[] _parent = new uint[1024];
     private int[] _name = new int[1024];
-    private uint[] _attributes = new uint[1024];
-    private long[] _size = new long[1024];
-    private long[] _modified = new long[1024];
+    private byte[] _attributes = new byte[1024];
+    private IndexSizes _size = new(1024);
+    private uint[] _modified = new uint[1024];
     private uint[] _created = new uint[1024];
     private int _count;
     private int _dead;
@@ -48,6 +50,7 @@ public sealed partial class FileIndex : IDisposable
     private uint _root = NoRow;
     private bool _compacted;
     private int _generation;
+    private IndexBuildOptions _nameSort = new();
     private byte[] _rowScratch = [];
     private ulong[] _bitScratch = [];
 
@@ -72,11 +75,21 @@ public sealed partial class FileIndex : IDisposable
         }
     }
 
+    internal IndexBuildOptions NameSort
+    {
+        get => _nameSort;
+        set => _nameSort = IndexBuildOptions.Normalize(value);
+    }
+
     public static FileIndex Build(string rootPath, ulong rootReference, IEnumerable<IndexEntry> entries,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default) =>
+        Build(rootPath, rootReference, entries, cancellationToken, null);
+
+    internal static FileIndex Build(string rootPath, ulong rootReference, IEnumerable<IndexEntry> entries,
+        CancellationToken cancellationToken, IndexBuildOptions? nameSort, Action<TimeSpan, int>? nameSortCompleted = null)
     {
         ArgumentNullException.ThrowIfNull(entries);
-        var index = new FileIndex(rootPath, rootReference);
+        var index = new FileIndex(rootPath, rootReference) { NameSort = IndexBuildOptions.Normalize(nameSort) };
         var parents = new ulong[1024];
         var seen = 0;
         foreach (var entry in entries)
@@ -95,7 +108,7 @@ public sealed partial class FileIndex : IDisposable
             index._parent[row] = parent;
         }
         index.DropDisconnected();
-        index.RebuildOrders(cancellationToken);
+        index.RebuildOrders(cancellationToken, nameSortCompleted);
         index.Trim();
         return index;
     }
@@ -107,7 +120,7 @@ public sealed partial class FileIndex : IDisposable
         Array.Resize(ref _parent, size);
         Array.Resize(ref _name, size);
         Array.Resize(ref _attributes, size);
-        Array.Resize(ref _size, size);
+        _size.Resize(size);
         Array.Resize(ref _modified, size);
         Array.Resize(ref _created, size);
         var records = _rowByRecord.Length;
@@ -127,16 +140,16 @@ public sealed partial class FileIndex : IDisposable
         IndexArrays.Grow(ref _parent, size);
         IndexArrays.Grow(ref _name, size);
         IndexArrays.Grow(ref _attributes, size);
-        IndexArrays.Grow(ref _size, size);
+        _size.Grow(size);
         IndexArrays.Grow(ref _modified, size);
         IndexArrays.Grow(ref _created, size);
         _frn[row] = entry.FileReference;
         _parent[row] = NoRow;
         _name[row] = _names.Intern(entry.Name);
-        _attributes[row] = (uint)entry.Attributes & ~DeadBit;
+        _attributes[row] = Pack(entry.Attributes);
         _size[row] = entry.IsDirectory ? 0 : entry.SizeBytes;
-        _modified[row] = entry.LastWriteTimeUtc;
-        _created[row] = CreatedSeconds(entry.CreatedTimeUtc);
+        _modified[row] = Seconds(entry.LastWriteTimeUtc);
+        _created[row] = Seconds(entry.CreatedTimeUtc);
         _count = size;
         LinkRecord(row);
         if (entry.FileReference == RootReference) _root = row;
@@ -196,8 +209,16 @@ public sealed partial class FileIndex : IDisposable
 
     private uint FindDirectory(ulong reference)
     {
-        foreach (var row in RowsOf(reference))
-            if (IsDirectory(row)) return row;
+        var record = RecordOf(reference);
+        if (record >= _rowByRecord.Length) return NoRow;
+        var first = _rowByRecord[record] - 1;
+        if (first < 0) return NoRow;
+        for (var row = (uint)first; ; )
+        {
+            if (_frn[row] == reference && IsAlive(row) && IsDirectory(row)) return row;
+            if (!_nextLink.TryGetValue(row, out var next)) break;
+            row = next;
+        }
         return NoRow;
     }
 
@@ -229,7 +250,9 @@ public sealed partial class FileIndex : IDisposable
 
     internal bool IsAlive(uint row) => (_attributes[row] & DeadBit) == 0;
 
-    internal bool IsDirectory(uint row) => (_attributes[row] & (uint)FileAttributes.Directory) != 0;
+    internal bool IsDirectory(uint row) => (_attributes[row] & (byte)FileAttributes.Directory) != 0;
+
+    private static byte Pack(FileAttributes attributes) => (byte)((uint)attributes & AttributeMask);
 
     private void Kill(uint row)
     {
@@ -255,25 +278,26 @@ public sealed partial class FileIndex : IDisposable
         return builder.ToString();
     }
 
-    private static uint CreatedSeconds(long ticks) =>
+    internal static uint Seconds(long ticks) =>
         ticks <= DateTime.UnixEpoch.Ticks ? 0u
             : (uint)Math.Min(uint.MaxValue, (ticks - DateTime.UnixEpoch.Ticks) / TimeSpan.TicksPerSecond);
 
     private DateTime? CreatedOf(uint row) =>
         _created[row] == 0 ? null : DateTime.UnixEpoch.AddSeconds(_created[row]).ToLocalTime();
 
-    private DateTime ModifiedOf(uint row) => new DateTime(_modified[row], DateTimeKind.Utc).ToLocalTime();
+    private DateTime ModifiedOf(uint row) => DateTime.UnixEpoch.AddSeconds(_modified[row]).ToLocalTime();
 
-    private SearchResult ToResult(uint row)
+    private SearchResult ToResult(uint row, double score = 0)
     {
         var directory = IsDirectory(row);
         return new SearchResult
         {
             Name = NameOf(row),
             FullPath = PathOf(row),
+            Score = score,
             IsDirectory = directory,
             SizeBytes = directory ? null : _size[row],
-            LastWriteTime = directory ? null : new DateTime(_modified[row], DateTimeKind.Utc).ToLocalTime()
+            LastWriteTime = directory ? null : ModifiedOf(row)
         };
     }
 

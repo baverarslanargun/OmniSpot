@@ -5,7 +5,7 @@ using System.Text.Unicode;
 
 namespace SmartFileLauncher.Core.Index;
 
-public static class IndexEntryCodec
+public static partial class IndexEntryCodec
 {
     private const ushort WideName = 0x8000;
 

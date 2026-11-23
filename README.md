@@ -92,10 +92,18 @@ Detaylı talimatlar için [derleme rehberine](docs/guides/build.md) bakın.
 
 ### İlk indeksleme ve işçi ayarları
 
-Ayarlar'daki **Tarama ve sıralama** bölümünden klasör taraması veya yerel NTFS
-diskler için MFT seçilebilir. MFT okuma ve işleme için tek işçi, adaptif seçim veya elle 1–16 işçi
-ayarlanabilir. İndeks sıralamasında Pivot ve Birleştir yöntemleri; otomatik veya
-elle 1–16 sıralama işçisi kullanılabilir. Bu ayarlar sonuçların filtre ve sıralama
+Ayarlar'daki **İndekslenecek konumlar** listesinde her disk için tarama yöntemi
+ayrı seçilir: **Otomatik**, **MFT** veya **Klasör taraması**. Otomatik, NTFS diskte
+MFT'yi dener; disk NTFS değilse, ağ konumuysa ya da Windows değişiklik günlüğü (USN)
+kapalıysa klasör taramasını kullanır. NTFS olmayan disklerde ve ağ konumlarında MFT
+hiç denenmez. Klasör taramalı disk, Windows klasör izleyicisiyle canlı güncellenir ve
+her açılışta arka planda yeniden gezilir; bu sırada arama önceki indeksle çalışır.
+Seçim `settings.json` içinde `IndexVolumeMethods` altında disk başına saklanır.
+
+**Tarama ve sıralama** bölümünde MFT okuma ve işleme için tek işçi, adaptif seçim veya
+elle 1–16 işçi ayarlanabilir. İndeks sıralamasında Pivot, Birleştir ve varsayılan pS⁵
+kullanılabilir. Sıralama işçisi otomatik veya elle 1–16 seçilebilir;
+pS⁵'te otomatik seçim en çok 8 işçi kullanır. Bu ayarlar sonuçların filtre ve sıralama
 seçeneklerini değiştirmez.
 
 Token indeksi bu sürümde geçici olarak kapalıdır (`TokenIndexing.Enabled=false`).
@@ -112,6 +120,19 @@ Ayarlar → **Küçük resimler ve RAM** bölümünden önizlemeleri açıp kapa
 RAM'de tutulacak görsel adedini veya toplam fiziksel RAM'in yüzdesini seçebilirsiniz.
 Yatay çubuk, seçilen bütçe tamamen dolduğunda oluşabilecek RAM dağılımını yaklaşık
 olarak gösterir; bütçe seçildiği anda belleğe yükleme yapılmaz.
+Bir konum taranamıyorsa veya arka planda güncellenemiyorsa arama penceresindeki
+uyarı etkilenen konumu ve aramaya etkisini gösterir. Açılamayan bir disk yalnız
+kendisini etkiler: diğer konumlarda arama açık kalır, o disk birkaç dakikada bir
+yeniden denenir ve açıldığında indekse eklenir. **İndeks ayarlarını aç**
+ile kapsamı düzenleyebilir, **Teknik ayrıntılar** bölümünden hata kodunu
+kopyalayabilirsiniz. İlk tarama tamamlanmadıysa ayarlardan **İndeksi oluştur**'u
+seçerek tekrar başlayabilirsiniz.
+
+İndekslenecek konumlar listesindeki değişiklikler uygulamanın sonraki açılışında
+uygulanır. Seçili disklerin tümü başarıyla açıldıktan sonra listeden
+çıkarılan disklerin eski indeksleri ve geçici indeks dosyaları otomatik temizlenir.
+Seçili bir diske erişilemezse o açılışta temizlik yapılmaz.
+
 
 Görünür alan ve çevresindeki mevcut ön yükleme davranışı korunur. Cache dolunca
 en uzun süredir kullanılmayan görseller çıkarılır. Adet sınırının yanında gerçek

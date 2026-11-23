@@ -10,20 +10,30 @@ public sealed partial class NtfsMftReader
     private const int ParallelChunkBytes = 1024 * 1024;
     private const int ParallelMaxInFlight = 32;
     private const int ParallelMaxWorkers = 16;
+    internal static readonly ConcurrentDictionary<string, int> RememberedScanWorkers =
+        new(StringComparer.OrdinalIgnoreCase);
+
+    internal static int AdaptiveStartWorkers(string? key) =>
+        key is not null && RememberedScanWorkers.TryGetValue(key, out var workers)
+            ? workers : MftScanWorkerTuner.DefaultStartWorkers;
 
     public IEnumerable<NtfsMftEntry> ReadEntries(
-        IndexBuildOptions options, CancellationToken cancellationToken = default)
+        IndexBuildOptions options, CancellationToken cancellationToken = default) =>
+        ReadEntries(options, null, cancellationToken);
+
+    internal IEnumerable<NtfsMftEntry> ReadEntries(
+        IndexBuildOptions options, MftScanTrace? trace, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
         if (!options.IsValid)
             throw new ArgumentOutOfRangeException(nameof(options), "İndeks oluşturma seçenekleri geçersiz.");
         return options.ScanMode == IndexScanWorkerMode.Serial
             ? ReadEntries(cancellationToken)
-            : ReadEntriesParallel(options, cancellationToken);
+            : ReadEntriesParallel(options, trace, cancellationToken);
     }
 
     private IEnumerable<NtfsMftEntry> ReadEntriesParallel(
-        IndexBuildOptions options, CancellationToken cancellationToken)
+        IndexBuildOptions options, MftScanTrace? trace, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var sourceFactory = _parallelSourceFactory ??
@@ -49,13 +59,15 @@ public sealed partial class NtfsMftReader
         });
         var readers = new ConcurrentBag<NtfsMftReader>();
         Exception? workerError = null;
-        var targetWorkers = options.ScanMode == IndexScanWorkerMode.Adaptive
-            ? 1 : options.ScanWorkers;
+        var tuner = options.ScanMode == IndexScanWorkerMode.Adaptive
+            ? new MftScanWorkerTuner(AdaptiveStartWorkers(_scanWorkerKey)) : null;
+        var targetWorkers = tuner?.Target ?? options.ScanWorkers;
         long lastClaimed = -1;
         var workers = Enumerable.Range(0, ParallelMaxWorkers).Select(workerId =>
             Task.Factory.StartNew(() =>
             {
                 NtfsMftReader? reader = null;
+                byte[]? buffer = null;
                 try
                 {
                     while (true)
@@ -69,6 +81,12 @@ public sealed partial class NtfsMftReader
                             continue;
                         }
 
+                        if (reader is null)
+                        {
+                            var openStart = Stopwatch.GetTimestamp();
+                            reader = OpenParallelReader(sourceFactory, readers, totalLength, recordSize);
+                            trace?.ReaderOpened(Stopwatch.GetTimestamp() - openStart);
+                        }
                         slots.Wait(token);
                         if (workerId >= Volatile.Read(ref targetWorkers))
                         {
@@ -82,11 +100,16 @@ public sealed partial class NtfsMftReader
                             return;
                         }
 
-                        reader ??= OpenParallelReader(sourceFactory, readers, totalLength, recordSize);
                         var position = ordinal * ParallelChunkBytes;
                         var count = (int)Math.Min(ParallelChunkBytes, totalLength - position);
-                        var bytes = reader.ReadRawChunk(position, count, token);
-                        var entries = reader.ReadEntriesFromChunk(bytes, position, count, token).ToArray();
+                        var firstChunk = trace is not null && buffer is null;
+                        buffer ??= new byte[ParallelChunkBytes];
+                        var readStart = firstChunk ? Stopwatch.GetTimestamp() : 0;
+                        reader.ReadRawChunk(position, buffer.AsSpan(0, count), token);
+                        var parseStart = firstChunk ? Stopwatch.GetTimestamp() : 0;
+                        var entries = reader.ReadEntriesFromChunk(buffer, position, count, token).ToArray();
+                        if (firstChunk)
+                            trace!.FirstChunk(ordinal, parseStart - readStart, Stopwatch.GetTimestamp() - parseStart);
                         if (!channel.Writer.TryWrite(new ParallelChunk(ordinal, entries)))
                             throw new InvalidOperationException("MFT okuma kuyruğu kapandı.");
                     }
@@ -109,12 +132,7 @@ public sealed partial class NtfsMftReader
 
         var pending = new Dictionary<long, ParallelChunk>();
         long next = 0;
-        long windowEntries = 0;
         var clock = Stopwatch.StartNew();
-        var lastDecision = TimeSpan.Zero;
-        var bestRate = 0.0;
-        var bestWorkers = 1;
-        var adaptiveSettled = false;
         try
         {
             while (next < chunkCount)
@@ -124,6 +142,7 @@ public sealed partial class NtfsMftReader
                 ParallelChunk chunk;
                 if (!channel.Reader.TryRead(out chunk))
                 {
+                    var waitStart = trace is null ? 0 : Stopwatch.GetTimestamp();
                     try
                     {
                         chunk = channel.Reader.ReadAsync(token).AsTask().GetAwaiter().GetResult();
@@ -140,46 +159,27 @@ public sealed partial class NtfsMftReader
                     {
                         throw new InvalidDataException("MFT okuma kuyruğu tüm bloklar gelmeden kapandı.", error);
                     }
+                    trace?.Waited(Stopwatch.GetTimestamp() - waitStart);
                 }
                 if (chunk.Ordinal < next || !pending.TryAdd(chunk.Ordinal, chunk))
                     throw new InvalidDataException("MFT blok sırası tekrarlı veya geriye dönük.");
 
                 while (pending.Remove(next, out var ready))
                 {
+                    var deliverStart = trace is null ? 0 : Stopwatch.GetTimestamp();
                     foreach (var entry in ready.Entries)
                         yield return entry;
-                    windowEntries += ready.Entries.Length;
+                    trace?.Delivered(Stopwatch.GetTimestamp() - deliverStart, ready.Entries.Length);
                     next++;
                     slots.Release();
-
-                    if (options.ScanMode != IndexScanWorkerMode.Adaptive)
-                        continue;
                     var elapsed = clock.Elapsed;
-                    if (elapsed - lastDecision < TimeSpan.FromMilliseconds(1200))
-                        continue;
-                    var windowRate = windowEntries /
-                        Math.Max(0.001, (elapsed - lastDecision).TotalSeconds);
-                    windowEntries = 0;
-                    lastDecision = elapsed;
-                    var target = Volatile.Read(ref targetWorkers);
-                    if (windowRate > bestRate * 1.03)
-                    {
-                        bestRate = windowRate;
-                        bestWorkers = target;
-                    }
-                    if (!adaptiveSettled && target > bestWorkers &&
-                        windowRate <= bestRate * 1.03)
-                    {
-                        Volatile.Write(ref targetWorkers, bestWorkers);
-                        adaptiveSettled = true;
-                    }
-                    else if (!adaptiveSettled && target < ParallelMaxWorkers)
-                    {
-                        Volatile.Write(ref targetWorkers,
-                            Math.Min(ParallelMaxWorkers, target * 2));
-                    }
+                    trace?.Committed(elapsed, Volatile.Read(ref targetWorkers), next, next == chunkCount);
+                    if (tuner is not null)
+                        Volatile.Write(ref targetWorkers, tuner.Observe(elapsed, next));
                 }
             }
+            if (tuner is not null && _scanWorkerKey is not null)
+                RememberedScanWorkers[_scanWorkerKey] = tuner.Anchor;
         }
         finally
         {
@@ -216,16 +216,15 @@ public sealed partial class NtfsMftReader
         }
     }
 
-    private byte[] ReadRawChunk(long position, int count, CancellationToken cancellationToken)
+    private void ReadRawChunk(long position, Span<byte> buffer, CancellationToken cancellationToken)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         var recordSize = _source.Geometry.BytesPerRecord;
+        var count = buffer.Length;
         if (position < 0 || position % recordSize != 0 || count <= 0 ||
             count % recordSize != 0 || position > _mft.Length - count)
             throw new ArgumentOutOfRangeException(nameof(position));
-        var buffer = new byte[count];
         ReadMapped(_mft.Runs, position, buffer, cancellationToken);
-        return buffer;
     }
 
     private readonly record struct ParallelChunk(long Ordinal, NtfsMftEntry[] Entries);

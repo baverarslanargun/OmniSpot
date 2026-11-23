@@ -1,4 +1,5 @@
 using System.Runtime.Versioning;
+using SmartFileLauncher.Core.Application.Indexing;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.ChangeFeed.Store;
 using SmartFileLauncher.Core.ChangeFeed.Usn;
@@ -36,11 +37,18 @@ internal sealed class SharedCatalogService(ChangeFeedAdmissionService admission,
                 }
                 catch (Exception failure) when (failure is FormatException or ArgumentException or InvalidDataException)
                 { return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.InvalidRequest, "İndeks konumu çözülemedi."); }
-                var allowed = caller.Run(_ => roots.All(CanList));
-                if (!allowed) return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnauthorized, "Seçilen klasörlerden biri okunamıyor.");
+                var issue = caller.Run(_ => roots.Select(CheckRoot).FirstOrDefault(problem => problem is not null));
+                if (issue is not null)
+                    return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnauthorized, issue.Detail) with { IndexIssue = issue };
                 var layout = layoutFactory(owner);
-                if (roots.Any(root => UsnRootScope.TryCanonicalize(layout.StoreRoot, root, out _)))
-                    return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnauthorized, "Servisin katalog deposu indeks kapsamı olamaz.");
+                if (roots.FirstOrDefault(root => UsnRootScope.TryCanonicalize(layout.StoreRoot, root, out _)) is { } privateRoot)
+                {
+                    const string detail = "Servisin katalog deposu indeks kapsamı olamaz.";
+                    return ChangeFeedResponse.Failed(ChangeFeedResponseStatus.RootUnauthorized, detail) with
+                    {
+                        IndexIssue = new(IndexIssueReason.InvalidLocation, privateRoot, "OpenCatalog", detail)
+                    };
+                }
                 var captured = caller.Capture();
                 try
                 {
@@ -80,15 +88,18 @@ internal sealed class SharedCatalogService(ChangeFeedAdmissionService admission,
     private static ChangeFeedResponse Response(SharedCatalogStatus status) =>
         new(ChangeFeedProtocol.Version, ChangeFeedResponseStatus.Ok, Catalog: status);
 
-    internal static bool CanList(string path)
+    internal static IndexIssue? CheckRoot(string path)
     {
         try
         {
             using var entries = Directory.EnumerateFileSystemEntries(path).GetEnumerator();
             entries.MoveNext();
-            return true;
+            return null;
         }
-        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException) { return false; }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException)
+        {
+            return IndexIssue.FromException(failure, path, "Klasör erişim denetimi");
+        }
     }
 
     public void Dispose()

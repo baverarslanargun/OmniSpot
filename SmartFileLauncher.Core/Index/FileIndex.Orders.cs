@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Search.Paged;
 
@@ -20,11 +22,22 @@ public sealed partial class FileIndex
     [ThreadStatic] private static uint[]? _leftChain;
     [ThreadStatic] private static uint[]? _rightChain;
 
-    private void RebuildOrders(CancellationToken cancellationToken)
+    private void RebuildOrders(CancellationToken cancellationToken, Action<TimeSpan, int>? nameSortCompleted = null)
     {
         var ids = new int[_names.Count];
         for (var i = 0; i < ids.Length; i++) ids[i] = i;
-        IndexSorter.Sort(ids, (left, right) => _names.Compare(left, right), cancellationToken);
+        var started = Stopwatch.GetTimestamp();
+        int workers;
+        if (_nameSort.SortMethod == IndexSortMethod.Ps5)
+        {
+            workers = IndexNamePs5Sorter.Workers(_nameSort);
+            IndexNamePs5Sorter.Sort(ids, _names, workers, cancellationToken);
+        }
+        else
+        {
+            workers = IndexSorter.Sort(ids, _names.Compare, cancellationToken, _nameSort);
+        }
+        nameSortCompleted?.Invoke(Stopwatch.GetElapsedTime(started), workers);
         var rank = new uint[ids.Length];
         for (var i = 0; i < ids.Length; i++) rank[ids[i]] = (uint)i;
         var folders = FolderRanks(rank, cancellationToken);
@@ -127,7 +140,7 @@ public sealed partial class FileIndex
         return depth;
     }
 
-    private ReadOnlySpan<byte> KindOf(uint row) => IsDirectory(row) ? [] : _names.FoldedExtension(_name[row]);
+    private ReadOnlySpan<byte> KindOf(uint row) => IsDirectory(row) ? [] : _names.Extension(_name[row]);
 
     private int CompareBySize(uint left, uint right)
     {
@@ -143,7 +156,7 @@ public sealed partial class FileIndex
 
     private int CompareByKind(uint left, uint right)
     {
-        var byKind = KindOf(left).SequenceCompareTo(KindOf(right));
+        var byKind = IndexNames.CompareIgnoreCase(KindOf(left), KindOf(right));
         return byKind != 0 ? byKind : CompareByName(left, right);
     }
 
@@ -179,6 +192,8 @@ public sealed partial class FileIndex
 
     private RowOrder BuildOrder(SortField field, CancellationToken cancellationToken)
     {
+        if (field is SortField.Size or SortField.Modified)
+            return BuildNumericOrder(NumericKeys(field), cancellationToken);
         var position = new int[_count];
         for (var i = 0; i < _byName.Count; i++) position[_byName.Rows[i]] = i;
         var rows = new List<uint>(_byName.Count);
@@ -192,10 +207,81 @@ public sealed partial class FileIndex
         {
             SortField.Size => (left, right) => { var c = _size[left].CompareTo(_size[right]); return c != 0 ? c : position[left].CompareTo(position[right]); },
             SortField.Modified => (left, right) => { var c = _modified[left].CompareTo(_modified[right]); return c != 0 ? c : position[left].CompareTo(position[right]); },
-            _ => (left, right) => { var c = KindOf(left).SequenceCompareTo(KindOf(right)); return c != 0 ? c : position[left].CompareTo(position[right]); }
+            _ => (left, right) => { var c = IndexNames.CompareIgnoreCase(KindOf(left), KindOf(right)); return c != 0 ? c : position[left].CompareTo(position[right]); }
         };
         IndexSorter.Sort(values, compare, cancellationToken);
         return new RowOrder(WithSlack(values), values.Length);
+    }
+
+    private long[] NumericKeys(SortField field)
+    {
+        var keys = new long[_count];
+        if (field == SortField.Size)
+            for (var row = 0u; row < _count; row++) keys[row] = _size[row];
+        else
+            for (var row = 0u; row < _count; row++) keys[row] = _modified[row];
+        return keys;
+    }
+
+    private RowOrder BuildNumericOrder(long[] keys, CancellationToken cancellationToken)
+    {
+        var count = 0;
+        for (var i = 0; i < _byName.Count; i++)
+        {
+            if ((i & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+            if (!IsDirectory(_byName.Rows[i])) count++;
+        }
+        var rows = new uint[count + Math.Max(1024, count / 64)];
+        var at = 0;
+        ulong first = 0, varying = 0;
+        for (var i = 0; i < _byName.Count; i++)
+        {
+            if ((i & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+            var row = _byName.Rows[i];
+            if (IsDirectory(row)) continue;
+            var key = unchecked((ulong)keys[row]);
+            if (at == 0) first = key;
+            varying |= key ^ first;
+            rows[at++] = row;
+        }
+        if (count < 2 || varying == 0)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return new RowOrder(rows, count);
+        }
+        var scratch = new uint[count];
+        var source = rows;
+        var target = scratch;
+        Span<int> offsets = stackalloc int[256];
+        for (var shift = 0; shift < 64; shift += 8)
+        {
+            if ((varying & (0xFFUL << shift)) == 0) continue;
+            offsets.Clear();
+            for (var i = 0; i < count; i++)
+            {
+                if ((i & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+                var key = unchecked((ulong)keys[source[i]]) ^ 0x8000_0000_0000_0000UL;
+                offsets[(int)(key >> shift & 255)]++;
+            }
+            var position = 0;
+            for (var bucket = 0; bucket < offsets.Length; bucket++)
+            {
+                var length = offsets[bucket];
+                offsets[bucket] = position;
+                position += length;
+            }
+            for (var i = 0; i < count; i++)
+            {
+                if ((i & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
+                var row = source[i];
+                var key = unchecked((ulong)keys[row]) ^ 0x8000_0000_0000_0000UL;
+                target[offsets[(int)(key >> shift & 255)]++] = row;
+            }
+            (source, target) = (target, source);
+        }
+        if (!ReferenceEquals(source, rows)) Array.Copy(source, rows, count);
+        cancellationToken.ThrowIfCancellationRequested();
+        return new RowOrder(rows, count);
     }
 
     private static void MergeOrder(RowOrder order, ulong[] removed, bool anyRemoved, uint[] inserts, Comparison<uint> compare)
