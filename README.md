@@ -1,4 +1,4 @@
-# OmniSpot V1.0 - Akıllı Dosya Tarayıcı
+# OmniSpot V1.1 - Akıllı Dosya Tarayıcı
 
 <p align="center">
   <img src="assets/branding/omnispot-kobalt-yazili.svg" alt="OmniSpot logosu" width="260">
@@ -6,7 +6,7 @@
 
 Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek noktadan erişin!
 
-![OmniSpot](https://img.shields.io/badge/version-1.0.0-blue) ![.NET](https://img.shields.io/badge/.NET-8.0-purple) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![OmniSpot](https://img.shields.io/badge/version-1.1.0-blue) ![.NET](https://img.shields.io/badge/.NET-8.0-purple) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 ## 🚀 Özellikler
 
@@ -65,9 +65,11 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 ## 📦 Kurulum
 
 ### Yöntem 1: Hazır Kurulum (Önerilen)
-1. [Releases](https://github.com/baverarslanargun/OmniSpot/releases) sayfasından `OmniSpot-1.0.0-Setup.exe` indirin
+1. [Releases](https://github.com/baverarslanargun/OmniSpot/releases) sayfasından `OmniSpot-1.1.0-Setup.exe` indirin
 2. Kurulum sihirbazını takip edin
 3. Ctrl+Space ile başlatın!
+
+1.0.0 kurulum paketinden geçerken Windows Ayarları üzerinden önce eski OmniSpot sürümünü kaldırın, ardından yeni kurulum paketini çalıştırın. Kaldırıcı kullanıcı ayarlarını korur.
 
 ### Yöntem 2: PowerShell Kurulumu
 ```powershell

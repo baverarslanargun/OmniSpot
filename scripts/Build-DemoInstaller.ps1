@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
-    [string]$Version = '1.0.0',
+    [string]$Version = '1.1.0',
     [string]$InnoCompilerPath
 )
 
@@ -29,6 +29,9 @@ function Invoke-Publish([string]$Project, [string]$Output) {
         --configuration Release `
         --runtime win-x64 `
         --self-contained true `
+        "-p:Version=$Version" `
+        "-p:FileVersion=$Version.0" `
+        "-p:AssemblyVersion=$Version.0" `
         -p:PublishSingleFile=true `
         -p:IncludeNativeLibrariesForSelfExtract=true `
         -p:EnableCompressionInSingleFile=false `
