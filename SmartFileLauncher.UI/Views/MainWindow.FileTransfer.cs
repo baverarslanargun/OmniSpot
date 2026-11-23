@@ -28,7 +28,6 @@ public partial class MainWindow
 {
     private readonly HashSet<DesktopIconViewModel> _selectedDesktopItems = [];
     private readonly HashSet<string> _cutPaths = new(StringComparer.OrdinalIgnoreCase);
-    private readonly DispatcherTimer _transferFeedbackTimer = new() { Interval = TimeSpan.FromSeconds(3) };
     private object? _selectionAnchor;
     private FrameworkElement? _dragSource;
     private object? _pressedFileItem;
@@ -71,16 +70,6 @@ public partial class MainWindow
         {
             if (e.NewItems != null)
                 foreach (var item in e.NewItems.OfType<SearchResultViewModel>()) item.IsCut = _cutPaths.Contains(item.FullPath);
-        };
-        _transferFeedbackTimer.Tick += (_, _) =>
-        {
-            _transferFeedbackTimer.Stop();
-            FileTransferLabel.Visibility = Visibility.Collapsed;
-        };
-        FileTransferOverlay.SizeChanged += (_, _) =>
-        {
-            if (_transferFeedbackTimer.IsEnabled)
-                PositionFileTransferLabel(new Point(0, FileTransferOverlay.ActualHeight));
         };
     }
 
@@ -180,7 +169,11 @@ public partial class MainWindow
             var items = search ? _searchResults.Cast<object>().ToList() : _desktopIcons.Cast<object>().ToList();
             var index = items.IndexOf(item);
             var anchor = items.IndexOf(_selectionAnchor!);
-            if (anchor < 0) anchor = index;
+            if (anchor < 0 && index >= 0)
+            {
+                anchor = index;
+                _selectionAnchor = item;
+            }
             if (index >= 0)
                 for (var i = Math.Min(anchor, index); i <= Math.Max(anchor, index); i++)
                     SetTransferSelection(items[i], true);
@@ -194,16 +187,29 @@ public partial class MainWindow
 
     private void FileTransferMouseDown(object sender, MouseButtonEventArgs e)
     {
+        if (NameEditorContains(e.OriginalSource)) return;
         _collapseListSelectionOnRelease = false;
         (_dragSource, _pressedFileItem) = GetFileItem(e.OriginalSource as DependencyObject);
+        if (StaleFileResults && _pressedFileItem is SearchResultViewModel)
+        {
+            _dragSource = null;
+            _pressedFileItem = null;
+            e.Handled = true;
+            return;
+        }
         if (_pressedFileItem is not { } item || _dragSource is not { } element)
         {
             if (FileVisualParents(e.OriginalSource as DependencyObject).Contains(FileContentArea) &&
                 !FileVisualParents(e.OriginalSource as DependencyObject).Any(parent => parent is ScrollBar or ButtonBase))
             {
-                foreach (var selected in SelectedFileItems(ResultsContainer.IsVisible).ToArray())
-                    SetTransferSelection(selected, false);
-                _selectionAnchor = null;
+                var additive = (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) != ModifierKeys.None;
+                if (!additive)
+                {
+                    foreach (var selected in SelectedFileItems(ResultsContainer.IsVisible).ToArray())
+                        SetTransferSelection(selected, false);
+                    _selectionAnchor = null;
+                }
+                ArmMarquee(e, additive);
             }
             return;
         }
@@ -317,6 +323,8 @@ public partial class MainWindow
 
     private void FileTransferPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (NameEditing) return;
+        if ((ApplicationOwnsCommands || StaleFileResults) && !KeyboardInDualPane) return;
         if (e.Key != Key.V || Keyboard.Modifiers != ModifierKeys.Control ||
             Keyboard.FocusedElement is not TextBoxBase || GetPasteDestination() is not { } destination)
             return;
@@ -492,7 +500,6 @@ public partial class MainWindow
         _dragFeedbackDestination = effect == DragDropEffects.None ? null : destination;
         e.Effects = effect;
         e.Handled = true;
-        ClearDropFeedback();
         _fileDragFeedback?.Show(effect, _dragFeedbackDestination);
     }
 
@@ -539,43 +546,18 @@ public partial class MainWindow
         }
     }
 
-    private void ShowFileTransferLabel(string text, Point position)
-    {
-        _transferFeedbackTimer.Stop();
-        FileTransferLabel.Visibility = Visibility.Visible;
-        FileTransferText.Text = text;
-        PositionFileTransferLabel(position);
-    }
-
-    private void PositionFileTransferLabel(Point position)
-    {
-        FileTransferLabel.Measure(new System.Windows.Size(Math.Max(0, FileTransferOverlay.ActualWidth - 16), double.PositiveInfinity));
-        Canvas.SetLeft(FileTransferLabel, Math.Clamp(position.X + 14, 8,
-            Math.Max(8, FileTransferOverlay.ActualWidth - FileTransferLabel.DesiredSize.Width - 8)));
-        Canvas.SetTop(FileTransferLabel, Math.Clamp(position.Y + 18, 4,
-            Math.Max(4, FileTransferOverlay.ActualHeight - FileTransferLabel.DesiredSize.Height - 8)));
-    }
-
-    private void ClearDropFeedback()
-    {
-        if (!_transferFeedbackTimer.IsEnabled)
-            FileTransferLabel.Visibility = Visibility.Collapsed;
-    }
-
     private void ResetDrop()
     {
         _dragData = null;
         _dragPaths = [];
         _dragFeedbackDestination = null;
         _fileDragFeedback?.Hide();
-        ClearDropFeedback();
     }
 
     private void NotifyFileTransfer(string text)
     {
         ShowFeedback(text);
-        ShowFileTransferLabel(text, new Point(0, FileTransferOverlay.ActualHeight));
-        _transferFeedbackTimer.Start();
+        ShowToast(text);
     }
 
     private void SetCutPaths(string[] paths)
@@ -607,7 +589,7 @@ public partial class MainWindow
 
     private void StopFileClipboardListener()
     {
-        _transferFeedbackTimer.Stop();
+        _toastTimer.Stop();
         _fileDragFeedback?.Hide();
         if (_fileClipboardSource is not { } source) return;
         RemoveClipboardFormatListener(source.Handle);

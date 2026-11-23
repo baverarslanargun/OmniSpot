@@ -99,9 +99,8 @@ public sealed class ApplicationCompositionRoot : IDisposable
             Environment.GetEnvironmentVariable("OMNISPOT_INDEX_USER_PROFILE") != "1")
             locationProvider = new SettingsIndexedLocationProvider(_settings, locationProvider);
         _indexedLocations = locationProvider;
-        var useMft = SettingsIndexedLocationProvider.UsesMft(
-            _settings, Environment.GetEnvironmentVariable("OMNISPOT_INDEX_METHOD"));
-        _indexLifecycle = _measurementRun == null && useMft
+        var methodOverride = Environment.GetEnvironmentVariable("OMNISPOT_INDEX_METHOD");
+        _indexLifecycle = _measurementRun == null
             ? new VolumeIndexLifecycleService(new ChangeFeedClientChannel(), locationProvider,
                 Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "index.v2.live"), _settings.IndexBuild,
                 removeUnusedSnapshots: locationProvider is SettingsIndexedLocationProvider && _settings.IndexedFolders is { Count: > 0 },
@@ -123,11 +122,11 @@ public sealed class ApplicationCompositionRoot : IDisposable
                 _startupOptions.ProfileName ?? "ölçüm",
                 _startupOptions.Profile == MeasurementProfile.ProductionCopy);
 
+        var scoring = new BasicScoringStrategy();
         if (_measurementRun == null)
             _openHistory = new LocalOpenHistory(Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OmniSpot", "open-history.db"),
                 _log.Write);
-        var scoring = new BasicScoringStrategy();
         var standardSearch = new SearchEngine(
             _indexLifecycle.CreateSearchState,
             tokenizer,
@@ -202,7 +201,15 @@ public sealed class ApplicationCompositionRoot : IDisposable
             _shell,
             _log,
             _startupOptions,
-            _measurementRun);
+            _measurementRun,
+            recordFolderOpened: _openHistory == null ? null : _openHistory.RecordOpened,
+            startMenuShell: new WindowsStartMenuShell(),
+            folderSortsPath: _measurementRun == null
+                ? Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OmniSpot",
+                    "folder-views.json")
+                : null);
     }
 
     public void Dispose()
@@ -216,6 +223,7 @@ public sealed class ApplicationCompositionRoot : IDisposable
         _shell.Dispose();
         _connectivity.Dispose();
         _indexLifecycle.Dispose();
+        _openHistory?.Dispose();
         _measurementRun?.Dispose();
     }
 
@@ -223,7 +231,6 @@ public sealed class ApplicationCompositionRoot : IDisposable
     {
         public void Apply(bool enabled)
         {
-        _openHistory?.Dispose();
         }
     }
 

@@ -52,8 +52,8 @@ public sealed class AppSettings
         IndexingMethod = IndexScanMethod.SelectedFolders;
         IndexBuild = new();
         IndexedFolders = null;
-        ThumbnailPreviewsEnabled = true;
         IndexVolumeMethods = null;
+        ThumbnailPreviewsEnabled = true;
         ThumbnailCacheUseRamRatio = false;
         ThumbnailCacheMaxCount = 1000;
         ThumbnailCacheRamPercent = 0.1;

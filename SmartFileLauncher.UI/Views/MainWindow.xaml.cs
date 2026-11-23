@@ -36,6 +36,7 @@ public partial class MainWindow : Window {
     private readonly IFolderNavigationService _folderNavigation;
     private readonly IConnectivityMonitor _connectivityMonitor;
     private readonly IFileOperationService _fileOperations;
+    private readonly Action<string>? _recordFolderOpened;
     private readonly IApplicationShellService _shellService;
     private readonly ApplicationLog _applicationLog;
     private string _desktopPath {
@@ -73,6 +74,8 @@ public partial class MainWindow : Window {
     private static readonly TimeSpan AiInputDelay = TimeSpan.FromMilliseconds(600);
     internal TimeProvider SearchTimeProvider { get; set; } = TimeProvider.System;
     private SearchOperation? _currentSearch;
+    private readonly DispatcherTimer _fileSearchIndicatorDelay = new(DispatcherPriority.Background)
+        { Interval = TimeSpan.FromMilliseconds(120) };
     private SearchRequest? _completedSearchRequest;
     private SearchOutcome? _completedSearchOutcome;
     private SearchRequest? _refreshSearchRequest;
@@ -156,26 +159,35 @@ public partial class MainWindow : Window {
         _folderNavigation = folderNavigation ?? throw new ArgumentNullException(nameof(folderNavigation));
         _connectivityMonitor = connectivityMonitor ?? throw new ArgumentNullException(nameof(connectivityMonitor));
         _fileOperations = fileOperations ?? throw new ArgumentNullException(nameof(fileOperations));
+        _recordFolderOpened = recordFolderOpened;
         _shellService = shellService ?? throw new ArgumentNullException(nameof(shellService));
         _applicationLog = applicationLog ?? throw new ArgumentNullException(nameof(applicationLog));
         _startupOptions = startupOptions ?? throw new ArgumentNullException(nameof(startupOptions));
         _measurementRun = measurementRun;
+        _folderViews = new FolderViewMemory(
+            folderSortsPath == null ? null : new FolderSortStore(folderSortsPath, Log));
 
         DataContext = _viewModel;
         InitializeComponent();
+        InitializeStartMenu(startMenuShell);
         InitializeFileTransfers();
         System.ComponentModel.PropertyChangedEventManager.AddHandler(
             UiAnimationSettings.Current, HandleAnimationSettingChanged, nameof(UiAnimationSettings.Enabled));
         TrackMoreOptionsMenuState();
         DesktopIcons.ItemsSource = _desktopRows;
         _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
-        InitializeStartMenu(startMenuShell);
         _folderLoadingDelay.Tick += (_, _) => ShowFolderLoadingBarNow();
+        _fileSearchIndicatorDelay.Tick += (_, _) => {
+            _fileSearchIndicatorDelay.Stop();
+            if (_currentSearch is { } running && !_isPreparedForShutdown)
+                PresentFileSearch(_lastSearchQuery, true, running.UpdateLatency, waiting: true);
+        };
         _indexProgressTimer.Tick += (_, _) => UpdateIndexProgressText();
 
         _indexLifecycle.ProgressChanged += HandleIndexProgress;
         _indexLifecycle.Error += HandleIndexError;
         _indexLifecycle.Notice += HandleIndexNotice;
+        if (_indexLifecycle is IIndexHealthSource healthSource) healthSource.HealthChanged += HandleIndexHealth;
         _indexLifecycle.FileChanged += HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged += HandleReconciliationProgress;
         _indexLifecycle.ReconciliationStateChanged += HandleReconciliationStateChanged;
@@ -186,12 +198,15 @@ public partial class MainWindow : Window {
         SourceInitialized += HandleSourceInitialized;
         
         SearchBox.TextChanged += SearchBox_TextChanged;
-        SearchBox.TextChanged += (_, __) => SearchWatermark.Visibility =
+        SearchBox.TextChanged += (_, __) => SearchHints.Visibility =
             string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
+        SearchBox.PreviewKeyDown += SearchBox_PreviewKeyDown;
         SearchBox.KeyDown += SearchBox_KeyDown;
         ResultsList.MouseDoubleClick += (_, __) => OpenSelected();
+        InitializeSearchPaging();
+        InitializeSearchGrid();
+        InitializeFolderKeyboard();
         ConsoleToggleButton.Click += (_, __) => ToggleDiagnosticsWindow();
-        if (_indexLifecycle is IIndexHealthSource healthSource) healthSource.HealthChanged += HandleIndexHealth;
         InitializeDiagnostics();
         NaturalLanguageToggle.Checked += (_, __) => EnableNaturalLanguageMode();
         NaturalLanguageToggle.Unchecked += (_, __) => DisableNaturalLanguageMode();
@@ -207,10 +222,11 @@ public partial class MainWindow : Window {
         InitializeThumbnailViewport();
         InitializeFilters();
         InitializeNavigation();
-        InitializeSearchPaging();
-        InitializeSearchGrid();
-        InitializeFolderKeyboard();
+        InitializeSearchScope();
+        InitializeMarquee();
         InitializeBatchCommands();
+        InitializeToast();
+        InitializeNameEditing();
         InitializeTabs();
         InitializeShelf();
         InitializeDualPane();
@@ -226,8 +242,6 @@ public partial class MainWindow : Window {
         } catch (OperationCanceledException)
             when (_lifetimeCancellation.IsCancellationRequested) {
         }
-        InitializeSearchScope();
-        InitializeMarquee();
     }
     
     private void ApplyDefaultSettings() {
@@ -278,7 +292,7 @@ public partial class MainWindow : Window {
 
     private void HandleShellToggleRequested() {
         Dispatcher.Invoke(() => {
-            if (WindowState == WindowState.Minimized || !IsVisible) {
+            if (WindowState == WindowState.Minimized || !IsVisible || !IsActive) {
                 ShowAndActivate();
             } else {
                 MinimizeToTray();
@@ -291,7 +305,7 @@ public partial class MainWindow : Window {
     }
 
     private void HandleShellSettingsRequested() {
-        Dispatcher.Invoke(OpenSettings);
+        Dispatcher.Invoke(() => OpenSettings());
     }
 
     private void HandleShellExitRequested() {
@@ -300,7 +314,7 @@ public partial class MainWindow : Window {
     internal void ShowAndActivate() {
         var wasHidden = !IsVisible || WindowState == WindowState.Minimized;
         Show();
-        WindowState = WindowState.Normal;
+        if (WindowState == WindowState.Minimized) WindowState = WindowState.Normal;
         if (wasHidden) {
             if (Animate) Shell.BeginAnimation(OpacityProperty, new System.Windows.Media.Animation.DoubleAnimation(0, 1,
                 TimeSpan.FromMilliseconds(120)));
@@ -327,7 +341,7 @@ public partial class MainWindow : Window {
         }
     }
     
-    private void OpenSettings() {
+    private void OpenSettings(bool showIndexing = false) {
         _shellService.SuspendHotkey();
         
         var settingsWindow = new SettingsWindow(
@@ -340,6 +354,7 @@ public partial class MainWindow : Window {
         settingsWindow.SettingsChanged += OnSettingsChanged;
         settingsWindow.IndexRebuildRequested += OnIndexRebuildRequested;
         settingsWindow.RestartRequested += OnRestartRequested;
+        if (showIndexing) settingsWindow.FocusIndexingSettings();
         settingsWindow.ShowDialog();
         
         if (!_isPreparedForShutdown) {
@@ -352,6 +367,7 @@ public partial class MainWindow : Window {
         UiAnimationSettings.Current.Apply(newSettings.AnimationsEnabled);
         LoadAiEffortSelection();
         ApplyThumbnailSettings();
+        ApplyPinnedApplications();
         Log("⚙️ Ayarlar güncellendi");
     }
 
@@ -367,11 +383,11 @@ public partial class MainWindow : Window {
         PrepareForShutdown();
         System.Windows.Application.Current.Shutdown();
     }
-        ApplyPinnedApplications();
 
     internal void PrepareForShutdown() {
         if (_isPreparedForShutdown) return;
         _isPreparedForShutdown = true;
+        StopStartMenu();
         _indexProgressTimer.Stop();
         _indexProgressClock.Stop();
 
@@ -387,7 +403,6 @@ public partial class MainWindow : Window {
         var folderCancellation = Interlocked.Exchange(
             ref _folderLoadCancellation,
             null);
-        StopStartMenu();
         try {
             folderCancellation?.Cancel();
         } finally {
@@ -398,6 +413,7 @@ public partial class MainWindow : Window {
         _indexLifecycle.ProgressChanged -= HandleIndexProgress;
         _indexLifecycle.Error -= HandleIndexError;
         _indexLifecycle.Notice -= HandleIndexNotice;
+        if (_indexLifecycle is IIndexHealthSource healthSource) healthSource.HealthChanged -= HandleIndexHealth;
         _indexLifecycle.FileChanged -= HandleFileSystemChange;
         _indexLifecycle.ReconciliationProgressChanged -= HandleReconciliationProgress;
         _indexLifecycle.ReconciliationStateChanged -= HandleReconciliationStateChanged;
@@ -424,7 +440,6 @@ public partial class MainWindow : Window {
         _connectivityMonitor.Start();
     }
 
-        if (_indexLifecycle is IIndexHealthSource healthSource) healthSource.HealthChanged -= HandleIndexHealth;
     private void HandleConnectivityChanged(bool isConnected) {
         if (_isPreparedForShutdown ||
             Dispatcher.HasShutdownStarted ||
@@ -441,8 +456,9 @@ public partial class MainWindow : Window {
     
     private void UpdateAIButtonState(bool isConnected) {
         var tokenReady = _indexLifecycle.IsTokenIndexReady;
-        var available = _isIndexed && isConnected && tokenReady;
-        var tokensPreparing = _isIndexed && TokenIndexing.Enabled && !tokenReady;
+        var searchAvailable = _isIndexed && _indexHealth is not { SearchAvailable: false };
+        var available = searchAvailable && isConnected && tokenReady;
+        var tokensPreparing = searchAvailable && TokenIndexing.Enabled && !tokenReady;
         var catalogPreparing = SearchWaitShimmer.Visibility == Visibility.Visible;
         var preparing = catalogPreparing || (isConnected && tokensPreparing);
 
@@ -457,14 +473,15 @@ public partial class MainWindow : Window {
         if (!available && !catalogPreparing && _isNaturalLanguageMode) {
             NaturalLanguageToggle.IsChecked = false;
             _isNaturalLanguageMode = false;
-            SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
+            UpdateSearchHint();
             Log(!isConnected ? "⚠️ İnternet yok, AI modu kapatıldı"
                 : TokenIndexing.Enabled ? "AI indeksi hazırlanıyor; standart arama etkin" : "AI araması geçici olarak kapalı; ad araması etkin");
         }
     }
     
     private void Border_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
-        if (e.ChangedButton == MouseButton.Left) {
+        if (e.ChangedButton == MouseButton.Left && WindowDragAllowed &&
+            Mouse.LeftButton == MouseButtonState.Pressed) {
             this.DragMove();
         }
     }
@@ -543,28 +560,26 @@ public partial class MainWindow : Window {
             DeltaSyncProgressBar.IsIndeterminate = false;
             DeltaSyncProgressBar.Value = 50;
         }
-        foreach (var host in new[] { ResultsList, ResultsGrid }) {
-            foreach (var item in _searchResults) {
-                if (host.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container) continue;
-                container.BeginAnimation(OpacityProperty, null);
-                container.Opacity = 1;
-                if (container is System.Windows.Controls.Control control) {
-                    foreach (var name in new[] { "borderScale", "CardScale" }) {
-                        if (control.Template?.FindName(name, control) is System.Windows.Media.ScaleTransform scale) {
-                            scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, null);
-                            scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, null);
-                        }
-                    }
-                    foreach (var name in new[] { "border", "CardBorder" }) {
-                        if (control.Template?.FindName(name, control) is UIElement border)
-                            border.BeginAnimation(OpacityProperty, null);
+        foreach (var item in _searchResults) {
+            if (ResultsList.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement container) continue;
+            container.BeginAnimation(OpacityProperty, null);
+            container.Opacity = 1;
+            if (container is System.Windows.Controls.Control control) {
+                foreach (var name in new[] { "borderScale", "CardScale" }) {
+                    if (control.Template?.FindName(name, control) is System.Windows.Media.ScaleTransform scale) {
+                        scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleXProperty, null);
+                        scale.BeginAnimation(System.Windows.Media.ScaleTransform.ScaleYProperty, null);
                     }
                 }
-                if (container.RenderTransform is System.Windows.Media.TranslateTransform shift) {
-                    shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
-                    shift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
-                    container.RenderTransform = null;
+                foreach (var name in new[] { "border", "CardBorder" }) {
+                    if (control.Template?.FindName(name, control) is UIElement border)
+                        border.BeginAnimation(OpacityProperty, null);
                 }
+            }
+            if (container.RenderTransform is System.Windows.Media.TranslateTransform shift) {
+                shift.BeginAnimation(System.Windows.Media.TranslateTransform.XProperty, null);
+                shift.BeginAnimation(System.Windows.Media.TranslateTransform.YProperty, null);
+                container.RenderTransform = null;
             }
         }
     }
@@ -611,7 +626,7 @@ public partial class MainWindow : Window {
     
     private void EnableNaturalLanguageMode() {
         _isNaturalLanguageMode = true;
-        SearchWatermark.Text = "🤖 OmniSpot AI - Doğal dil ile ara";
+        UpdateSearchHint();
         Log("🤖 Doğal dil modu aktif");
         RestartSearchAfterModeChange();
     }
@@ -652,7 +667,7 @@ public partial class MainWindow : Window {
     
     private void DisableNaturalLanguageMode() {
         _isNaturalLanguageMode = false;
-        SearchWatermark.Text = "OmniSpot: Hafif Basit Masaüstü ve Tarayıcı";
+        UpdateSearchHint();
         Log("📝 Standart arama modu aktif");
         RestartSearchAfterModeChange();
     }
@@ -660,19 +675,21 @@ public partial class MainWindow : Window {
     private void RestartSearchAfterModeChange() {
         if (_restoringSearch) return;
         CancelCurrentSearch();
-        if (_isIndexed && !string.IsNullOrWhiteSpace(SearchBox.Text))
+        if (!string.IsNullOrWhiteSpace(SearchBox.Text))
             BeginSearch(SearchBox.Text, debounce: _isNaturalLanguageMode);
     }
     
     private void EnableGridView() {
         _isGridViewMode = true;
         ApplyViewMode(ResultsList, ResultsGridScroll);
+        RefreshApplicationLayout();
         Log("⊞ Grid görünümü aktif");
     }
 
     private void DisableGridView() {
         _isGridViewMode = false;
         ApplyViewMode(ResultsGridScroll, ResultsList);
+        RefreshApplicationLayout();
         Log("☰ Liste görünümü aktif");
     }
 
@@ -811,6 +828,7 @@ public partial class MainWindow : Window {
                 cancellationToken);
             stopwatch.Stop();
             if (_isPreparedForShutdown) return;
+            if (!_indexLifecycle.IsInitialized) return;
 
             _desktopPath = startup.DesktopPath;
             _indexedRootPaths = startup.RootPaths.ToList();
@@ -953,6 +971,7 @@ public partial class MainWindow : Window {
 
     private async Task ProcessFileChangeAsync()
     {
+        if (HoldFileChangesForNameEdit()) return;
         try
         {
             if (_currentFolderPath == null)
@@ -1005,6 +1024,7 @@ public partial class MainWindow : Window {
             {
                 return;
             }
+            if (HoldFileChangesForNameEdit()) return;
 
             var existing = _desktopIcons.ToDictionary(
                 item => item.FullPath,
@@ -1167,6 +1187,8 @@ public partial class MainWindow : Window {
             _completedSearchOutcome is not { } outcome ||
             request.Query != query) return;
 
+        if (outcome.IsPageable && _searchResults.Count > request.MaxResults)
+            request = request with { MaxResults = _searchResults.Count };
         await StartSearchAsync(query, request, updateLatency: false, previousOutcome: outcome);
     }
     
@@ -1241,8 +1263,21 @@ public partial class MainWindow : Window {
     private async void SearchBox_TextChanged(object sender, TextChangedEventArgs e) {
         if (_restoringSearch) return;
         var query = SearchBox.Text;
+        if (BrowsingApplications) {
+            ShowApplicationMatches(query);
+            return;
+        }
+
+        ResetKeyboardCardEffects();
+        ResultsList.UnselectAll();
+        if (SearchSurfaceVisible) {
+            _selectionAnchor = null;
+            _selectedItemPath = null;
+            _hoveredItemPath = null;
+        }
         
         if (string.IsNullOrWhiteSpace(query)) {
+            HideApplicationMatches();
             CancelCurrentSearch();
             _lastSearchQuery = string.Empty;
             var version = Volatile.Read(ref _searchVersion);
@@ -1282,13 +1317,19 @@ public partial class MainWindow : Window {
 
     private Task StartSearchAsync(string query, SearchRequest? request = null, bool updateLatency = true,
         SearchOutcome? previousOutcome = null, bool debounce = false) {
-        if (!_isIndexed || _isPreparedForShutdown) return Task.CompletedTask;
+        if (_isPreparedForShutdown || BrowsingApplications) return Task.CompletedTask;
+        if (!FileSearchReady) {
+            if (previousOutcome == null) ShowApplicationMatches(query);
+            return Task.CompletedTask;
+        }
 
         request ??= new SearchRequest(query, _isNaturalLanguageMode, _connectivityMonitor.IsConnected,
             ReasoningEffort: _appSettings.AiReasoningEffort, Filter: _searchView.Filter, Sort: _searchView.Sort,
             Scope: ActiveSearchScope);
         Volatile.Write(ref _refreshSearchRequest, request);
+        ResetSearchPaging();
         if (previousOutcome == null) {
+            _presentedFileQuery = null;
             _completedSearchRequest = null;
             _completedSearchOutcome = null;
         }
@@ -1299,7 +1340,9 @@ public partial class MainWindow : Window {
         previous?.Cancel();
 
         _lastSearchQuery = query;
-        return ExecuteSearchRequestAsync(query, version, operation, request, updateLatency, previousOutcome);
+        var pending = ExecuteSearchRequestAsync(query, version, operation, request, updateLatency, previousOutcome);
+        if (previousOutcome == null) ShowApplicationMatches(query);
+        return pending;
     }
 
     private async Task ExecuteSearchRequestAsync(
@@ -1310,30 +1353,19 @@ public partial class MainWindow : Window {
         bool updateLatency,
         SearchOutcome? previousOutcome) {
         var cancellationToken = operation.Token;
+        var newFileSearch = request is { NaturalLanguageMode: false } && previousOutcome == null;
         try {
-            await Dispatcher.Yield(DispatcherPriority.Background);
+            _fileSearchIndicatorDelay.Stop();
+            if (newFileSearch) _fileSearchIndicatorDelay.Start();
+            if (!newFileSearch) await Dispatcher.Yield(DispatcherPriority.Background);
             if (operation.WaitForInput)
                 await Task.Delay(AiInputDelay, SearchTimeProvider, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(version)) return;
 
-            if (previousOutcome == null) {
-                DesktopIconsScroll.Visibility = Visibility.Collapsed;
-                ShowPanel(ResultsContainer);
-                UpdateFilterBadge();
-            }
-            if (updateLatency) {
-                SearchLatencyText.Text = "… ms";
-                SearchLatencyText.ToolTip = "Arama sürüyor";
-                SearchLatencyText.Visibility = Visibility.Visible;
-            }
+            if (!newFileSearch) PresentFileSearch(query, previousOutcome == null, updateLatency, waiting: true);
 
-            if (previousOutcome == null && _searchResults.Count == 0 && NoResultsPanel.Visibility != Visibility.Visible) {
-                ShowSearchingIndicator(query);
-            }
-
-            await RunSearchAsync(query, version, cancellationToken, request, operation.StartedTimestamp, updateLatency, previousOutcome);
-        ResetSearchPaging();
+            await RunSearchAsync(query, version, cancellationToken, request, operation.StartedTimestamp, updateLatency, previousOutcome, newFileSearch);
         } catch (OperationCanceledException) {
         } catch (Exception ex) {
             if (!IsCurrentSearch(version)) return;
@@ -1343,9 +1375,11 @@ public partial class MainWindow : Window {
                 SearchLatencyText.Text = "— ms";
                 SearchLatencyText.ToolTip = "Arama tamamlanamadı";
             }
+            if (newFileSearch) PresentFileSearch(query, true, updateLatency, waiting: false);
             ShowError("Arama sırasında bir hata oluştu", ex.Message);
         } finally {
-            Interlocked.CompareExchange(ref _currentSearch, null, operation);
+            if (Interlocked.CompareExchange(ref _currentSearch, null, operation) == operation)
+                _fileSearchIndicatorDelay.Stop();
             try {
                 await operation.CancellationTask;
             } catch (Exception ex) {
@@ -1357,8 +1391,26 @@ public partial class MainWindow : Window {
         }
     }
 
+    private void PresentFileSearch(string query, bool newSearch, bool updateLatency, bool waiting) {
+        if (newSearch) {
+            DesktopIconsScroll.Visibility = Visibility.Collapsed;
+            ShowPanel(ResultsContainer);
+            UpdateFilterBadge();
+        }
+        if (!waiting) return;
+        if (updateLatency) {
+            SearchLatencyText.Text = "… ms";
+            SearchLatencyText.ToolTip = "Arama sürüyor";
+            SearchLatencyText.Visibility = Visibility.Visible;
+        }
+        if (newSearch && _searchResults.Count == 0 && NoResultsPanel.Visibility != Visibility.Visible)
+            ShowSearchingIndicator(query);
+    }
+
     private void CancelCurrentSearch() {
+        _fileSearchIndicatorDelay.Stop();
         Volatile.Write(ref _refreshSearchRequest, null);
+        ResetSearchPaging();
         _completedSearchRequest = null;
         _completedSearchOutcome = null;
         Interlocked.Increment(ref _searchVersion);
@@ -1416,7 +1468,8 @@ public partial class MainWindow : Window {
     }
     
     private void ShowError(string title, string message) {
-        ResetSearchPaging();
+        FinishApplicationLayout();
+        if (!BrowsingApplications) FileContentArea.Visibility = Visibility.Visible;
         SearchingPanel.Visibility = Visibility.Collapsed;
         NoResultsPanel.Visibility = Visibility.Collapsed;
         ResultsList.Visibility = Visibility.Collapsed;
@@ -1587,7 +1640,8 @@ public partial class MainWindow : Window {
         SearchRequest? request,
         long requestTimestamp,
         bool updateLatency,
-        SearchOutcome? previousOutcome) {
+        SearchOutcome? previousOutcome,
+        bool newFileSearch) {
         cancellationToken.ThrowIfCancellationRequested();
         if (!IsCurrentSearch(searchVersion)) return;
 
@@ -1614,18 +1668,24 @@ public partial class MainWindow : Window {
                 request = request with { NaturalLanguageMode = false };
             var naturalLanguageMode = request.NaturalLanguageMode;
             if (naturalLanguageMode && previousOutcome == null) Log($"🤖 Arama eforu: {reasoningEffort}");
-            var (outcome, queryElapsed) = await SearchInBackgroundAsync(request,
-                searchVersion, cancellationToken, previousOutcome);
+            var (outcome, queryElapsed) = await SearchInBackgroundAsync(request, searchVersion, cancellationToken, previousOutcome);
             var searchElapsed = Stopwatch.GetElapsedTime(searchTimestamp);
 
-            await WaitForSearchPresentationAsync(cancellationToken);
+            if (naturalLanguageMode || previousOutcome != null)
+                await WaitForSearchPresentationAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(searchVersion)) return;
+            if (newFileSearch) {
+                _fileSearchIndicatorDelay.Stop();
+                PresentFileSearch(query, true, updateLatency, waiting: false);
+            }
 
             RecordSearchMetrics(query.Length, searchElapsed, outcome.Results.Count);
 
             if (previousOutcome != null && HaveSameSearchResults(previousOutcome, outcome)) {
                 _completedSearchRequest = request;
                 _completedSearchOutcome = outcome;
+                StartSearchPaging(request, outcome, searchVersion);
                 return;
             }
 
@@ -1648,15 +1708,20 @@ public partial class MainWindow : Window {
                 FallbackWarningBanner.Visibility = Visibility.Collapsed;
             }
 
-            await RenderSearchResultsAsync(outcome.Results, searchVersion, cancellationToken);
+            _presentedFileQuery = query;
+            FinishApplicationLayout();
+            await RenderSearchResultsAsync(outcome.Results, previousOutcome == null, searchVersion, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
             if (!IsCurrentSearch(searchVersion)) return;
 
             _completedSearchRequest = request;
             _completedSearchOutcome = outcome;
+            StartSearchPaging(request, outcome, searchVersion);
+            UpdateFileAreaForApplications();
             if (updateLatency) {
                 var totalElapsed = Stopwatch.GetElapsedTime(requestTimestamp);
                 SearchLatencyText.Text = $"{queryElapsed.TotalMilliseconds:0.0} ms";
+                SearchLatencyText.Visibility = Visibility.Visible;
                 SearchLatencyText.ToolTip =
                     $"Arama işlemi: {queryElapsed.TotalMilliseconds:0.0} ms\n" +
                     $"İstek → liste güncellemesi: {totalElapsed.TotalMilliseconds:0.0} ms\n" +
@@ -1684,14 +1749,14 @@ public partial class MainWindow : Window {
                 SearchLatencyText.Text = "— ms";
                 SearchLatencyText.ToolTip = "Arama tamamlanamadı";
             }
+            if (newFileSearch) PresentFileSearch(query, true, updateLatency, waiting: false);
             ShowError("Arama sırasında bir hata oluştu", ex.Message);
         }
     }
 
-    private string NoResultsHintText() => _searchView.Filter.IsActive
+    private string NoResultsHintText() => ScopedNoResultsHint() ?? (_searchView.Filter.IsActive
         ? "Etkin filtre sonuçları gizliyor olabilir"
-        : "Farklı anahtar kelimeler deneyin";
-                StartSearchPaging(request, outcome, searchVersion);
+        : "Farklı anahtar kelimeler deneyin");
 
     private static bool HaveSameSearchResults(SearchOutcome previous, SearchOutcome current) {
         if (previous.Mode != current.Mode || previous.UsedFallback != current.UsedFallback ||
@@ -1722,8 +1787,6 @@ public partial class MainWindow : Window {
             var diagnostics = await Task.Run(
                 () => _searchDiagnostics.Inspect(query, cancellationToken), cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
-            StartSearchPaging(request, outcome, searchVersion);
-            UpdateFileAreaForApplications();
             if (!IsCurrentSearch(version) || _isPreparedForShutdown) return;
             foreach (var diagnostic in diagnostics) {
                 Log($"   Token '{diagnostic.Token}' → indekste {diagnostic.MatchCount} eşleşme");
@@ -1824,18 +1887,11 @@ public partial class MainWindow : Window {
         }
 
         Log("⚠️ Hiç sonuç bulunamadı!");
-        foreach (var diagnostic in _searchDiagnostics.Inspect(
-                     _lastSearchQuery,
-                     _lifetimeCancellation.Token)) {
-            Log($"   Token '{diagnostic.Token}' → indekste {diagnostic.MatchCount} eşleşme");
-            if (diagnostic.SampleNames.Count > 0) {
-                Log($"      Örnek: {string.Join(", ", diagnostic.SampleNames)}");
-            }
-        }
     }
 
     private async Task RenderSearchResultsAsync(
         IReadOnlyList<SearchResult> results,
+        bool startAtTop,
         long searchVersion,
         CancellationToken cancellationToken) {
         SearchingPanel.Visibility = Visibility.Collapsed;
@@ -1862,38 +1918,27 @@ public partial class MainWindow : Window {
         var existing = new Dictionary<string, SearchResultViewModel>(StringComparer.OrdinalIgnoreCase);
         foreach (var current in _searchResults) existing[current.FullPath] = current;
 
-        var desired = new List<SearchResultViewModel>(results.Count);
-        foreach (var result in results) {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (existing.TryGetValue(result.FullPath, out var kept)) {
-                kept.Score = result.Score;
-                desired.Add(kept);
-                continue;
-            }
-
-            var isDirectory = result.IsDirectory;
-            var viewModel = new SearchResultViewModel {
-                Name = result.Name,
-                FullPath = result.FullPath,
-                Score = result.Score,
-                Icon = isDirectory ? "folder" : GetFileIcon(result.Name),
-                IsDirectory = isDirectory
-            };
-
-            if (isDirectory) {
-                viewModel.SetFolderColors(result.Name);
-            }
-
-            desired.Add(viewModel);
+        if (existing.Count != 0) {
+            var wanted = new HashSet<SearchResultViewModel>();
+            foreach (var result in results)
+                if (existing.TryGetValue(result.FullPath, out var item)) wanted.Add(item);
+            for (var i = _searchResults.Count - 1; i >= 0; i--)
+                if (!wanted.Contains(_searchResults[i])) _searchResults.RemoveAt(i);
         }
+        if (startAtTop) ScrollSearchResultsToTop();
 
         const int resultUpdateBudgetMilliseconds = 2;
         const int maxChangesPerBatch = 8;
+        var firstFrame = Math.Min(results.Count, _isGridViewMode ? SearchGridColumns * 5 : 8);
+        var firstFramePending = startAtTop && _searchResults.Count == 0;
         var batchStarted = Stopwatch.GetTimestamp();
         var changesInBatch = 0;
 
         async ValueTask YieldToInputIfNeededAsync() {
-            if (++changesInBatch < maxChangesPerBatch &&
+            if (firstFramePending) {
+                if (_searchResults.Count < firstFrame) return;
+                firstFramePending = false;
+            } else if (++changesInBatch < maxChangesPerBatch &&
                 Stopwatch.GetElapsedTime(batchStarted).TotalMilliseconds < resultUpdateBudgetMilliseconds) return;
 
             await WaitForSearchPresentationAsync(cancellationToken);
@@ -1902,80 +1947,29 @@ public partial class MainWindow : Window {
             changesInBatch = 0;
         }
 
-        var wanted = new HashSet<SearchResultViewModel>(desired);
-        var previous = _searchResults.ToArray();
-        for (var i = previous.Length - 1; i >= 0; i--) {
-            if (!wanted.Contains(previous[i])) {
-                _searchResults.Remove(previous[i]);
-                await YieldToInputIfNeededAsync();
-            }
-        }
-
         var slot = 0;
-        foreach (var item in desired) {
-            var currentIndex = _searchResults.IndexOf(item);
-            if (currentIndex < 0) {
-                _searchResults.Insert(slot, item);
-                await YieldToInputIfNeededAsync();
-            } else if (currentIndex != slot) {
-                _searchResults.Move(currentIndex, slot);
-                await YieldToInputIfNeededAsync();
+        foreach (var result in results) {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (existing.Remove(result.FullPath, out var item)) {
+                item.Score = result.Score;
+                if (slot < _searchResults.Count && ReferenceEquals(_searchResults[slot], item)) {
+                    slot++;
+                    continue;
+                }
+                var currentIndex = _searchResults.IndexOf(item);
+                if (currentIndex < 0) _searchResults.Insert(slot, item);
+                else _searchResults.Move(currentIndex, slot);
+            } else {
+                _searchResults.Insert(slot, CreateSearchResultViewModel(result));
             }
             slot++;
+            await YieldToInputIfNeededAsync();
         }
 
         CancelSearchThumbnailRequests();
         ReloadSearchThumbnails();
     }
 
-    private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
-        if (e.Key == Key.Enter) {
-            OpenSelected();
-            e.Handled = true;
-        } else if (e.Key == Key.Escape) {
-            if (!string.IsNullOrWhiteSpace(SearchBox.Text)) {
-                SearchBox.Clear();
-                e.Handled = true;
-            } else {
-                SafeClose();
-            }
-        }
-    }
-    
-    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
-        if (UiPreviewEnabled && e.Key == Key.F9) {
-            CycleUiPreview();
-            e.Handled = true;
-            return;
-        }
-
-        if (e.Key == Key.Escape) {
-            SafeClose();
-            return;
-        }
-        
-        bool ctrlPressed = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
-        bool shiftPressed = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
-        bool altPressed = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
-        
-        var targetPath = _hoveredItemPath ?? _selectedItemPath;
-
-        if (ctrlPressed && HandleFileTransferKey(e, targetPath)) {
-            e.Handled = true;
-            return;
-        }
-
-        if (ctrlPressed && shiftPressed && e.Key == Key.N) {
-            ContextMenu_NewFolder(this, new RoutedEventArgs());
-            e.Handled = true;
-            return;
-        }
-        
-        if (e.Key == Key.F2 && KeyboardTargets(targetPath) is { Count: > 0 } renameTargets) {
-            RenameItems(renameTargets);
-            e.Handled = true;
-            return;
-        }
     private bool HasCurrentFileSearch => SearchSurfaceVisible && !_tabSwitchInProgress &&
         !BrowsingApplications && _presentedFileQuery == SearchBox.Text;
 
@@ -2025,6 +2019,68 @@ public partial class MainWindow : Window {
         e.Handled = true;
     }
 
+    private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
+        if (HandleApplicationKey(e)) return;
+        if (e.Key == Key.Enter) {
+            if (HasCurrentFileSearch) {
+                if (Keyboard.Modifiers == ModifierKeys.None && ResultsList.SelectedIndex < 0 && _searchResults.Count > 0)
+                    SelectFileSearchResult(0);
+                OpenSelected();
+            } else if (Keyboard.Modifiers == ModifierKeys.None) {
+                OpenSelectedFolderItem();
+            }
+            e.Handled = true;
+        } else if (e.Key == Key.Escape) {
+            if (!string.IsNullOrWhiteSpace(SearchBox.Text)) {
+                SearchBox.Clear();
+                e.Handled = true;
+            } else {
+                SafeClose();
+            }
+        }
+    }
+
+    private void Window_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
+        if (NameEditing) return;
+        if (UiPreviewEnabled && e.Key == Key.F9) {
+            CycleUiPreview();
+            e.Handled = true;
+            return;
+        }
+
+        if ((ApplicationOwnsCommands || StaleFileResults) && !KeyboardInDualPane && e.Key != Key.Escape) return;
+        if (BrowsingApplications && e.Key == Key.Escape) {
+            CloseApplicationBrowser();
+            e.Handled = true;
+            return;
+        }
+        if (e.Key == Key.Escape) {
+            SafeClose();
+            return;
+        }
+
+        bool ctrlPressed = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        bool shiftPressed = (Keyboard.Modifiers & ModifierKeys.Shift) == ModifierKeys.Shift;
+        bool altPressed = (Keyboard.Modifiers & ModifierKeys.Alt) == ModifierKeys.Alt;
+
+        var targetPath = FocusedFileSearchPath ?? _hoveredItemPath ?? _selectedItemPath;
+
+        if (ctrlPressed && HandleFileTransferKey(e, targetPath)) {
+            e.Handled = true;
+            return;
+        }
+
+        if (ctrlPressed && shiftPressed && e.Key == Key.N) {
+            ContextMenu_NewFolder(this, new RoutedEventArgs());
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key == Key.F2 && KeyboardTargets(targetPath) is { Count: > 0 } renameTargets) {
+            RenameItems(renameTargets);
+            e.Handled = true;
+            return;
+        }
         
         if (e.Key == Key.Delete && KeyboardTargets(targetPath) is { Count: > 0 } deleteTargets) {
             DeleteItems(deleteTargets);
@@ -2104,7 +2160,7 @@ public partial class MainWindow : Window {
         }
     }
 
-    private void RenameItem(string path) {
+    private void RenameItemWithDialog(string path) {
         var currentName = Path.GetFileName(path);
         var dialog = new RenameDialog(currentName);
         dialog.Owner = this;
@@ -2129,57 +2185,52 @@ public partial class MainWindow : Window {
         }
     }
     
-    private void DeleteItem(string path) {
-        var name = Path.GetFileName(path);
-        var confirmed = ModernDialog.Confirm(this, $"'{name}' silinsin mi?",
-            "Öğe Geri Dönüşüm Kutusu'na taşınacak, oradan geri alabilirsiniz.", "Sil", DialogKind.Danger);
-        
-        if (confirmed) {
-            try {
-                var itemKind = _fileOperations.DeleteToRecycleBin(path);
-                if (itemKind != FileItemKind.Missing) {
-                    ShowFeedback($"🗑️ Silindi: {name}");
-                }
-                RemoveItemFromView(path);
-            } catch (Exception ex) {
-                ShowFeedback($"❌ Silme hatası: {ex.Message}");
-            }
-        }
-    }
+    private void DeleteItem(string path) => DeleteWithUndo([path], fromPane: false);
     
     private void OpenSelected() {
-        if (ResultsList.SelectedItem is SearchResultViewModel srvm) {
+        if (_startMenuCatalog != null && !SearchSurfaceVisible) return;
+        if (!StaleFileResults && ResultsList.SelectedItem is SearchResultViewModel srvm) {
             OpenFile(srvm.FullPath);
         }
     }
     
-    private void DesktopIcon_Click(object sender, RoutedEventArgs e) {
-        if (sender is System.Windows.Controls.Button btn && btn.Tag is string path) {
+    private void FileTile_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
+        if (StaleFileResults && sender is FrameworkElement { DataContext: SearchResultViewModel }) return;
+        if (e.ClickCount == 2 && Keyboard.Modifiers == ModifierKeys.None &&
+            sender is System.Windows.Controls.Button { Tag: string path }) {
             OpenFile(path);
+            e.Handled = true;
         }
     }
-    
-    private void GridItem_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) {
-        if (sender is Border border && border.DataContext is SearchResultViewModel srvm) {
-            OpenFile(srvm.FullPath);
+
+    private void FileTile_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
+        if (StaleFileResults && sender is FrameworkElement { DataContext: SearchResultViewModel }) return;
+        if (e.Key is Key.Enter or Key.Space && Keyboard.Modifiers == ModifierKeys.None &&
+            sender is System.Windows.Controls.Button { Tag: string path }) {
+            OpenFromKeyboard(path);
+            e.Handled = true;
         }
     }
-    
-    private void GridItem_Click(object sender, RoutedEventArgs e) {
-        if (sender is System.Windows.Controls.Button btn && btn.Tag is string path) {
-            OpenFile(path);
-        }
-    }
-    
+
     private void OpenFile(string path) {
         try {
             if (_fileOperations.GetItemKind(path) == FileItemKind.Directory) {
-                _ = NavigateToFolderAsync(path);
+                _ = OpenFolderItemAsync(path);
             } else {
                 _fileOperations.OpenFile(path);
             }
         } catch (Exception ex) {
-            ModernDialog.Show(this, "Açılamadı", ex.Message, DialogKind.Warning);
+            Log($"❌ Açılamadı: {path}: {ex.Message}");
+            ShowErrorToast($"“{Path.GetFileName(path)}” açılamadı. {ex.Message}", "Birlikte aç", () => OpenWithReported(path));
+        }
+    }
+
+    private void OpenWithReported(string path) {
+        try {
+            _fileOperations.OpenWith(path);
+        } catch (Exception ex) {
+            Log($"❌ Birlikte aç hatası: {ex.Message}");
+            ShowErrorToast($"Birlikte aç başarısız: {ex.Message}");
         }
     }
     
@@ -2286,7 +2337,7 @@ public partial class MainWindow : Window {
 
             _thumbnailViewport?.Cancel();
             _desktopIcons.Clear();
-            EmptyFolderPanel.Visibility = Visibility.Collapsed;
+            SetFolderLooksEmpty(false);
 
             var folderView = _folderViews.Get(folderPath);
             _currentFolderEntries = page.Entries;
@@ -2516,7 +2567,7 @@ public partial class MainWindow : Window {
             Log($"🔗 Birlikte aç: {path}");
         } catch (Exception ex) {
             Log($"❌ Birlikte aç hatası: {ex.Message}");
-            ModernDialog.Show(this, "Birlikte aç başarısız", ex.Message, DialogKind.Danger);
+            ShowErrorToast($"Birlikte aç başarısız: {ex.Message}");
         }
     }
 
@@ -2538,7 +2589,8 @@ public partial class MainWindow : Window {
     private void ContextMenu_Rename(object sender, RoutedEventArgs e) {
         var path = GetPathFromContextMenu(sender);
         if (string.IsNullOrEmpty(path)) return;
-        RenameItems(MenuTargets(path));
+        var targets = MenuTargets(path);
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, () => RenameItems(targets));
     }
     
     private void ContextMenu_Delete(object sender, RoutedEventArgs e) {
@@ -2599,43 +2651,9 @@ public partial class MainWindow : Window {
         return _selectedItemPath;
     }
     
-    private void ContextMenu_NewFolder(object sender, RoutedEventArgs e) {
-        var targetFolder = _currentFolderPath ??
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        var dialog = new RenameDialog("Yeni Klasör", isNew: true) {
-            Owner = this
-        };
+    private void ContextMenu_NewFolder(object sender, RoutedEventArgs e) => BeginNewItem(folder: true);
 
-        if (dialog.ShowDialog() != true) return;
-
-        try {
-            _fileOperations.CreateFolder(targetFolder, dialog.NewName);
-            Log($"📁 Yeni klasör oluşturuldu: {dialog.NewName}");
-            RefreshCurrentFolder();
-        } catch (Exception ex) {
-            Log($"❌ Klasör oluşturma hatası: {ex.Message}");
-            ModernDialog.Show(this, "Klasör oluşturulamadı", ex.Message, DialogKind.Danger);
-        }
-    }
-
-    private void ContextMenu_NewTextFile(object sender, RoutedEventArgs e) {
-        var targetFolder = _currentFolderPath ??
-            Environment.GetFolderPath(Environment.SpecialFolder.Desktop);
-        var dialog = new RenameDialog("Yeni Metin Belgesi.txt", isNew: true) {
-            Owner = this
-        };
-
-        if (dialog.ShowDialog() != true) return;
-
-        try {
-            _fileOperations.CreateTextFile(targetFolder, dialog.NewName);
-            Log($"📄 Yeni dosya oluşturuldu: {dialog.NewName}");
-            RefreshCurrentFolder();
-        } catch (Exception ex) {
-            Log($"❌ Dosya oluşturma hatası: {ex.Message}");
-            ModernDialog.Show(this, "Dosya oluşturulamadı", ex.Message, DialogKind.Danger);
-        }
-    }
+    private void ContextMenu_NewTextFile(object sender, RoutedEventArgs e) => BeginNewItem(folder: false);
 
     private void ContextMenu_Refresh(object sender, RoutedEventArgs e) {
         RefreshCurrentFolder();
@@ -2687,6 +2705,7 @@ public partial class MainWindow : Window {
         
         if (icon != null) {
             _desktopIcons.Remove(icon);
+            ForgetRemovedFolderItem(path);
             Log($"✅ Görünümden kaldırıldı: {Path.GetFileName(path)}");
         }
     }

@@ -69,7 +69,8 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            ModernDialog.Show(this, "Tercih kaydedilemedi", ex.Message, DialogKind.Danger);
+            Log($"❌ Tercih kaydedilemedi: {ex.Message}");
+            ShowErrorToast($"Tercih kaydedilemedi: {ex.Message}");
         }
     }
 }

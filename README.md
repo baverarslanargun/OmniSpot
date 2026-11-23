@@ -37,8 +37,10 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 | **Ctrl+V** | Windows panosundaki dosya ve klasörleri hedefe yapıştır |
 | **Ctrl / Shift + tıklama** | Birden çok öğe veya bir öğe aralığı seç |
 | **Ctrl / Shift + sürükleme** | Sırasıyla kopyala veya taşı |
-| **F2** | Yeniden adlandır (hover); 2+ öğe seçiliyse toplu yeniden adlandır |
-| **Delete** | Sil (hover); 2+ öğe seçiliyse seçimin tamamını sil |
+| **F2** | Adı satırın veya kartın üstünde düzenle (hover); Enter kaydeder, Esc vazgeçer. 2+ öğe seçiliyse toplu yeniden adlandır |
+| **Ctrl+Shift+N** | Klasör görünümünde yeni klasörü yerinde adlandırarak oluştur |
+| **Delete** | Onay sormadan Geri Dönüşüm Kutusu'na taşı (hover); 2+ öğe seçiliyse seçimin tamamını taşı. Kutuya gidemeyen öğe için Windows kalıcı silme uyarısı gösterir |
+| **Ctrl+Z** | Silme bildirimi açıkken son silinenleri Geri Dönüşüm Kutusu'ndan geri getir |
 | **F5** | Yenile |
 | **Alt+← / Alt+→** | Geri / ileri (fare yan tuşları da çalışır); geri tuşu aramaya da döner |
 | **Alt+↑** | Üst klasör |
@@ -53,12 +55,12 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 ### Doğal Dil Arama ve Gizlilik
 
 - Standart dosya araması yerel indeks üzerinde çalışır.
-- Doğal Dil modu, sorguyu yapılandırmak için Groq API'ına iki paralel istek göndermeyi dener. Bu mod kullanıldığında sorgu metni harici servise aktarılabilir.
-- Groq anahtarı eksik/geçersizse veya servis yanıt vermezse uygulama kural tabanlı yerel parser'a döner. Fallback daha sınırlı sorgu semantiği sunar.
-- Yapılandırma ve güncel mimari için [doğal dil arama rehberine](docs/guides/llm-setup.md) bakın.
 - “İlgililik” sıralamasında önce tam ad, ardından uzantısız sorgularda tam dosya gövdesi, ad başlangıcı, sözcük başlangıcı ve diğer eşleşmeler gelir. Örneğin `cmd.exe`, `appcmd.exe` dosyasından önce görünür.
 - Aynı düzeyde eşleşen sonuçlarda OmniSpot üzerinden açtığınız öğeler öne çıkar. Açılan yol, açılma sayısı ve son açılış zamanı kullanıcıya ait `%LOCALAPPDATA%\OmniSpot\open-history.db` dosyasında tutulur. İndeksi yeniden oluşturmak bu geçmişi korur.
 - Klasör görünümünde seçilen sıralama o klasöre özel hatırlanır ve yeniden başlatmadan sonra da geçerlidir. Son değiştirilen en çok 1000 klasörün yolu ve sıralaması `%LOCALAPPDATA%\OmniSpot\folder-views.json` dosyasında tutulur. Filtreler klasöre özeldir ama yalnız uygulama açıkken hatırlanır.
+- Doğal Dil modu, sorguyu yapılandırmak için Groq API'ına iki paralel istek göndermeyi dener. Bu mod kullanıldığında sorgu metni harici servise aktarılabilir.
+- Groq anahtarı eksik/geçersizse veya servis yanıt vermezse uygulama kural tabanlı yerel parser'a döner. Fallback daha sınırlı sorgu semantiği sunar.
+- Yapılandırma ve güncel mimari için [doğal dil arama rehberine](docs/guides/llm-setup.md) bakın.
 
 ## 📦 Kurulum
 
@@ -118,12 +120,6 @@ Tarama ayarları sonraki yeni taramada uygulanır; mevcut indeks korunur. Yeni
 ayarlarla baştan taramak için indeks bölümündeki yeniden oluşturma işlemini
 kullanın. Uygulama ve OmniSpot hizmeti aynı güncel sürümde olmalıdır.
 
-### Küçük resim belleği
-
-Ayarlar → **Küçük resimler ve RAM** bölümünden önizlemeleri açıp kapatabilir,
-RAM'de tutulacak görsel adedini veya toplam fiziksel RAM'in yüzdesini seçebilirsiniz.
-Yatay çubuk, seçilen bütçe tamamen dolduğunda oluşabilecek RAM dağılımını yaklaşık
-olarak gösterir; bütçe seçildiği anda belleğe yükleme yapılmaz.
 Bir konum taranamıyorsa veya arka planda güncellenemiyorsa arama penceresindeki
 uyarı etkilenen konumu ve aramaya etkisini gösterir. Açılamayan bir disk yalnız
 kendisini etkiler: diğer konumlarda arama açık kalır, o disk birkaç dakikada bir
@@ -137,6 +133,12 @@ uygulanır. Seçili disklerin tümü başarıyla açıldıktan sonra listeden
 çıkarılan disklerin eski indeksleri ve geçici indeks dosyaları otomatik temizlenir.
 Seçili bir diske erişilemezse o açılışta temizlik yapılmaz.
 
+### Küçük resim belleği
+
+Ayarlar → **Küçük resimler ve RAM** bölümünden önizlemeleri açıp kapatabilir,
+RAM'de tutulacak görsel adedini veya toplam fiziksel RAM'in yüzdesini seçebilirsiniz.
+Yatay çubuk, seçilen bütçe tamamen dolduğunda oluşabilecek RAM dağılımını yaklaşık
+olarak gösterir; bütçe seçildiği anda belleğe yükleme yapılmaz.
 
 Görünür alan ve çevresindeki mevcut ön yükleme davranışı korunur. Cache dolunca
 en uzun süredir kullanılmayan görseller çıkarılır. Adet sınırının yanında gerçek

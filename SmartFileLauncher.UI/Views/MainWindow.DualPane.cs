@@ -111,7 +111,7 @@ public partial class MainWindow
         SearchHeader.CornerRadius = new CornerRadius(tabs ? 0 : 8, tabs || pane ? 0 : 8, 0, 0);
     }
 
-    private async Task ShowPaneFolderAsync(string? folder)
+    private async Task<bool> ShowPaneFolderAsync(string? folder)
     {
         var cancellation = new CancellationTokenSource();
         var previous = Interlocked.Exchange(ref _paneLoad, cancellation);
@@ -134,7 +134,7 @@ public partial class MainWindow
                 truncated = page.IsTruncated;
             }
 
-            if (cancellation.IsCancellationRequested || !DualPaneOpen) return;
+            if (cancellation.IsCancellationRequested || !DualPaneOpen) return false;
             var sameFolder = PathsEqual(folder, _paneFolder);
             _paneFolder = folder;
             if (!sameFolder || !entries.Select(entry => entry.Path).SequenceEqual(_paneEntries.Select(entry => entry.Path), StringComparer.OrdinalIgnoreCase))
@@ -152,14 +152,17 @@ public partial class MainWindow
             _paneStatus = folder == null ? "Ana sayfa" : truncated ? $"{entries.Count:N0}+ öğe" : $"{entries.Count:N0} öğe";
             UpdateDualPanePath();
             UpdateDualPaneFooter();
+            return true;
         }
         catch (OperationCanceledException)
         {
+            return false;
         }
         catch (Exception ex)
         {
             Log($"❌ Karşı panel klasörü açılamadı: {ex.Message}");
             NotifyFileTransfer($"Klasör açılamadı: {ex.Message}");
+            return false;
         }
         finally
         {
@@ -273,7 +276,7 @@ public partial class MainWindow
     {
         if (entry.IsDirectory)
         {
-            _ = ShowPaneFolderAsync(entry.Path);
+            _ = OpenFolderItemAsync(entry.Path, inDualPane: true);
             return;
         }
 
@@ -283,12 +286,14 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            ModernDialog.Show(this, "Açılamadı", ex.Message, DialogKind.Warning);
+            Log($"❌ Açılamadı: {entry.Path}: {ex.Message}");
+            ShowErrorToast($"“{entry.Name}” açılamadı. {ex.Message}", "Birlikte aç", () => OpenWithReported(entry.Path));
         }
     }
 
     private void DualPaneList_KeyDown(object sender, KeyEventArgs e)
     {
+        if (NameEditing) return;
         var control = Keyboard.Modifiers == ModifierKeys.Control;
         var paths = SelectedPanePaths();
         switch (e.Key)
@@ -303,7 +308,10 @@ public partial class MainWindow
             case Key.Delete when paths.Length > 0:
                 DeletePaneItems(paths);
                 break;
-            case Key.F2 when paths.Length > 0:
+            case Key.F2 when paths.Length == 1:
+                RenameItem(paths[0]);
+                break;
+            case Key.F2 when paths.Length > 1:
                 RenameItems(paths);
                 _ = RefreshDualPaneAsync();
                 break;
@@ -336,21 +344,7 @@ public partial class MainWindow
         }
     }
 
-    private void DeletePaneItems(string[] paths)
-    {
-        var title = paths.Length == 1 ? $"'{Path.GetFileName(paths[0])}' silinsin mi?" : $"{paths.Length} öğe silinsin mi?";
-        if (!ModernDialog.Confirm(this, title,
-                "Öğeler Geri Dönüşüm Kutusu'na taşınacak, oradan geri alabilirsiniz.", "Sil", DialogKind.Danger)) return;
-
-        var failures = new List<string>();
-        foreach (var path in paths)
-        {
-            try { _fileOperations.DeleteToRecycleBin(path); }
-            catch (Exception ex) { failures.Add($"{Path.GetFileName(path)}: {ex.Message}"); }
-        }
-        ReportBatch("🗑️", $"{paths.Length - failures.Count} öğe silindi", failures);
-        _ = RefreshDualPaneAsync();
-    }
+    private void DeletePaneItems(string[] paths) => DeleteWithUndo(paths, fromPane: true);
 
     private void DualPaneList_PreviewMouseDown(object sender, MouseButtonEventArgs e)
     {

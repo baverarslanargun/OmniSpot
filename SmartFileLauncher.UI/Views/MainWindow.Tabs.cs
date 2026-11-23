@@ -18,6 +18,7 @@ public partial class MainWindow
     {
         public NavigationHistory<NavigationEntry> History { get; } = history;
         public NavigationEntry? Entry { get; set; }
+        public bool CountFirstFolderOpen { get; set; }
     }
 
     private static NavigationEntry HomeEntry => new(null, 0, null);
@@ -90,7 +91,11 @@ public partial class MainWindow
         }
 
         var index = _activeTab + 1;
-        _tabs.Insert(index, new BrowserTab(new NavigationHistory<NavigationEntry>(NavigationHistoryCapacity)) { Entry = entry });
+        _tabs.Insert(index, new BrowserTab(new NavigationHistory<NavigationEntry>(NavigationHistoryCapacity))
+        {
+            Entry = entry,
+            CountFirstFolderOpen = entry.FolderPath != null
+        });
         if (!activate)
         {
             UpdateTabStrip();
@@ -105,6 +110,7 @@ public partial class MainWindow
     private async Task ActivateTabAsync(int index)
     {
         if (_tabSwitchInProgress || index < 0 || index >= _tabs.Count || index == _activeTab) return;
+        if (BrowsingApplications) CloseApplicationBrowser();
         _tabSwitchInProgress = true;
         try
         {
@@ -115,6 +121,9 @@ public partial class MainWindow
             _navigationHistory = target.History;
             var sequence = ++_navigationSequence;
             var result = await RestoreNavigationEntryAsync(target.Entry ?? HomeEntry, sequence);
+            if (target.CountFirstFolderOpen && result == NavigationResult.Completed && target.Entry?.FolderPath is { } opened)
+                _recordFolderOpened?.Invoke(opened);
+            target.CountFirstFolderOpen = false;
             if (result == NavigationResult.Unavailable && sequence == _navigationSequence)
             {
                 ClearSearchForNavigation();
