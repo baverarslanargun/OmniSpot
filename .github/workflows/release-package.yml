@@ -1,0 +1,60 @@
+name: Yayın paketini doğrula
+
+on:
+  pull_request:
+    paths:
+      - 'installer/OmniSpotSetup.iss'
+      - 'scripts/Build-DemoInstaller.ps1'
+      - 'scripts/Test-ReleaseInstaller.ps1'
+      - '.github/workflows/release-package.yml'
+  push:
+    branches: [development]
+    paths:
+      - 'installer/OmniSpotSetup.iss'
+      - 'scripts/Build-DemoInstaller.ps1'
+      - 'scripts/Test-ReleaseInstaller.ps1'
+      - '.github/workflows/release-package.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - name: Yayın paketini derle
+        shell: pwsh
+        run: |
+          $package = & ./scripts/Build-DemoInstaller.ps1 | Select-Object -Last 1
+          if ($package.UiCompressedEntries -ne 0 -or $package.ServiceCompressedEntries -ne 0) { throw 'Sıkıştırılmış bundle girdisi bulundu.' }
+          New-Item -Type Directory release-files | Out-Null
+          Copy-Item -LiteralPath $package.Installer -Destination release-files
+          Copy-Item artifacts/demo-installer/ui/OmniSpot.exe release-files
+          $sums = Get-ChildItem release-files/*.exe | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName).Hash.ToLowerInvariant(), $_.Name
+          }
+          $sums | Set-Content release-files/SHA256SUMS.txt -Encoding ascii
+      - name: Önceki kararlı paketi doğrula
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v1.0.0 --pattern 'OmniSpot-1.0.0-Setup.exe' --pattern 'SHA256SUMS.txt' --dir previous
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $hash = (Get-FileHash previous/OmniSpot-1.0.0-Setup.exe).Hash
+          if (-not (Select-String -Path previous/SHA256SUMS.txt -Pattern "^$hash\s+\*?OmniSpot-1\.0\.0-Setup\.exe$")) { throw 'Önceki paket hash değeri uyuşmuyor.' }
+      - name: Temiz kurulum, sürüm geçişi ve kurulu arayüzde arama
+        shell: powershell
+        run: |
+          $setup = (Get-Item release-files/*-Setup.exe).FullName
+          & ./scripts/Test-ReleaseInstaller.ps1 -Setup $setup -PreviousSetup (Get-Item previous/OmniSpot-1.0.0-Setup.exe).FullName
+      - uses: actions/upload-artifact@v4
+        with:
+          name: omnispot-release
+          path: release-files/
+          retention-days: 7

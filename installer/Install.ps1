@@ -1,5 +1,5 @@
 <# 
-    OmniSpot V1.0 - Basit Kurulum Script'i
+    OmniSpot V1.1 - Basit Kurulum Script'i
     Bu script Inno Setup olmadan kurulum yapar
 #>
 
@@ -9,7 +9,7 @@ param(
 )
 
 $AppName = "OmniSpot"
-$AppVersion = "1.0.0"
+$AppVersion = "1.1.0"
 $InstallDir = "$env:LOCALAPPDATA\$AppName"
 $SourceExe = Join-Path $PSScriptRoot "..\publish\OmniSpot.exe"
 $SourceIcon = Join-Path $PSScriptRoot "..\SmartFileLauncher.UI\Resources\app.ico"
