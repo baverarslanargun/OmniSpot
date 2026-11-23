@@ -29,6 +29,7 @@ public sealed class AppSettings
     public int ThumbnailIdleSeconds { get; set; } = 60;
     public List<string> ThumbnailPinnedFolders { get; set; } = new();
     public bool HideThumbnailPinWarning { get; set; }
+    public List<string> PinnedApplications { get; set; } = new();
 
     public void ResetToDefaults()
     {
@@ -59,5 +60,6 @@ public sealed class AppSettings
         ThumbnailIdleSeconds = 60;
         ThumbnailPinnedFolders = new();
         HideThumbnailPinWarning = false;
+        PinnedApplications = new();
     }
 }

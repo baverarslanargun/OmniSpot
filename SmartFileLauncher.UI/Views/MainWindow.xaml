@@ -1862,7 +1862,9 @@
             </Border>
             
             <!-- Results Area -->
-            <Grid x:Name="FileContentArea" Grid.Row="2" Margin="0" Background="Transparent">
+            <ContentControl x:Name="StartMenuHost" Grid.Row="2" Visibility="Collapsed"
+                            Focusable="False" HorizontalContentAlignment="Stretch"/>
+            <Grid x:Name="FileContentArea" Grid.Row="3" Margin="0" Background="Transparent">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
@@ -1880,6 +1882,7 @@
                 <Border x:Name="DesktopIconsScroll"
                         Grid.Row="1"
                         Visibility="Collapsed"
+                                <MenuItem x:Name="AllApplicationsMenuItem" Header="Tüm _uygulamalar" Click="AllApplications_Click"/>
                         Background="Transparent"
                         MaxHeight="500"
                         ContextMenu="{StaticResource EmptyAreaContextMenu}"

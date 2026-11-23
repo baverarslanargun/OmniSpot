@@ -139,7 +139,10 @@ public partial class MainWindow : Window {
         IApplicationShellService shellService,
         ApplicationLog applicationLog,
         ApplicationStartupOptions startupOptions,
-        MeasurementRunLayout? measurementRun) {
+        MeasurementRunLayout? measurementRun,
+        Action<string>? recordFolderOpened = null,
+        IStartMenuShell? startMenuShell = null,
+        string? folderSortsPath = null) {
         _viewModel = viewModel ?? throw new ArgumentNullException(nameof(viewModel));
         _appSettings = appSettings ?? throw new ArgumentNullException(nameof(appSettings));
         UiAnimationSettings.Current.Apply(_appSettings.AnimationsEnabled);
@@ -166,6 +169,7 @@ public partial class MainWindow : Window {
         TrackMoreOptionsMenuState();
         DesktopIcons.ItemsSource = _desktopRows;
         _desktopIcons.CollectionChanged += (_, _) => QueueDesktopRowsRebuild();
+        InitializeStartMenu(startMenuShell);
         _folderLoadingDelay.Tick += (_, _) => ShowFolderLoadingBarNow();
         _indexProgressTimer.Tick += (_, _) => UpdateIndexProgressText();
 
@@ -363,6 +367,7 @@ public partial class MainWindow : Window {
         PrepareForShutdown();
         System.Windows.Application.Current.Shutdown();
     }
+        ApplyPinnedApplications();
 
     internal void PrepareForShutdown() {
         if (_isPreparedForShutdown) return;
@@ -382,6 +387,7 @@ public partial class MainWindow : Window {
         var folderCancellation = Interlocked.Exchange(
             ref _folderLoadCancellation,
             null);
+        StopStartMenu();
         try {
             folderCancellation?.Cancel();
         } finally {
