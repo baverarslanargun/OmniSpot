@@ -14,6 +14,8 @@ internal static class BenchmarkRootCommand
         rootCommand.Subcommands.Add(ProfileCommand.CreateCommand());
         rootCommand.Subcommands.Add(DiagnosticsCommand.CreateCommand());
         rootCommand.Subcommands.Add(MftProbeCommand.CreateCommand());
+        rootCommand.Subcommands.Add(MftPipelineLabCommand.CreateCommand());
+        rootCommand.Subcommands.Add(MftPipelineSimCommand.CreateCommand());
         rootCommand.Subcommands.Add(DirectoryProbeCommand.CreateCommand());
         rootCommand.Subcommands.Add(HierarchyProbeCommand.CreateCommand());
         rootCommand.Subcommands.Add(PackedCrashProbeCommand.CreateCommand());
