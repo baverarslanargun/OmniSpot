@@ -127,8 +127,17 @@ public partial class StartMenuResults : System.Windows.Controls.UserControl
         UpdateBestMatchSelection();
     }
 
+    internal void ShowBrowserLoading(bool grid)
+    {
+        UseLayout(browsing: true, bestMatch: null, grid: grid);
+        Applications.ItemsSource = null;
+        Strip.Visibility = Visibility.Collapsed;
+        BrowserLoading.Visibility = Visibility.Visible;
+    }
+
     internal void UpdateStrip()
     {
+        BrowserLoading.Visibility = Visibility.Collapsed;
         var others = Applications.Items.Count - StripStart;
         Strip.Visibility = _browsing || others > 0 || ShowAll.Visibility == Visibility.Visible ||
             EmptyMessage.Visibility == Visibility.Visible ? Visibility.Visible : Visibility.Collapsed;

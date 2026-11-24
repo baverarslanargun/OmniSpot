@@ -383,6 +383,13 @@
                 </DockPanel>
             </Border>
 
+            <Grid x:Name="BrowserLoading" Grid.Row="1" Height="460" Visibility="Collapsed">
+                <Grid HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock x:Name="LoadingLabel" Text="Uygulamalar yükleniyor…" Foreground="#94A3B8"
+                               AutomationProperties.LiveSetting="Polite"/>
+                    <TextBlock Text="{Binding Text, ElementName=LoadingLabel}" Style="{DynamicResource LoadingTextGlint}"/>
+                </Grid>
+            </Grid>
             <Grid x:Name="Strip" Grid.Row="1" Margin="4,4,4,2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>

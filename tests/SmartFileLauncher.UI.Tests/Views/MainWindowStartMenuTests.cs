@@ -353,6 +353,7 @@ public sealed partial class MainWindowSearchRefreshTests
 
         fileList.SelectedIndex = 0;
         showAll.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         Assert.Equal("Tool", search.Text);
         Assert.Equal(5, apps.Items.Count);
         Assert.Equal(Visibility.Collapsed, ApplicationElement<Grid>(fixture, "FileContentArea").Visibility);
@@ -373,6 +374,7 @@ public sealed partial class MainWindowSearchRefreshTests
             .GetField("AllApplicationsMenuItem", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(fixture.Window));
         allApplicationsMenuItem.RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         Assert.Equal("", search.Text);
         Assert.Equal(6, apps.Items.Count);
         SendApplicationKey(search, keyboardSource, Key.Escape);
@@ -404,6 +406,7 @@ public sealed partial class MainWindowSearchRefreshTests
 
         fileList.SelectedIndex = 0;
         showAll.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         Assert.Equal(4, apps.Items.Count);
         Assert.Equal(Visibility.Visible, back.Visibility);
         back.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
@@ -417,6 +420,7 @@ public sealed partial class MainWindowSearchRefreshTests
                 { RoutedEvent = UIElement.PreviewMouseDownEvent });
 
         showAll.RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         MouseButtonDown(MouseButton.XButton2);
         Assert.Equal(Visibility.Visible, back.Visibility);
         Assert.Equal(4, apps.Items.Count);
@@ -425,6 +429,31 @@ public sealed partial class MainWindowSearchRefreshTests
         Assert.Same(file, fileList.SelectedItem);
         Assert.Equal(Visibility.Collapsed, back.Visibility);
         Assert.Equal(1, fixture.StandardCalls);
+    });
+
+    [Fact]
+    public Task ApplicationBrowserWaitsForTheCatalogAndUsesTheLatestQuery() => RunSta(async () =>
+    {
+        var shell = new StartMenuTestShell(new("alpha", "Alpha", ""), new("beta", "Beta", ""));
+        using var fixture = new Fixture(startMenuShell: shell);
+        using var keys = ApplicationKeySource();
+        var search = ApplicationElement<TextBox>(fixture, "SearchBox");
+
+        OpenAllApplications(fixture);
+        var view = ApplicationView(fixture);
+        SendApplicationKey(search, keys, Key.Escape);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(Visibility.Collapsed, ApplicationElement<ContentControl>(fixture, "StartMenuHost").Visibility);
+
+        OpenAllApplications(fixture);
+        search.Text = "bet";
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(Visibility.Visible, view.BrowserLoading.Visibility);
+        Assert.Empty(view.Applications.Items);
+
+        await ReadStartMenuApplications(fixture);
+        Assert.Equal(Visibility.Collapsed, view.BrowserLoading.Visibility);
+        Assert.Equal("beta", Assert.IsType<StartMenuApplication>(Assert.Single(view.Applications.Items)).Id);
     });
 
     private static async Task ReadStartMenuApplications(Fixture fixture)

@@ -39,12 +39,11 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <Style x:Key="SearchWaitGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}">
+        <Style x:Key="LoadingTextGlint" TargetType="TextBlock" BasedOn="{StaticResource IndexWaitGlint}">
             <Style.Triggers>
                 <MultiDataTrigger>
                     <MultiDataTrigger.Conditions>
                         <Condition Binding="{Binding IsVisible, RelativeSource={RelativeSource Self}}" Value="True"/>
-                        <Condition Binding="{Binding IsVisible, ElementName=SearchWatermark}" Value="True"/>
                         <Condition Binding="{Binding Enabled, Source={x:Static services:UiAnimationSettings.Current}}" Value="True"/>
                     </MultiDataTrigger.Conditions>
                     <MultiDataTrigger.EnterActions>
@@ -1467,12 +1466,12 @@
                                            IsHitTestVisible="False"
                                            FontWeight="Normal"
                                            Visibility="Visible"/>
-                                <TextBlock x:Name="SearchWaitShimmer"
-                                           Text="{Binding Text, ElementName=SearchWatermark}"
-                                           FontSize="16"
-                                           VerticalAlignment="Center"
-                                           Style="{StaticResource SearchWaitGlint}"
-                                           Visibility="Collapsed"/>
+                                <Grid Visibility="{Binding Visibility, ElementName=SearchWatermark}">
+                                    <TextBlock x:Name="SearchWaitShimmer"
+                                               Text="{Binding Text, ElementName=SearchWatermark}"
+                                               FontSize="16" VerticalAlignment="Center"
+                                               Style="{StaticResource LoadingTextGlint}" Visibility="Collapsed"/>
+                                </Grid>
                                 </Grid>
 
                                 <TextBox x:Name="SearchBox"
