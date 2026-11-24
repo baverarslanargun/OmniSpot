@@ -23,6 +23,7 @@ public partial class MainWindow
     private StartMenuCatalog? _startMenuCatalog;
     private IDisposable? _startMenuWatch;
     private StartMenuResults? _applicationResults;
+    private DispatcherOperation? _pendingBrowserOpen;
     private ApplicationReturnState? _applicationReturn;
     private StartMenuApplications? _presentedCatalog;
     private StartMenuApplications.SearchSession? _applicationSearch;
@@ -113,6 +114,7 @@ public partial class MainWindow
 
     private void StopStartMenu()
     {
+        _pendingBrowserOpen?.Abort();
         Loaded -= OnApplicationWindowActivated;
         Activated -= OnApplicationWindowActivated;
         _startMenuWatch?.Dispose();
@@ -168,7 +170,7 @@ public partial class MainWindow
 
     private void ShowApplicationMatches(string query, bool refresh = false)
     {
-        if (_startMenuCatalog == null || _isPreparedForShutdown) return;
+        if (_startMenuCatalog == null || _isPreparedForShutdown || _pendingBrowserOpen != null) return;
         var all = BrowsingApplications;
         if (!all && (string.IsNullOrWhiteSpace(query) || ActiveSearchScope != null ||
             _isNaturalLanguageMode || _searchView.Filter.IsActive || !_searchView.Sort.IsRelevance))
@@ -179,6 +181,7 @@ public partial class MainWindow
 
         var catalog = _startMenuCatalog.Current;
         var ready = !ReferenceEquals(catalog, StartMenuApplications.Empty);
+        if (all && !ready && !_catalogReadFailed) return;
         var sameQuery = query == _applicationQuery;
         if (!refresh && sameQuery && ReferenceEquals(catalog, _presentedCatalog))
         {
@@ -278,16 +281,25 @@ public partial class MainWindow
         CancelCurrentSearch();
         SearchLatencyText.Visibility = Visibility.Collapsed;
         _applicationQuery = null;
-        SearchBox.Text = query;
-        ShowApplicationMatches(query);
-        UpdateSelectionBar();
         SearchBox.Focus();
+        GetApplicationResults().ShowBrowserLoading(_isGridViewMode);
+        StartMenuHost.Visibility = Visibility.Visible;
+        UpdateFileAreaForApplications();
+        _pendingBrowserOpen = Dispatcher.InvokeAsync(() =>
+        {
+            _pendingBrowserOpen = null;
+            ShowApplicationMatches(SearchBox.Text);
+        }, DispatcherPriority.Background);
+        SearchBox.Text = query;
+        UpdateSelectionBar();
         SearchBox.CaretIndex = query.Length;
     }
 
     private void CloseApplicationBrowser()
     {
         if (_applicationReturn is not { } origin) return;
+        _pendingBrowserOpen?.Abort();
+        _pendingBrowserOpen = null;
         _applicationReturn = null;
         SearchWatermark.Text = origin.Hint;
         HideApplicationMatches();

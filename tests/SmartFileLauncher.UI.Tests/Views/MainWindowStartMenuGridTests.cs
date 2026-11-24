@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using SmartFileLauncher.Core.Application.Settings;
 using SmartFileLauncher.UI.Services;
 using SmartFileLauncher.UI.Views;
@@ -22,6 +23,11 @@ public sealed partial class MainWindowSearchRefreshTests
         using var keyboardSource = ApplicationKeySource();
         await ReadStartMenuApplications(fixture);
         OpenAllApplications(fixture);
+        var loading = ApplicationView(fixture).BrowserLoading;
+        Assert.Equal(Visibility.Visible, loading.Visibility);
+        Assert.Empty(ApplicationList(fixture).Items);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
+        Assert.Equal(Visibility.Collapsed, loading.Visibility);
 
         var view = ApplicationView(fixture);
         var apps = ApplicationList(fixture);
@@ -82,6 +88,7 @@ public sealed partial class MainWindowSearchRefreshTests
         using var fixture = new Fixture(startMenuShell: shell);
         await ReadStartMenuApplications(fixture);
         OpenAllApplications(fixture);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         var view = ApplicationView(fixture);
         var apps = ApplicationList(fixture);
         Layout(view);
@@ -132,6 +139,7 @@ public sealed partial class MainWindowSearchRefreshTests
         using var fixture = new Fixture(startMenuShell: shell);
         await ReadStartMenuApplications(fixture);
         OpenAllApplications(fixture);
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         var view = ApplicationView(fixture);
         var apps = ApplicationList(fixture);
         var menu = ApplicationMenu(fixture);
@@ -177,6 +185,7 @@ public sealed partial class MainWindowSearchRefreshTests
         AssertSelectionWaits(view, apps, 1);
 
         ApplicationPart<Button>(view, "ShowAll").RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+        await Dispatcher.Yield(DispatcherPriority.ApplicationIdle);
         Layout(view);
         Assert.Equal("RowItem", StyleKey(view, apps.ItemContainerStyle));
         AssertSelectionWaits(view, apps, 2);
