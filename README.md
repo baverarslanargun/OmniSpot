@@ -16,8 +16,8 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 - **Başlat uygulamaları** genel aramada en üstte görünür. Benzersiz en iyi eşleşmeyi Enter ile açabilir, ok tuşlarıyla başka bir uygulamaya veya dosyaya geçebilirsiniz. Pencere menüsündeki **Tüm uygulamalar** Windows kataloğunu alfabetik açar. Esc önceki aramaya döner.
 - ✅ **Doğal Dil Arama**: İsteğe bağlı Groq desteği ve kural tabanlı fallback ile sorguları yapılandırın
 - ✅ **Klasör Navigasyonu**: Uygulama içinde klasörlerde gezinin
-- ✅ **Adres Çubuğu ve Geçmiş**: Klasördeyken içeriğin üstünde tıklanabilir yol; Geri/İleri aramaya da döner ve aramayı yeniden çalıştırmaz
-- ✅ **Sekmeler**: "⋯ → Yeni sekme", sağ tıkta "Yeni Sekmede Aç" veya klasöre orta tık; şerit yalnız 2+ sekmede görünür
+- ✅ **Adres Çubuğu ve Geçmiş**: Klasördeyken içeriğin üstünde tıklanabilir yol; Geri/İleri aramaya da döner ve aramayı yeniden çalıştırmaz; yola sağ tıklayıp "Yolu Kopyala"
+- ✅ **Sekmeler**: "⋯ → Yeni sekme", sağ tıkta "Yeni Sekmede Aç" veya klasöre orta tık; şerit yalnız 2+ sekmede görünür. Klasör sekmesine sağ tıklayıp "Explorer'da Aç" ile sekmeyi Explorer penceresine alın ya da "Yolu Kopyala" ile konumunu panoya kopyalayın
 - ✅ **Toplu Komutlar**: 2+ öğe seçince beliren çubuk; toplu yeniden adlandırma, ZIP'e sıkıştırma/çıkarma, yolu kopyalama, yeni klasöre taşıma
 - ✅ **Raf**: Farklı aramalardan öğe toplayın, bir klasöre gidip hepsini tek seferde kopyalayın veya taşıyın
 - ✅ **Dosya İşlemleri**: Kopyala, Kes, Yapıştır, Sil, Yeniden Adlandır

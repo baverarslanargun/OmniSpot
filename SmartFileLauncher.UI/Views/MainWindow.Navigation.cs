@@ -75,6 +75,17 @@ public partial class MainWindow
             SyncEmptyFolderPanel();
         });
         visibility.AddValueChanged(ResultsContainer, (_, _) => SyncEmptyFolderPanel());
+        FolderPathBar.ContextMenu = new ContextMenu
+        {
+            Style = FindResource("ModernContextMenu") as Style,
+            Items =
+            {
+                FolderMenuItem("Yolu Kopyala", "🔤", () =>
+                {
+                    if (_currentFolderPath is { } folder) CopyPaths([folder]);
+                })
+            }
+        };
         UpdateNavigationButtons();
     }
 

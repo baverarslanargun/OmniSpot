@@ -220,7 +220,7 @@ public partial class MainWindow
         if (paths.Count == 0) return;
         try
         {
-            Clipboard.SetText(string.Join(Environment.NewLine, paths.Select(path => $"\"{path}\"")));
+            Clipboard.SetText(string.Join(Environment.NewLine, paths));
             NotifyFileTransfer(paths.Count == 1 ? "Yol kopyalandı." : $"{paths.Count} yol kopyalandı.");
         }
         catch (Exception ex)

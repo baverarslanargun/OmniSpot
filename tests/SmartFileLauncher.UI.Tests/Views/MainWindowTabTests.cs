@@ -75,6 +75,53 @@ public sealed class MainWindowTabTests
         Assert.Equal(Second, fixture.Model.CurrentFolderPath);
     });
 
+    [Fact]
+    public Task AFolderTabOffersExplorerAndCopyPathFromItsContextMenu() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        await fixture.Navigate(First);
+        await OpenTab(fixture, Second, activate: false);
+        await OpenTab(fixture, null, activate: false);
+
+        var tabs = ((StackPanel)fixture.Element("TabStripItems")).Children.OfType<Button>()
+            .Where(button => button.Content is StackPanel)
+            .ToArray();
+        Assert.Equal(3, tabs.Length);
+        Assert.Null(tabs[1].ContextMenu);
+
+        foreach (var tab in new[] { tabs[0], tabs[2] })
+        {
+            var items = tab.ContextMenu!.Items.OfType<MenuItem>().ToArray();
+            Assert.Equal(["Explorer'da Aç", "Yolu Kopyala"], items.Select(item => (string)item.Header));
+            items[0].RaiseEvent(new RoutedEventArgs(MenuItem.ClickEvent));
+        }
+
+        var pathBarItem = Assert.IsType<MenuItem>(Assert.Single(fixture.Element("FolderPathBar").ContextMenu!.Items));
+        Assert.Equal("Yolu Kopyala", pathBarItem.Header);
+
+        var opened = fixture.Log.GetSnapshot()
+            .Select(line => line.Split("Explorer'da açıldı: ") is [_, var path] ? path : null)
+            .OfType<string>();
+        Assert.Equal([First, Second], opened);
+        Assert.Equal(First, fixture.Model.CurrentFolderPath);
+    });
+
+    [Fact]
+    public Task AFolderTabDropsItsFolderMenuWhenSearchResultsAppear() => RunSta(async () =>
+    {
+        using var fixture = new Fixture();
+        await fixture.Navigate(First);
+        await OpenTab(fixture, Second, activate: false);
+        var tabs = (StackPanel)fixture.Element("TabStripItems");
+
+        Assert.NotNull(tabs.Children.OfType<Button>().First().ContextMenu);
+
+        await fixture.Search("fatura", naturalLanguage: false);
+
+        Assert.Equal(Visibility.Visible, fixture.Element("ResultsContainer").Visibility);
+        Assert.Null(tabs.Children.OfType<Button>().First().ContextMenu);
+    });
+
     private static Task OpenTab(Fixture fixture, string? folder, bool activate)
     {
         var entryType = typeof(MainWindow).GetNestedType("NavigationEntry", BindingFlags.NonPublic)!;

@@ -1391,7 +1391,9 @@ public partial class MainWindow : Window {
     private void PresentFileSearch(string query, bool newSearch, bool updateLatency, bool waiting) {
         if (newSearch) {
             DesktopIconsScroll.Visibility = Visibility.Collapsed;
+            var resultsWereHidden = ResultsContainer.Visibility != Visibility.Visible;
             ShowPanel(ResultsContainer);
+            if (resultsWereHidden && _tabs.Count > 1) UpdateTabStrip();
             UpdateFilterBadge();
         }
         if (!waiting) return;

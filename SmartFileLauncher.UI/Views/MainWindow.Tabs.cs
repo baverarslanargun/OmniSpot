@@ -236,16 +236,53 @@ public partial class MainWindow
             e.Handled = true;
             _ = CloseTabAsync(index);
         };
+        if (TabFolder(index) is { } folder)
+        {
+            tab.ContextMenu = new ContextMenu
+            {
+                Style = FindResource("ModernContextMenu") as Style,
+                Items =
+                {
+                    FolderMenuItem("Explorer'da Aç", "📂", () => OpenTabInExplorer(folder)),
+                    FolderMenuItem("Yolu Kopyala", "🔤", () => CopyPaths([folder]))
+                }
+            };
+        }
         return tab;
     }
 
-    private string CurrentTabLabel()
+    private MenuItem FolderMenuItem(string header, string icon, Action action)
     {
-        var query = SearchBox.Text.Trim();
-        return query.Length > 0 && ResultsContainer.Visibility == Visibility.Visible
-            ? $"“{query}”"
-            : _currentFolderPath == null ? "Ana sayfa" : FolderDisplayName(_currentFolderPath);
+        var item = new MenuItem { Header = header, Tag = icon, Style = FindResource("ModernMenuItem") as Style };
+        item.Click += (_, _) => action();
+        return item;
     }
+
+    private bool ActiveTabShowsSearch =>
+        SearchBox.Text.Trim().Length > 0 && ResultsContainer.Visibility == Visibility.Visible;
+
+    private string? TabFolder(int index) =>
+        index == _activeTab
+            ? ActiveTabShowsSearch ? null : _currentFolderPath
+            : _tabs[index].Entry is { Search: null, FolderPath: { } folder } ? folder : null;
+
+    private void OpenTabInExplorer(string folder)
+    {
+        try
+        {
+            _fileOperations.OpenFile(folder);
+            Log($"📂 Explorer'da açıldı: {folder}");
+        }
+        catch (Exception ex)
+        {
+            Log($"❌ Explorer'da açılamadı: {folder}: {ex.Message}");
+            ShowErrorToast($"“{FolderDisplayName(folder)}” Explorer'da açılamadı. {ex.Message}");
+        }
+    }
+
+    private string CurrentTabLabel() =>
+        ActiveTabShowsSearch ? $"“{SearchBox.Text.Trim()}”"
+        : _currentFolderPath == null ? "Ana sayfa" : FolderDisplayName(_currentFolderPath);
 
     private static string TabLabel(NavigationEntry entry) =>
         entry.Search != null ? $"“{entry.Search.Query.Trim()}”"
