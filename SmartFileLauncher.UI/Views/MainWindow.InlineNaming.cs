@@ -203,11 +203,10 @@ public partial class MainWindow
         if (NameEditing || _isPreparedForShutdown) return false;
         var name = Path.GetFileName(path.TrimEnd('\\', '/'));
         if (string.IsNullOrEmpty(name)) return false;
-        var inPane = KeyboardInDualPane;
-        var container = inPane ? PaneItemContainer(path) : MainItemContainer(path);
+        var container = MainItemContainer(path);
         if (container == null) return false;
         var isDirectory = _fileOperations.GetItemKind(path) == FileItemKind.Directory;
-        return BeginNameEdit(container, name, isDirectory, newName => CommitRename(path, newName, inPane));
+        return BeginNameEdit(container, name, isDirectory, newName => CommitRename(path, newName));
     }
 
     private FrameworkElement? MainItemContainer(string path)
@@ -248,16 +247,7 @@ public partial class MainWindow
             : null;
     }
 
-    private FrameworkElement? PaneItemContainer(string path)
-    {
-        var entry = _paneEntries.FirstOrDefault(item => PathsEqual(item.Path, path));
-        if (entry == null) return null;
-        DualPaneList.ScrollIntoView(entry);
-        DualPaneList.UpdateLayout();
-        return DualPaneList.ItemContainerGenerator.ContainerFromItem(entry) as FrameworkElement;
-    }
-
-    private string? CommitRename(string path, string newName, bool inPane)
+    private string? CommitRename(string path, string newName)
     {
         var oldName = Path.GetFileName(path.TrimEnd('\\', '/'));
         if (string.Equals(newName, oldName, StringComparison.Ordinal)) return null;
@@ -287,7 +277,6 @@ public partial class MainWindow
         if (_selectedItemPath != null && PathsEqual(_selectedItemPath, path)) _selectedItemPath = result.DestinationPath;
         if (_hoveredItemPath != null && PathsEqual(_hoveredItemPath, path)) _hoveredItemPath = result.DestinationPath;
         Log($"✏️ Adlandırıldı: {oldName} → {newName}");
-        if (inPane || DualPaneOpen) _ = RefreshDualPaneAsync();
         return null;
     }
 

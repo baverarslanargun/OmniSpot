@@ -94,7 +94,7 @@ public partial class MainWindow
 
     private void BatchPreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (NameEditing || KeyboardInDualPane || ApplicationOwnsCommands || StaleFileResults) return;
+        if (NameEditing || ApplicationOwnsCommands || StaleFileResults) return;
         var modifiers = Keyboard.Modifiers;
         if (e.Key == Key.A && modifiers == ModifierKeys.Control &&
             (Keyboard.FocusedElement is not TextBoxBase ||
@@ -220,7 +220,7 @@ public partial class MainWindow
         if (paths.Count == 0) return;
         try
         {
-            Clipboard.SetText(string.Join(Environment.NewLine, paths.Select(path => $"\"{path}\"")));
+            Clipboard.SetText(string.Join(Environment.NewLine, paths));
             NotifyFileTransfer(paths.Count == 1 ? "Yol kopyalandı." : $"{paths.Count} yol kopyalandı.");
         }
         catch (Exception ex)
@@ -229,7 +229,7 @@ public partial class MainWindow
         }
     }
 
-    private void DeleteItems(IReadOnlyList<string> paths) => DeleteWithUndo(paths, fromPane: false);
+    private void DeleteItems(IReadOnlyList<string> paths) => DeleteWithUndo(paths);
 
     private void RenameItems(IReadOnlyList<string> paths)
     {
@@ -316,7 +316,6 @@ public partial class MainWindow
     private IEnumerable<System.Windows.Controls.Control> SelectionMoreExtras()
     {
         yield return CreateAddToShelfMenuItem();
-        foreach (var item in DualPaneMenuExtras()) yield return item;
     }
 
     private static string? PathFromMenuTarget(ContextMenu menu) => menu.PlacementTarget switch

@@ -18,7 +18,7 @@ public partial class MainWindow
         internal bool Restoring { get; set; }
     }
 
-    private void DeleteWithUndo(IReadOnlyList<string> paths, bool fromPane)
+    private void DeleteWithUndo(IReadOnlyList<string> paths)
     {
         if (paths.Count == 0 || _isPreparedForShutdown) return;
         EndNameEdit(cancelled: true, restoreFocus: false);
@@ -50,7 +50,6 @@ public partial class MainWindow
 
         foreach (var failure in failures) Log($"❌ Silme hatası: {failure}");
         if (deleted.Count > 0) Log($"🗑️ {deleted.Count} öğe Geri Dönüşüm Kutusu'na taşındı");
-        if (fromPane || DualPaneOpen) _ = RefreshDualPaneAsync();
         UpdateSelectionBar();
 
         if (deleted.Count == 0)
@@ -107,7 +106,6 @@ public partial class MainWindow
         {
             if (SearchSurfaceVisible) _ = RefreshSearchResultsAsync();
             else RefreshCurrentFolder();
-            if (DualPaneOpen) _ = RefreshDualPaneAsync();
         }
 
         var total = record.Paths.Count;

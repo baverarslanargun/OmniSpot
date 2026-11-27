@@ -229,7 +229,6 @@ public partial class MainWindow : Window {
         InitializeNameEditing();
         InitializeTabs();
         InitializeShelf();
-        InitializeDualPane();
 
         Loaded += MainWindow_Loaded;
     }
@@ -983,8 +982,6 @@ public partial class MainWindow : Window {
                 await RefreshCurrentFolderIconsAsync();
             }
 
-            await RefreshDualPaneAsync();
-
             if (Interlocked.Exchange(ref _searchRefreshRequested, 0) != 0 &&
                 !string.IsNullOrWhiteSpace(SearchBox.Text) &&
                 ResultsContainer.Visibility == Visibility.Visible)
@@ -1394,7 +1391,9 @@ public partial class MainWindow : Window {
     private void PresentFileSearch(string query, bool newSearch, bool updateLatency, bool waiting) {
         if (newSearch) {
             DesktopIconsScroll.Visibility = Visibility.Collapsed;
+            var resultsWereHidden = ResultsContainer.Visibility != Visibility.Visible;
             ShowPanel(ResultsContainer);
+            if (resultsWereHidden && _tabs.Count > 1) UpdateTabStrip();
             UpdateFilterBadge();
         }
         if (!waiting) return;
@@ -2048,7 +2047,7 @@ public partial class MainWindow : Window {
             return;
         }
 
-        if ((ApplicationOwnsCommands || StaleFileResults) && !KeyboardInDualPane && e.Key != Key.Escape) return;
+        if ((ApplicationOwnsCommands || StaleFileResults) && e.Key != Key.Escape) return;
         if (BrowsingApplications && e.Key == Key.Escape) {
             CloseApplicationBrowser();
             e.Handled = true;
@@ -2185,7 +2184,7 @@ public partial class MainWindow : Window {
         }
     }
     
-    private void DeleteItem(string path) => DeleteWithUndo([path], fromPane: false);
+    private void DeleteItem(string path) => DeleteWithUndo([path]);
     
     private void OpenSelected() {
         if (_startMenuCatalog != null && !SearchSurfaceVisible) return;

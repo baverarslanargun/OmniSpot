@@ -31,7 +31,7 @@ public sealed class MainWindowNavigationTests
         await fixture.Search("fatura", false);
         var path = Assert.Single(fixture.Model.SearchResults).FullPath;
 
-        await fixture.Invoke("OpenFolderItemAsync", path, false);
+        await fixture.Invoke("OpenFolderItemAsync", path);
         await fixture.Back();
         await fixture.Forward();
 
@@ -254,6 +254,7 @@ public sealed class MainWindowNavigationTests
         internal readonly HashSet<string> Missing = new(StringComparer.OrdinalIgnoreCase);
         internal readonly HashSet<string> EmptyFolders = new(StringComparer.OrdinalIgnoreCase);
         internal readonly List<string> OpenedFolders = [];
+        internal readonly ApplicationLog Log = new();
         internal int ParserCalls;
         internal int LocalCalls;
         internal int StandardCalls;
@@ -304,7 +305,7 @@ public sealed class MainWindowNavigationTests
                 Stub<IFileOperationService>((method, args) => method.Name == "GetItemKind"
                     ? Missing.Contains((string)args[0]!) ? FileItemKind.Missing : FileItemKind.Directory
                     : Files != null ? Files(method.Name, args) : throw new NotSupportedException(method.Name)),
-                Stub<IApplicationShellService>(), new ApplicationLog(),
+                Stub<IApplicationShellService>(), Log,
                 ApplicationStartupOptions.Default, null, OpenedFolders.Add,
                 folderSortsPath: folderSortsPath);
         }

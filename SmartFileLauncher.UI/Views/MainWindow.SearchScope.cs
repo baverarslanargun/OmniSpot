@@ -161,7 +161,7 @@ public partial class MainWindow
 
     private bool HandleSearchInFolderShortcut()
     {
-        if (BrowsingApplications || KeyboardInDualPane) return false;
+        if (BrowsingApplications) return false;
         var folder = SelectedFolderForSearch();
         if (folder != null && !PathsEqual(folder, _currentFolderPath))
         {
@@ -194,7 +194,7 @@ public partial class MainWindow
         var item = menu.Items.OfType<MenuItem>().FirstOrDefault(candidate => candidate.Name == "SearchInFolderMenuItem");
         if (item == null) return;
         var path = PathFromMenuTarget(menu);
-        item.Visibility = !string.IsNullOrEmpty(path) && !KeyboardInDualPane &&
+        item.Visibility = !string.IsNullOrEmpty(path) &&
             _fileOperations.GetItemKind(path) == FileItemKind.Directory
                 ? Visibility.Visible
                 : Visibility.Collapsed;
