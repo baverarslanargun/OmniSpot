@@ -178,10 +178,21 @@ internal sealed class FileIndexReader(IReadOnlyList<(FileIndex Index, IReadOnlyL
     public IReadOnlyCollection<SearchItem> GetFuzzy(string token, int maxDistance = 2, CancellationToken cancellationToken = default) =>
         Tokens(token, TokenMatch.Fuzzy, maxDistance, cancellationToken);
 
-    public IReadOnlyList<(SearchItem Item, bool Exact)> GetWithPartial(string token, CancellationToken cancellationToken = default) =>
-        volumes.Count == 1
-            ? volumes[0].Index.TokenItemsWithPartial(token, volumes[0].Scope, cancellationToken)
-            : volumes.SelectMany(volume => volume.Index.TokenItemsWithPartial(token, volume.Scope, cancellationToken)).ToArray();
+    public IReadOnlyList<(SearchItem Item, bool Exact)> GetWithPartial(
+        string token, QueryCatalogFilter? filter, out bool found, CancellationToken cancellationToken)
+    {
+        if (volumes.Count == 1)
+            return volumes[0].Index.TokenItemsWithPartial(token, volumes[0].Scope, filter, out found, cancellationToken);
+
+        var results = new List<(SearchItem Item, bool Exact)>();
+        found = false;
+        foreach (var (index, scope) in volumes)
+        {
+            results.AddRange(index.TokenItemsWithPartial(token, scope, filter, out var volumeFound, cancellationToken));
+            found |= volumeFound;
+        }
+        return results;
+    }
 
     private IReadOnlyCollection<SearchItem> Tokens(string token, TokenMatch mode, int maxDistance, CancellationToken cancellationToken) =>
         volumes.Count == 1

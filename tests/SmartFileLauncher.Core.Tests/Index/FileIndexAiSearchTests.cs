@@ -85,8 +85,107 @@ public sealed class FileIndexAiSearchTests
         Assert.True(compared > 100, $"Karşılaştırılan sonuç çok az: {compared}");
     }
 
-    private sealed class SeparateCalls(FileIndexReader inner) : ISearchStateReader, ITokenIndexSnapshot
+    [Fact]
+    public void TokenLookupSkipsUnrequestedTypesBeforeConstructingCandidates()
     {
+        using var index = FileIndex.Build(@"C:\Kok", Root,
+        [
+            new(Root, Root, ".", FileAttributes.Directory, 0, 0),
+            new(Reference(20), Root, "proje", FileAttributes.Directory, 0, 0),
+            new(Reference(21), Reference(20), "proje-kapak.PNG", FileAttributes.Archive, 128, 0),
+            new(Reference(22), Reference(20), "proje.ä", FileAttributes.Archive, 128, 0),
+            new(Reference(23), Reference(20), "proje.txt", FileAttributes.Archive, 128, 0)
+        ]);
+        var filter = new QueryCatalogFilter(true, true, false, false, null, null, null, null, null, null)
+        {
+            AllowedExtensions = new HashSet<string>([".png", ".Ä"], StringComparer.OrdinalIgnoreCase),
+            IncludeDirectoriesWithoutExtension = true
+        };
+
+        var results = index.TokenItemsWithPartial("proje", null, filter, out var found, CancellationToken.None);
+
+        Assert.True(found);
+        Assert.Equal(new[] { "proje", "proje-kapak.PNG", "proje.ä" }, results.Select(result => result.Item.Name));
+        var excluded = filter with
+        {
+            IncludeDirectories = false,
+            AllowedExtensions = new HashSet<string>([".pdf"], StringComparer.OrdinalIgnoreCase)
+        };
+        Assert.Empty(index.TokenItemsWithPartial("proje", null, excluded, out found, CancellationToken.None));
+        Assert.True(found);
+    }
+
+    [Fact]
+    public void ParsedAiExpandsFolderContentsInOneCatalogPass()
+    {
+        var entries = new List<IndexEntry> { new(Root, Root, ".", FileAttributes.Directory, 0, 0) };
+        for (var i = 0UL; i < 64; i++)
+        {
+            var folder = Reference(100 + i);
+            entries.Add(new(folder, Root, $"proje-{i}", FileAttributes.Directory, 0, 0));
+            entries.Add(new(Reference(200 + i), folder, $"kapak-{i}.png", FileAttributes.Archive, 128, 0));
+            entries.Add(new(Reference(300 + i), folder, $"not-{i}.txt", FileAttributes.Archive, 128, 0));
+        }
+        entries.Add(new(Reference(900), Root, "yayin", FileAttributes.Directory, 0, 0));
+        entries.Add(new(Reference(901), Reference(900), "tanitim.png", FileAttributes.Archive, 128, 0));
+        entries.Add(new(Reference(902), Root, "alakasiz.png", FileAttributes.Archive, 128, 0));
+        using var index = FileIndex.Build(@"C:\Kok", Root, entries);
+        var catalog = new SeparateCalls(new FileIndexReader([(index, null)]));
+        var engine = new AdvancedSearchEngine(_ => catalog, new BasicTokenizer(), new BasicScoringStrategy());
+
+        var results = engine.Search(new StructuredQuery
+        {
+            OriginalText = "proje resim dosyaları",
+            OriginalTerms = ["proje"],
+            HardExtensions = [".png"],
+            TargetType = new TargetType { File = 1, Folder = 0 },
+            FolderHints = [new FolderHint { Name = "yayin", Weight = 1 }]
+        });
+
+        Assert.Equal(65, results.Count);
+        Assert.Contains(results, item => item.Name == "tanitim.png");
+        Assert.All(results, item => Assert.EndsWith(".png", item.Name));
+        Assert.DoesNotContain(results, item => item.Name == "alakasiz.png");
+        Assert.Equal(1, catalog.CatalogReads);
+        Assert.Equal(0, catalog.DescendantReads);
+    }
+
+    [Fact]
+    public void FilterOnlyListsNestedFoldersWithoutReadingSubtrees()
+    {
+        var recent = DateTime.UtcNow.AddDays(-10).Ticks;
+        var old = DateTime.UtcNow.AddDays(-400).Ticks;
+        using var index = FileIndex.Build(@"C:\Kok", Root,
+        [
+            new IndexEntry(Root, Root, ".", FileAttributes.Directory, 0, old, old),
+            new IndexEntry(Reference(30), Root, "Yeni", FileAttributes.Directory, 0, recent, recent),
+            new IndexEntry(Reference(31), Reference(30), "Ic", FileAttributes.Directory, 0, recent, recent),
+            new IndexEntry(Reference(32), Reference(31), "a.txt", FileAttributes.Archive, 64, recent, recent),
+            new IndexEntry(Reference(40), Root, "Eski", FileAttributes.Directory, 0, old, old),
+            new IndexEntry(Reference(41), Reference(40), "IcYeni", FileAttributes.Directory, 0, recent, recent),
+            new IndexEntry(Reference(42), Reference(40), "b.txt", FileAttributes.Archive, 64, recent, recent),
+            new IndexEntry(Reference(43), Reference(40), "c.txt", FileAttributes.Archive, 64, old, old)
+        ]);
+        var catalog = new SeparateCalls(new FileIndexReader([(index, null)]));
+        var engine = new AdvancedSearchEngine(_ => catalog, new BasicTokenizer(), new BasicScoringStrategy());
+
+        var results = engine.Search(new StructuredQuery
+        {
+            FilterOnlyMode = true,
+            IncludeFolderContents = true,
+            TargetType = new TargetType { File = 0.6, Folder = 0.4 },
+            DateFilter = new DateFilter { ModifiedAfter = DateTime.Now.AddDays(-30).ToString("yyyy-MM-dd") }
+        });
+
+        Assert.Equal(new[] { "Ic", "a.txt", "b.txt" }, results.Select(result => result.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(1, catalog.CatalogReads);
+        Assert.Equal(0, catalog.DescendantReads);
+    }
+
+    private sealed class SeparateCalls(FileIndexReader inner) : IQueryCatalogSnapshot, ITokenIndexSnapshot
+    {
+        public int CatalogReads { get; private set; }
+        public int DescendantReads { get; private set; }
         public int ItemCount => inner.ItemCount;
         public int TokenCount => inner.TokenCount;
         public bool IsTokenIndexReady => true;
@@ -96,8 +195,20 @@ public sealed class FileIndexAiSearchTests
         public IReadOnlyCollection<SearchItem> GetFuzzy(string token, int maxDistance = 2, CancellationToken cancellationToken = default) =>
             inner.GetFuzzy(token, maxDistance, cancellationToken);
         public IReadOnlyCollection<SearchItem> GetAllItems(CancellationToken cancellationToken = default) => inner.GetAllItems(cancellationToken);
-        public IReadOnlyCollection<SearchItem> GetDescendants(SearchItem item, CancellationToken cancellationToken = default) =>
-            inner.GetDescendants(item, cancellationToken);
+        public IReadOnlyCollection<SearchItem> GetDescendants(SearchItem item, CancellationToken cancellationToken = default)
+        {
+            DescendantReads++;
+            return inner.GetDescendants(item, cancellationToken);
+        }
+        public bool TryGetItem(string path, out SearchItem item) => inner.TryGetItem(path, out item);
+        public IReadOnlyCollection<SearchItem> GetRoots(CancellationToken cancellationToken = default) => inner.GetRoots(cancellationToken);
+        public IReadOnlyCollection<SearchItem> GetChildren(string path, CancellationToken cancellationToken = default) =>
+            inner.GetChildren(path, cancellationToken);
+        public IEnumerable<SearchItem> GetItems(QueryCatalogFilter filter, CancellationToken cancellationToken = default)
+        {
+            CatalogReads++;
+            return inner.GetItems(filter, cancellationToken);
+        }
         public bool ContainsPath(string path) => inner.ContainsPath(path);
         public ISearchStateReader WithUpserts(IEnumerable<FileSystemNode> nodes, ITokenizer tokenizer) => throw new NotSupportedException();
         public ISearchStateReader WithoutPathAndDescendants(string path) => throw new NotSupportedException();

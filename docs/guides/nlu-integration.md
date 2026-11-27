@@ -103,7 +103,7 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 
 ## Senaryo 6 — AI klasör ve uzantı filtresinin yerel maliyeti
 
-`baver.tr klasörü içindeki resimler` gibi yalnız filtre üreten bir AI sorgusunda, FileIndex klasör segmenti ve uzantı koşullarını dosya nesnesi ve tam yol oluşturmadan önce uygular. Puanlama, sıralama ve sonuç limiti mevcut arama aşamasında uygulanmaya devam eder.
+`baver.tr klasörü içindeki resimler` gibi yalnız filtre üreten bir AI sorgusunda, FileIndex klasör segmenti ve uzantı koşullarını dosya nesnesi ve tam yol oluşturmadan önce uygular. Puanlama, sıralama ve sonuç limiti mevcut arama aşamasında uygulanmaya devam eder. Klasörler yalnız atası da filtreyi geçtiğinde sonuç olur; bu karar alt ağaç okunmadan verilir.
 
 1. Tanılama günlüğünü ve sayaç kaydını başlatın; sorguyu AI modunda yazın.
 2. Sonuçları, alt klasörlerin kapsamını ve seçili sıralamayı gözden geçirin. Aynı adı taşıyan farklı klasörler ve büyük/küçük harfli uzantılar için de deneyin.
