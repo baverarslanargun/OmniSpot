@@ -59,6 +59,55 @@ public sealed class IntentSearchLayoutContractTests
         }
     }
 
+    [Fact]
+    public async Task ChangedNamesTheAiMatcherRejectsLeaveTheResultsUntouched()
+    {
+        const ulong root = 5;
+        IndexEntry[] entries =
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "baver.tr", FileAttributes.Directory, 0, 0, 0),
+            new(17, 16, "assets", FileAttributes.Directory, 0, 0, 0),
+            new(18, 17, "banner.png", FileAttributes.Archive, 100, 0, 0),
+            new(19, 16, "resim-kapak.jpg", FileAttributes.Archive, 100, 0, 0),
+            new(20, root, "Users", FileAttributes.Directory, 0, 0, 0),
+            new(21, 20, "baver", FileAttributes.Directory, 0, 0, 0),
+            new(22, 21, "strateji.png", FileAttributes.Archive, 100, 0, 0)
+        ];
+        const string intent = """
+            {"mode":"keyword","target":"file","folders":["baver tr"],"hard_extensions":["jpg","jpeg","png","gif"],"open":false}
+            """;
+        const string keywords = """
+            {"anchors":[{"primary":"baver","variants":[],"translations":[]},
+                {"primary":"resim","variants":["resimleri"],"translations":["image","photo"]}],
+             "phrases":[],"context":["tr"]}
+            """;
+        const string query = "baver tr resim dosyaları";
+        using var before = FileIndex.Build(@"C:\Synthetic", root, entries);
+        var expected = await ExecuteAsync(new FileIndexReader([(before, null)]), intent, keywords, query: query);
+        var rejected = 0;
+        var accepted = 0;
+        foreach (var (name, parent) in new (string, ulong)[]
+        {
+            ("cache.tmp", 21), ("notlar.txt", 16), ("tr-rapor.pdf", 17), ("log.json", 21),
+            ("yeni.png", 21), ("tr.gif", 17), ("kapak.jpg", 16)
+        })
+        {
+            using var after = FileIndex.Build(@"C:\Synthetic", root,
+                [.. entries, new(99, parent, name, FileAttributes.Archive, 100, 0, 0)]);
+            var actual = await ExecuteAsync(new FileIndexReader([(after, null)]), intent, keywords, query: query);
+            if (AdvancedSearchEngine.MayMatchChangedNames(expected.StructuredQuery!, [name], new BasicTokenizer()))
+            {
+                accepted++;
+                continue;
+            }
+            rejected++;
+            Assert.Equal(expected.Results.Select(ResultKey), actual.Results.Select(ResultKey));
+        }
+        Assert.Equal(4, rejected);
+        Assert.Equal(3, accepted);
+    }
+
     [Theory]
     [InlineData("a")]
     [InlineData("ab")]

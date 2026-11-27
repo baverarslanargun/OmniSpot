@@ -97,8 +97,8 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 
 1. Bir doğal dil araması başlatın. Yanıt beklenirken örnek klasörde bir dosya ekleyin veya yeniden adlandırın.
 2. AI isteğinin indeks bildirimiyle iptal edilmediğini ve sonuçların standart dosya adı aramasına dönüşmediğini doğrulayın.
-3. İlk yanıt geldikten sonra aynı örnek klasörde sorguya uyan bir dosya ekleyin. Sonuçlar mevcut intent ve keyword çözümlemesiyle yerel olarak yenilenmeli; yeni sağlayıcı çağrısı yapılmamalıdır.
-4. Standart dosya adı aramasında sorguyla ilgisiz bir dosyayı değiştirin. MFT indeksinin eski/yeni ad özeti sayesinde yerel sorgu da tekrarlanmamalıdır. AI sorguları, klasör yolu değişiklikleri, tarih filtreleri ve kapsamı bilinmeyen bildirimlerde yerel sonuç kontrolü devam eder. Sonuçlar aynı kaldığında liste ve arama logu tekrar sunulmamalıdır.
+3. İlk yanıt geldikten sonra aynı örnek klasörde sorguya uyan bir dosya ekleyin. Sonuçlar mevcut intent ve keyword çözümlemesiyle yerel olarak yenilenmeli; yeni sağlayıcı çağrısı yapılmamalıdır. Bir yenileme turu uzun sürdüyse sonraki tur, son turun on katı kadar bekler; pencere gizli veya küçültülmüşken yenileme yapılmaz, pencere gösterilince bekleyen yenileme bir kez çalışır.
+4. Standart dosya adı aramasında sorguyla ilgisiz bir dosyayı değiştirin. MFT indeksinin eski/yeni ad özeti sayesinde yerel sorgu da tekrarlanmamalıdır. AI aramasında uzantısı veya adı çözülmüş sorgunun tür ve ad koşullarına uymayan dosya değişiklikleri de yenileme yapmaz; klasör ipucu, genişletilebilir terim veya yazım hatası toleransı olan sorgularda uyan her dosya değişikliğinde kontrol devam eder. Klasör yolu değişiklikleri, tarih filtreleri, indeks sıkıştırması ve kapsamı bilinmeyen bildirimlerde yerel sonuç kontrolü sürer. Sonuçlar aynı kaldığında liste ve arama logu tekrar sunulmamalıdır.
 5. Otomatik yenilemenin filtreyi, sıralamayı, sonuç limitini ve fallback uyarısını koruduğunu; `aç` içeren önceki bir sorgu nedeniyle dosyayı tekrar açmadığını kontrol edin.
 
 ## Senaryo 6 — AI klasör ve uzantı filtresinin yerel maliyeti

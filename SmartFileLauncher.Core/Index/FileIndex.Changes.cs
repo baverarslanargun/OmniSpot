@@ -106,9 +106,10 @@ public sealed partial class FileIndex
                 for (var i = missing.Count; i < extra.Count; i++)
                     changes.Add(IndexChange.Delete(record.FileReference, extra[i].Parent, extra[i].Name));
             }
+            var generation = _generation;
             var result = ApplyCore(changes, cancellationToken);
             if (captureImpact && result.Applied > 0)
-                impact = new(affectedNames?.ToArray(), includesDirectories);
+                impact = new(generation == _generation ? affectedNames?.ToArray() : null, includesDirectories);
             return result;
         }
         finally

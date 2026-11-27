@@ -226,6 +226,7 @@ public partial class MainWindow : Window {
         InitializeMarquee();
         InitializeBatchCommands();
         InitializeToast();
+        InitializeSearchRefreshPace();
         InitializeNameEditing();
         InitializeTabs();
         InitializeShelf();
@@ -909,7 +910,8 @@ public partial class MainWindow : Window {
         if (System.IO.Path.IsPathFullyQualified(evt.FullPath))
             Dispatcher.BeginInvoke(() => Log($"📁 {evt.ChangeType}: {System.IO.Path.GetFileName(evt.FullPath)}"));
 
-        if (SearchRefreshPolicy.ShouldRefresh(evt, Volatile.Read(ref _refreshSearchRequest), _measurementRun == null))
+        if (SearchRefreshPolicy.ShouldRefresh(evt, Volatile.Read(ref _refreshSearchRequest), _measurementRun == null,
+                Volatile.Read(ref _refreshSearchOutcome)))
             Interlocked.Exchange(ref _searchRefreshRequested, 1);
         _fileChangeRefresh.Request();
         SchedulePendingFileChange();
@@ -986,7 +988,8 @@ public partial class MainWindow : Window {
                 !string.IsNullOrWhiteSpace(SearchBox.Text) &&
                 ResultsContainer.Visibility == Visibility.Visible)
             {
-                await RefreshSearchResultsAsync();
+                if (DefersSearchRefresh()) Interlocked.Exchange(ref _searchRefreshRequested, 1);
+                else await RefreshSearchResultsAsync();
             }
         }
         catch (OperationCanceledException)
@@ -1323,6 +1326,10 @@ public partial class MainWindow : Window {
         request ??= new SearchRequest(query, _isNaturalLanguageMode, _connectivityMonitor.IsConnected,
             ReasoningEffort: _appSettings.AiReasoningEffort, Filter: _searchView.Filter, Sort: _searchView.Sort,
             Scope: ActiveSearchScope);
+        if (previousOutcome == null) {
+            Volatile.Write(ref _refreshSearchOutcome, null);
+            EndSearchRefreshPause();
+        }
         Volatile.Write(ref _refreshSearchRequest, request);
         ResetSearchPaging();
         if (previousOutcome == null) {
@@ -1409,6 +1416,8 @@ public partial class MainWindow : Window {
     private void CancelCurrentSearch() {
         _fileSearchIndicatorDelay.Stop();
         Volatile.Write(ref _refreshSearchRequest, null);
+        Volatile.Write(ref _refreshSearchOutcome, null);
+        EndSearchRefreshPause();
         ResetSearchPaging();
         _completedSearchRequest = null;
         _completedSearchOutcome = null;
@@ -1669,6 +1678,7 @@ public partial class MainWindow : Window {
             if (naturalLanguageMode && previousOutcome == null) Log($"🤖 Arama eforu: {reasoningEffort}");
             var (outcome, queryElapsed) = await SearchInBackgroundAsync(request, searchVersion, cancellationToken, previousOutcome);
             var searchElapsed = Stopwatch.GetElapsedTime(searchTimestamp);
+            if (previousOutcome != null && IsCurrentSearch(searchVersion)) PauseSearchRefresh(queryElapsed);
 
             if (naturalLanguageMode || previousOutcome != null)
                 await WaitForSearchPresentationAsync(cancellationToken);
@@ -1684,6 +1694,7 @@ public partial class MainWindow : Window {
             if (previousOutcome != null && HaveSameSearchResults(previousOutcome, outcome)) {
                 _completedSearchRequest = request;
                 _completedSearchOutcome = outcome;
+                Volatile.Write(ref _refreshSearchOutcome, outcome);
                 StartSearchPaging(request, outcome, searchVersion);
                 return;
             }
@@ -1716,6 +1727,7 @@ public partial class MainWindow : Window {
 
             _completedSearchRequest = request;
             _completedSearchOutcome = outcome;
+            Volatile.Write(ref _refreshSearchOutcome, outcome);
             StartSearchPaging(request, outcome, searchVersion);
             UpdateFileAreaForApplications();
             if (updateLatency) {

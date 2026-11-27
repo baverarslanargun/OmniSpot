@@ -439,7 +439,7 @@ public sealed partial class MainWindowSearchRefreshTests
         fixture.ReleaseParser.TrySetResult();
         await fixture.Search("fatura");
 
-        await fixture.Change(new() { AffectedNames = ["unrelated.txt"] });
+        await fixture.Change(new() { AffectedNames = ["yeni.pdf"] });
 
         Assert.Equal(1, fixture.ParserCalls);
         Assert.Equal(2, fixture.LocalCalls);
@@ -526,6 +526,7 @@ public sealed partial class MainWindowSearchRefreshTests
         internal Func<SmartFileLauncher.Core.Filtering.ResultView, int>? CountFor;
         internal readonly List<string> SuggestedQueries = [];
         internal bool FailRefresh;
+        internal TimeSpan LocalDelay;
         internal bool AiNameQuery;
         internal int StandardTotal = 1;
         internal string StandardPrefix = "fatura";
@@ -549,6 +550,7 @@ public sealed partial class MainWindowSearchRefreshTests
                 {
                     var call = Interlocked.Increment(ref LocalCalls);
                     ExecutedQueries.Add(query.Keywords.Single());
+                    if (LocalDelay > TimeSpan.Zero) Thread.Sleep(LocalDelay);
                     if (FailRefresh && call > 1) throw new InvalidOperationException("Yerel indeks hazır değil");
                     return [Result(call == 1 ? "ilk-fatura" : RefreshedName)];
                 },

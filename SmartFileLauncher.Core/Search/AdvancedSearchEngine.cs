@@ -616,6 +616,48 @@ public class AdvancedSearchEngine
             .ToList();
     }
 
+    public static bool MayMatchChangedNames(StructuredQuery query, IEnumerable<string> names, ITokenizer tokenizer)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(tokenizer);
+        var extensions = CreateFilterOnlyAllowedExtensions(query, CancellationToken.None);
+        var filtersExtensions = extensions.Count > 0 &&
+            query.TargetType is not { HasStrongPreference: true, PrefersFolder: true };
+        var candidates = new List<string>();
+        foreach (var name in names)
+        {
+            if (filtersExtensions && !extensions.Contains(Path.GetExtension(name))) continue;
+            if (query.RequiredName is { } required && !ContainsRequiredName(name, required)) continue;
+            candidates.Add(SearchTextNormalizer.Fold(name));
+        }
+        if (candidates.Count == 0) return false;
+        if (query.FilterOnlyMode || query.OriginalText == null ||
+            query.FolderHints.Count > 0 || query.RequiredFolders.Count > 0) return true;
+
+        var tokens = new List<string>();
+        foreach (var term in GetSearchTerms(query))
+        {
+            var anchor = term.Role == SearchTermRole.Anchor;
+            foreach (var token in tokenizer.Tokenize(term.Text))
+            {
+                if (token.Length >= 4 && anchor) return true;
+                tokens.Add(SearchTextNormalizer.Fold(token));
+            }
+        }
+        foreach (var term in query.OriginalTerms)
+        foreach (var token in tokenizer.Tokenize(term))
+        {
+            if (token.Length >= 4) return true;
+            tokens.Add(SearchTextNormalizer.Fold(token));
+        }
+        if (tokens.Count == 0) return true;
+        foreach (var name in candidates)
+        foreach (var token in tokens)
+            if (name.Contains(token, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     private Dictionary<string, (SearchItem node, MatchWeights matches)> GetCandidateNodes(
         StructuredQuery query,
         IReadOnlyList<SearchTerm> searchTerms,
