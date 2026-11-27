@@ -12,7 +12,7 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 
 ### Temel Özellikler
 - ✅ **Global Hotkey**: Ctrl+Space ile her yerden açın
-- ✅ **Akıllı Arama**: Dosya adlarında hızlı arama
+- ✅ **Akıllı Arama**: Dosya adlarında hızlı arama. Türkçe harf farkı gözetilmez (`çıkmış` → `cikmis_sorular`); boşluk ya da `_ - , [ ] ( )` ile ayrılan her kelime adın herhangi bir yerinde aranır (`çıkmış sorular` ve `cikmis_sorular` → `Çıkmış Sorular.pdf`); nokta kelimeyi bölmez, `.pdf` uzantı gibi aranır. Tırnak içindeki metin birebir aranır (`"çam"` `cam`'ı getirmez); başına `!` konan kelime dışlanır (`rapor !taslak`). Yazdığınız biçimle birebir eşleşen adlar önce gelir.
 - **Başlat uygulamaları** genel aramada en üstte görünür. Benzersiz en iyi eşleşmeyi Enter ile açabilir, ok tuşlarıyla başka bir uygulamaya veya dosyaya geçebilirsiniz. Pencere menüsündeki **Tüm uygulamalar** Windows kataloğunu alfabetik açar. Esc önceki aramaya döner.
 - ✅ **Doğal Dil Arama**: İsteğe bağlı Groq desteği ve kural tabanlı fallback ile sorguları yapılandırın
 - ✅ **Klasör Navigasyonu**: Uygulama içinde klasörlerde gezinin

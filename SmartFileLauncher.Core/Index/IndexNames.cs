@@ -346,10 +346,22 @@ internal sealed class IndexNames
     {
         var bits = new ulong[(_count + 63) >> 6];
         Scan(_pool, _poolUsed, _offset, null, _count, upper, wholeWord, bits, cancellationToken);
+        FindFolded(upper, plain, wholeWord, bits, cancellationToken);
+        return bits;
+    }
+
+    internal ulong[] FindFolded(byte[] upper, byte[] plain, CancellationToken cancellationToken)
+    {
+        var bits = new ulong[(_count + 63) >> 6];
+        FindFolded(upper, plain, false, bits, cancellationToken);
+        return bits;
+    }
+
+    private void FindFolded(byte[] upper, byte[] plain, bool wholeWord, ulong[] bits, CancellationToken cancellationToken)
+    {
         if (!plain.AsSpan().SequenceEqual(upper))
             Scan(_pool, _poolUsed, _offset, null, _count, plain, wholeWord, bits, cancellationToken);
         Scan(_plain, _plainUsed, _plainOffset, _plainName, _plainCount, plain, wholeWord, bits, cancellationToken);
-        return bits;
     }
 
     private static void Scan(byte[] pool, int used, int[] offsets, int[]? owners, int count, byte[] pattern, bool wholeWord,

@@ -23,15 +23,18 @@ public sealed partial class FileIndex
         ArgumentNullException.ThrowIfNull(view);
         ArgumentOutOfRangeException.ThrowIfNegative(offset);
         if (string.IsNullOrWhiteSpace(query) || limit <= 0) return [];
-        var pattern = IndexNames.FoldQuery(query);
+        var names = NameQuery.Create(query)!;
+        var literal = names.LiteralText ?? query;
+        var pattern = IndexNames.FoldQuery(literal);
         _lock.EnterReadLock();
         try
         {
             var window = (int)Math.Min(int.MaxValue, (long)offset + limit);
             if (view.Sort.IsRelevance && view.LiteralRanking is { } ranking)
-                return SearchRankedLiteral(query, pattern, offset, window, view.Filter, ResolveScope(scope, view.Scope), ranking, cancellationToken);
+                return SearchRankedLiteral(literal, pattern, names, offset, window, view.Filter, ResolveScope(scope, view.Scope), ranking,
+                    cancellationToken);
 
-            var matches = _names.Match(pattern, cancellationToken);
+            var matches = names.Match(_names, cancellationToken);
             var rows = Collect(matches, window, view, ResolveScope(scope, view.Scope), cancellationToken);
             if (rows.Count <= offset) return [];
             var results = new SearchResult[rows.Count - offset];
@@ -45,25 +48,28 @@ public sealed partial class FileIndex
     {
         ArgumentNullException.ThrowIfNull(view);
         if (string.IsNullOrWhiteSpace(query)) return 0;
-        var pattern = IndexNames.FoldQuery(query);
+        var names = NameQuery.Create(query)!;
         _lock.EnterReadLock();
         try
         {
-            var matches = _names.Match(pattern, cancellationToken);
-            var scopeRows = ResolveScope(scope, view.Scope);
-            var order = SparseOrder(matches, cancellationToken) ?? _byName;
-            var filter = view.Filter;
-            var needsName = filter.Categories != FileFilterCategory.None;
-            var now = DateTime.Now;
-            var count = 0;
-            for (var i = 0; i < order.Count; i++)
-            {
-                if ((i & 4095) == 4095) cancellationToken.ThrowIfCancellationRequested();
-                if (Accepts(order.Rows[i], matches, filter, needsName, scopeRows, now)) count++;
-            }
-            return count;
+            return CountAccepted(names.Match(_names, cancellationToken), view.Filter, ResolveScope(scope, view.Scope), int.MaxValue,
+                cancellationToken);
         }
         finally { _lock.ExitReadLock(); }
+    }
+
+    private int CountAccepted(ulong[] matches, ItemFilter filter, HashSet<uint>? scopeRows, int cap, CancellationToken cancellationToken)
+    {
+        var order = SparseOrder(matches, cancellationToken) ?? _byName;
+        var needsName = filter.Categories != FileFilterCategory.None;
+        var now = DateTime.Now;
+        var count = 0;
+        for (var i = 0; i < order.Count && count < cap; i++)
+        {
+            if ((i & 4095) == 4095) cancellationToken.ThrowIfCancellationRequested();
+            if (Accepts(order.Rows[i], matches, filter, needsName, scopeRows, now)) count++;
+        }
+        return count;
     }
 
     private bool Accepts(uint row, ulong[] matches, ItemFilter filter, bool needsName, HashSet<uint>? scope, DateTime now)

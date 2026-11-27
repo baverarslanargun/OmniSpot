@@ -50,6 +50,25 @@ public sealed partial class FileIndex
         return candidates;
     }
 
+    private List<OpenedLiteralCandidate>? GetOpenedLooseCandidates(NameQuery names, LiteralRanking ranking,
+        CancellationToken cancellationToken)
+    {
+        List<OpenedLiteralCandidate>? candidates = null;
+        foreach (var path in ranking.OpenedPaths)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!path.StartsWith(RootPath, StringComparison.OrdinalIgnoreCase)) continue;
+            var boost = ranking.Boost(path);
+            if (boost <= 0) continue;
+            var nameOffset = path.AsSpan().LastIndexOfAny(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + 1;
+            var name = path[nameOffset..];
+            if (!names.Matches(name)) continue;
+            var folded = Ascii.IsValid(name) ? null : IndexNames.FoldQuery(name);
+            (candidates ??= []).Add(new OpenedLiteralCandidate(path, nameOffset, folded, boost));
+        }
+        return candidates;
+    }
+
     private static int CompareOpenedCandidates(OpenedLiteralCandidate left, OpenedLiteralCandidate right)
     {
         var byScore = right.Score.CompareTo(left.Score);
@@ -91,11 +110,14 @@ public sealed partial class FileIndex
         return row;
     }
 
-    private IReadOnlyList<SearchResult> SearchRankedLiteral(string query, byte[] pattern, int offset, int window,
+    private IReadOnlyList<SearchResult> SearchRankedLiteral(string query, byte[] pattern, NameQuery names, int offset, int window,
         ItemFilter filter, HashSet<uint>? scope, LiteralRanking ranking, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (scope is { Count: 0 } || Array.IndexOf(pattern, (byte)0) >= 0) return [];
+        var allowed = names.HasOperators ? names.Match(_names, cancellationToken) : null;
+        if (allowed is not null && !allowed.AsSpan().ContainsAnyExcept(0UL)) return [];
+        bool Allowed(int name) => allowed is null || IsMatchedName(allowed, name);
 
         var now = DateTime.Now;
         var needsName = filter.Categories != FileFilterCategory.None;
@@ -116,7 +138,7 @@ public sealed partial class FileIndex
                 cancellationToken.ThrowIfCancellationRequested();
                 var row = FindOpenedRow(candidate.Path);
                 if (row == NoRow || !IsAlive(row) || openedRows.Contains(row) || !AcceptsMatchedRow(row, filter, needsName, scope, now) ||
-                    GetLiteralTier(_names.Scanned(_name[row]), pattern, extensionless) != tier) continue;
+                    !Allowed(_name[row]) || GetLiteralTier(_names.Scanned(_name[row]), pattern, extensionless) != tier) continue;
 
                 openedRows.Add(row);
                 selected.Add(new RankedLiteralRow(row, candidate.Score));
@@ -146,7 +168,7 @@ public sealed partial class FileIndex
                     lastName = id;
                     actualTier = GetLiteralPrefixTier(_names.Scanned(id), pattern.Length, extensionless);
                 }
-                if (actualTier == tier && !openedRows.Contains(row) &&
+                if (actualTier == tier && !openedRows.Contains(row) && Allowed(id) &&
                     AcceptsMatchedRow(row, filter, needsName, scope, now))
                     selected.Add(new RankedLiteralRow(row, tier));
             }
@@ -162,7 +184,7 @@ public sealed partial class FileIndex
             {
                 if ((i & 4095) == 0) cancellationToken.ThrowIfCancellationRequested();
                 var row = order.Rows[i];
-                if (IsMatchedName(matches, _name[row]) && !openedRows.Contains(row) &&
+                if (IsMatchedName(matches, _name[row]) && !openedRows.Contains(row) && Allowed(_name[row]) &&
                     AcceptsMatchedRow(row, filter, needsName, scope, now))
                     selected.Add(new RankedLiteralRow(row, tier));
             }
@@ -201,6 +223,13 @@ public sealed partial class FileIndex
             {
                 LiteralMatchBuffers.Return(masks);
             }
+        }
+
+        if (selected.Count < window)
+        {
+            foreach (var entry in selected) openedRows.Add(entry.Row);
+            opened[0] = GetOpenedLooseCandidates(names, ranking, cancellationToken);
+            AppendMatches(0, allowed ?? names.MatchBeyondLiteral(_names, cancellationToken));
         }
 
         cancellationToken.ThrowIfCancellationRequested();

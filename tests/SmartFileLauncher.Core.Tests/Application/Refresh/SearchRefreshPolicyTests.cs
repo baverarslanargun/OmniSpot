@@ -14,10 +14,16 @@ public sealed class SearchRefreshPolicyTests
     [InlineData("yeni", "eski.txt", false)]
     [InlineData("çağ", "ÇAĞRI.txt", true)]
     [InlineData("çağrı", "çağrı.txt", true)]
-    [InlineData("çağrı", "cagri.txt", false)]
+    [InlineData("çağrı", "cagri.txt", true)]
+    [InlineData("cagri", "ÇAĞRI.txt", true)]
     [InlineData("iki kelime", "iki kelime.txt", true)]
-    [InlineData("iki kelime", "iki-kelime.txt", false)]
-    public void LiteralSearchIgnoresUnrelatedNamesWithoutChangingItsMatchingRules(string query, string name, bool expected)
+    [InlineData("iki kelime", "iki-kelime.txt", true)]
+    [InlineData("iki kelime", "kelime.txt", false)]
+    [InlineData("çıkmış sorular", "cikmis_sorular.pdf", true)]
+    [InlineData("çıkmış sorular", "sorular.txt", false)]
+    [InlineData("cikmis_sorular", "Çıkmış Sorular.pdf", true)]
+    [InlineData(".pdf", "pdf-rehberi.txt", false)]
+    public void NameSearchRefreshesOnlyForNamesItWouldFind(string query, string name, bool expected)
     {
         Assert.Equal(expected, SearchRefreshPolicy.ShouldRefresh(new() { AffectedNames = [name] },
             new(query, false, true), literalNamesOnly: true));
