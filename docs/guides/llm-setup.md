@@ -2,7 +2,7 @@
 
 ## Güncel durum
 
-OmniSpot'un aktif doğal dil akışı Celeris-1 ile intent analizi ve Groq üzerindeki Qwen ile keyword üretimini paralel çalıştırır. Sonuçlar `StructuredQuery` nesnesine dönüştürülür. Metadata-only sorgularda da iki çağrı yapılır; keyword yanıtı yanlış `filter` kararını düzeltebilir. Geçici 429/5xx için her çağrı en fazla bir kez yinelenebildiğinden normalde iki, en kötü durumda dört POST oluşabilir. İstek boyutu veya kalıcı kota kaynaklı 429 aynı payload ile yinelenmez. İnternet yoksa arama standard/local yola düşer. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer; keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
+OmniSpot'un aktif doğal dil akışı Celeris-1 ile intent analizi ve Groq üzerindeki Qwen ile keyword üretimini paralel çalıştırır. Sonuçlar `StructuredQuery` nesnesine dönüştürülür. Yalnız filtre içeren sorgularda da iki çağrı yapılır ve yerel ayrıştırıcı sorgunun hangi bölümlerinin filtre olduğunu belirler. Geçici 429/5xx için her çağrı en fazla bir kez yinelenebildiğinden normalde iki, en kötü durumda dört POST oluşabilir. İstek boyutu veya kalıcı kota kaynaklı 429 aynı payload ile yinelenmez. İnternet yoksa arama standard/local yola düşer. Intent isteği başarısız olursa uygulama kural tabanlı yerel parser'a geçer. Keyword isteği tek başına başarısız olursa intent sonucu ve sorgu metniyle devam eder.
 
 Standart arama dış AI servisi kullanmaz ve yerel indeks üzerinde anlık çalışır. AI modunda metin girişi son tuştan sonra 600 ms sessizlik bekler. Bu sırada yeni tuş, metni temizleme, mod değiştirme veya kapanış önceki beklemeyi iptal eder. AI modu kapatıldığında mevcut metinle standart arama hemen başlar. Otomatik indeks yenilemesi daha önce çözülmüş AI sorgusunu yerel olarak çalıştırır; bu beklemeyi ve sağlayıcı çağrılarını tekrarlamaz.
 
@@ -12,12 +12,18 @@ AI düğmesine fareyle gelindiğinde veya klavyeyle odaklanıldığında yanınd
 
 1. Kullanıcı arayüzünde Doğal Dil modu açılır.
 2. `IntentParser` aynı sorgu için Celeris intent ve Groq keyword isteklerini başlatır. Mevcut `ParseWithGroqAsync` / `ParseWithGroqEffortAsync` adları çağıranlarla uyumluluk için korunmuştur.
-3. Intent sonucu filtre, hedef türü, tarih/boyut ve benzeri yapılandırılmış alanlara dönüştürülür.
-4. Keyword sonucu başarılıysa terimler zorunlu `anchor`, sıralama amaçlı `phrase` ve düşük etkili `context` rollerine ayrılır. Aynı anchor grubundaki biçim ve çeviriler alternatif, farklı anchor grupları birlikte zorunludur. Ağırlıklar modelden alınmaz; rol, kategori ve sıra temelinde uygulama tarafından deterministik atanır.
-Dosya hedefli başarılı AI sorgusunda, intent klasör adıyla örtüşen anchor grubu `FolderContextTerms` alanına ayrılır. En az bir dosya anchor grubu korunur. Motor dosya adaylarını kalan anchorlarla bulur, klasör gruplarını üst klasörlerde doğrular; Türkçe/ASCII biçimleri ve grup içi alternatifler desteklenir. Klasör bağlamı dosya adıyla karşılanamaz. Klasör hedefi, yalnız tek anchor ve fallback akışları mevcut davranışını korur. Standart arama bu alanı üretmez.
-
-5. Intent yanlışlıkla `filter` dönse bile keyword yanıtında metadata olmayan bir anchor varsa sorgu keyword modunda korunur.
+3. Yerel ayrıştırıcı sorgu metnindeki açık tür ve uzantı, klasör kapsamı, tarih, boyut ve ad koşullarını uygular. Örneğin `JPG dosyaları`, `Arşiv klasöründe` ve `rapor adlı` sonuç kümesini daraltabilir. `sunum`, `excel` ve `fotoğraf` gibi tür adları ilgili uzantı ailesini zorunlu kılar; fotoğraf ailesi HEIC'i de kapsar. `dünkü` ve `geçen ayın başında` gibi çekimli zaman ifadeleri tarih olarak tanınır. Model aralığı yanlış tarih alanına koyarsa aralık, metindeki fiilin gösterdiği oluşturma veya değiştirme alanına taşınır. `ZXQ-9917` gibi harf ve rakamı tire ya da alt çizgiyle birleştiren tek bir kimlik ad içinde bütün olarak aranır; ayırıcı farkı (`ZXQ_9917`) sonucu değiştirmez. `hani`, `şu`, `şey`, `vardı ya` gibi konuşma dolguları ad kanıtı sayılmaz.
+4. Kullanıcının yazdığı ad terimleriyle modelin ürettiği anahtar kelimeler aday bulur. Tek terim eşleşmesi sonuç için yeterlidir. Tam ad, birden fazla eşleşme ve uyuşan üst klasörler sıralamada daha çok katkı sağlar. Modelin tür ve klasör tahminleri de puana katkı sağlar.
+5. Sorgu yalnız açık filtrelerden oluşuyorsa koşulları karşılayan katalog kayıtları listelenir. `Aç` isteğinde en üst adayın dosya adı ayrıca doğrulanır.
 6. Intent isteği, bağlantı veya zaman aşımı nedeniyle başarısızsa `ParseIntent` kural tabanlı fallback'i çalışır.
+
+Sorgudaki iki ad indekslenmiş bir klasöre ve onun doğrudan üst klasörüne tam olarak uyduğunda AI araması klasörü gösterir. Örneğin `çıkmış sorular ayrık matematik` sorgusu `Ayrık Matematik\Çıkmış Sorular` klasörünü bulabilir. Türkçe karakterlerin ASCII karşılıkları ve `altındaki` gibi konum ifadeleri desteklenir; `altındaki` ile adı verilen klasörün daha derindeki aynı adlı alt klasörleri doğrudan alt klasörden sonra gelir. Sözcüklere bölünerek yazılmış tek bir klasör adı da bulunur: `lale tr` sorgusu `lale.tr` klasörünü, `lale` adlı başka bir klasörün derinindeki `tr` klasörlerinin önüne koyar.
+
+Tek parçalı bir ad sorgusunda, açık filtre veya açma komutu bulunmadığında normal ad aramasının eşleşmeleri kullanılır. Örneğin `bav`, `baver` ve `baver.tr` sorguları AI modu açıkken aynı klasörü bulabilir. Ad eşleşmesi yoksa AI terimleriyle arama devam eder.
+
+AI aramasında aday bulmak için kullanılan anahtar kelimeler, uzunluklarına bakılmadan ad içinde kısmi eşleşebilir. Örneğin AI'nin ürettiği `Abc` terimi `Abc.pdf` ve `Abcd.pdf` adlarını eşleştirir. Tam kelime eşleşmesi daha yüksek puan alır.
+
+`baver tr resim dosyaları` sorgusunda resim türü zorunludur. `baver.tr` eşleşmesi, bu klasörün altındaki `banner.png` gibi resimleri öne çıkarır. `baver.tr klasöründeki resim dosyaları` sorgusu aynı klasörü kapsam filtresi olarak uygular.
 
 Aktif endpoint ve modeller:
 
@@ -75,7 +81,7 @@ dotnet run --project .\SmartFileLauncher.UI\SmartFileLauncher.UI.csproj
 Intent API anahtarı yoksa uygulama ağ isteği göndermeden kural tabanlı parser'a döner. Celeris anahtarı geçersizse, sağlayıcıya erişilemiyorsa veya yanıt sözleşmeye uymuyorsa intent isteğinin hatası üzerine aynı fallback çalışır. Fallback:
 
 - sorgudan temel anahtar kelimeleri çıkarır,
-- intent tarih filtresi korunuyorsa zaman ve ilişki sözcüklerini zorunlu arama hedefi yapmaz,
+- açık takvim tarihlerini, boyutları ve tanınan klasör kapsamlarını yerelde ayrıştırır,
 - bilinen dosya türlerini uzantılara eşler,
 - klasör içeriğini aramaya dahil eder,
 - AI intent sonucundaki gelişmiş tarih, boyut ve eylem semantiğini garanti etmez.

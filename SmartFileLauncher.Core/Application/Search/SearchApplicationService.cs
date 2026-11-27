@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.Filtering;
+using SmartFileLauncher.Core.Index;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Search;
 
@@ -139,6 +140,16 @@ public sealed class SearchApplicationService : ISearchApplicationService
         cancellationToken.ThrowIfCancellationRequested();
         structuredQuery ??= CreateDefaultQuery(request.Query);
 
+        if (CanTryLiteralNameSearch(request.Query, structuredQuery))
+        {
+            var literal = await StandardOutcomeAsync(request, SearchExecutionMode.Standard, null, cancellationToken)
+                .ConfigureAwait(false);
+            if (literal.Results.Count > 0)
+            {
+                return literal;
+            }
+        }
+
         IReadOnlyList<SearchResult> results;
         try
         {
@@ -214,6 +225,19 @@ public sealed class SearchApplicationService : ISearchApplicationService
                 cancellationToken),
             cancellationToken);
 
+    private static bool CanTryLiteralNameSearch(string query, StructuredQuery parsedQuery)
+    {
+        var name = query.Trim();
+        return name.Length > 0 && !name.Any(char.IsWhiteSpace) &&
+            !parsedQuery.FilterOnlyMode &&
+            parsedQuery.FileTypes.Count == 0 && parsedQuery.HardExtensions.Count == 0 &&
+            parsedQuery.PredictedExtensions.Count == 0 && parsedQuery.FolderContextTerms.Count == 0 &&
+            parsedQuery.RequiredFolders.Count == 0 &&
+            (parsedQuery.RequiredName == null || string.Equals(SearchTextNormalizer.Fold(parsedQuery.RequiredName),
+                SearchTextNormalizer.Fold(name.ToLowerInvariant()), StringComparison.OrdinalIgnoreCase)) &&
+            parsedQuery.DateFilter == null && parsedQuery.SizeFilter == null && parsedQuery.OpenAction?.ShouldOpen != true;
+    }
+
     private static string? ResolveAutoOpenPath(
         StructuredQuery query,
         IReadOnlyList<SearchResult> results)
@@ -226,7 +250,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
         }
 
         var best = results[0];
-        if (best.Score < 100)
+        if (best.Score < 100 || !HasOpeningNameEvidence(query, best.Name))
         {
             return null;
         }
@@ -242,6 +266,18 @@ public sealed class SearchApplicationService : ISearchApplicationService
         }
 
         return best.FullPath;
+    }
+
+    private static bool HasOpeningNameEvidence(StructuredQuery query, string name)
+    {
+        if (query.OriginalText == null) return true;
+        if (query.RequiredName is { } required)
+            return NameQuery.Create(required)?.Matches(name) == true;
+
+        return query.OriginalTerms.Any(term => term.Any(char.IsLetter) && NameQuery.Create(term)?.Matches(name) == true) &&
+            query.SearchTerms.Where(term => term.Role == SearchTermRole.Anchor)
+                .GroupBy(term => term.AnchorGroup)
+                .All(group => group.Any(term => NameQuery.Create(term.Text)?.Matches(name) == true));
     }
 
     private static StructuredQuery CreateDefaultQuery(string query) =>

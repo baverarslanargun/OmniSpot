@@ -64,7 +64,7 @@ UI testinden önce aynı sorgunun yapılandırılmış sonucunu terminalde görm
 4. Sonuçlarda örnek `.mp4` dosyalarının bulunduğunu kontrol edin.
 5. `budget ile ilgili excel dosyasını bul` sorgusunda `.xlsx` örneğinin döndüğünü kontrol edin.
 6. `yaz dönemine ait biletler` sorgusunda logda ana hedefin `bilet`, yardımcı bağlamın `yaz` olduğunu ve tarih aralığının çalıştırıldığı yıl için 1 Haziran–1 Eylül üretildiğini kontrol edin.
-7. `Yaza merhaba` veya `altyazı` içeren fakat `bilet` içermeyen örneklerin yalnız `yaz` benzerliği nedeniyle sonuçlara girmediğini doğrulayın.
+7. Aynı tarih aralığında bilet adını taşıyan dosyaların, yalnız `yaz` ile eşleşen örneklerden önce geldiğini doğrulayın.
 
 Model çıktısı deterministik olmadığı için token listesi veya skorlar birebir sabit kabul edilmemelidir. Doğrulama; uygun dosya türünün, klasör ipucunun ve beklenen örneklerin sonuçlara yansımasına odaklanır.
 

@@ -59,7 +59,8 @@ public sealed class IntentParserTests
             {"primary":"stok","variants":["stoklar"],"translations":["stock","inventory"]}],"phrases":[],"context":[]}
             """));
 
-        var query = await CreateParser(intent, keyword).ParseWithGroqAsync("Şevval projesindeki stok php dosyası");
+        var original = target == "folder" ? "Şevval stok klasörünü" : "Şevval stok php dosyası";
+        var query = await CreateParser(intent, keyword).ParseWithGroqAsync(original);
 
         Assert.False(query.UsedFallback);
         Assert.Null(query.WarningMessage);
@@ -79,7 +80,8 @@ public sealed class IntentParserTests
                 var standard = new SearchEngine(_ => state, tokenizer, new BasicScoringStrategy());
                 var before = standard.Search("stocks").Select(result => (result.FullPath, result.Score)).ToArray();
                 var advanced = new AdvancedSearchEngine(_ => state, tokenizer, new BasicScoringStrategy());
-                Assert.Equal(targetFile.FullPath, Assert.Single(advanced.Search(query)).FullPath);
+                var results = advanced.Search(query);
+                Assert.Equal(new[] { targetFile.FullPath, otherFile.FullPath }, results.Select(result => result.FullPath));
                 Assert.Equal(2, before.Length);
                 Assert.Equal(before, standard.Search("stocks").Select(result => (result.FullPath, result.Score)).ToArray());
             }
@@ -218,10 +220,10 @@ public sealed class IntentParserTests
                 """));
         var parser = CreateParser(intentHandler, keywordHandler);
 
-        var result = await parser.ParseWithGroqAsync("2026 bütçe raporu excel");
+        var result = await parser.ParseWithGroqAsync("Downloads klasöründe temmuz ayında oluşturulan 1-20 MB 2026 bütçe raporu .xlsx");
 
         Assert.False(result.UsedFallback);
-        Assert.Equal(["xlsx"], result.HardExtensions);
+        Assert.Equal([".xlsx"], result.HardExtensions);
         Assert.Equal(["pdf"], result.SoftExtensions);
         Assert.Equal("Downloads", Assert.Single(result.FolderHints).Name);
         Assert.Equal("2026-07-01", result.DateFilter?.CreatedAfter);
@@ -660,14 +662,14 @@ public sealed class IntentParserTests
 
         using var request = JsonDocument.Parse(Assert.Single(keywordHandler.RequestBodies));
         var prompt = request.RootElement.GetProperty("messages")[0].GetProperty("content").GetString();
-        Assert.Contains("Only anchor terms can admit candidates", prompt);
+        Assert.Contains("Each matching term can admit a candidate.", prompt);
         Assert.Contains("Input: uçak bileti", prompt);
         Assert.Contains("Input: club rom", prompt);
         Assert.Contains("Input: geçen hafta değiştirilmiş PDF dosyaları", prompt);
     }
 
     [Fact]
-    public async Task MissingAnchorUsesConservativeRuleBasedFallback()
+    public async Task MissingAnchorAddsRuleBasedTermsAndKeepsModelClues()
     {
         var parser = CreateParser(
             new QueueHttpMessageHandler(
@@ -694,10 +696,12 @@ public sealed class IntentParserTests
 
         var result = await parser.ParseWithGroqAsync("yaz dönemine ait biletler");
 
-        var term = Assert.Single(result.SearchTerms);
+        var term = Assert.Single(result.SearchTerms, term => term.Role == SearchTermRole.Anchor);
         Assert.Equal("bilet", term.Text);
         Assert.Equal(SearchTermRole.Anchor, term.Role);
         Assert.Equal(0, term.AnchorGroup);
+        Assert.Contains(result.SearchTerms, term => term.Role == SearchTermRole.Phrase && term.Text == "yaz dönemi");
+        Assert.Contains(result.SearchTerms, term => term.Role == SearchTermRole.Context && term.Text == "yaz");
         Assert.Contains("kullanılabilir arama terimi", result.WarningMessage);
     }
 

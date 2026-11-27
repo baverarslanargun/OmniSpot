@@ -44,7 +44,8 @@ public sealed class MainWindowNavigationTests
     public Task BackFromAFolderOpenedFromSearchRestoresTheResultsWithoutSearchingAgain(bool naturalLanguage) => RunSta(async () =>
     {
         using var fixture = new Fixture();
-        await fixture.Search("fatura", naturalLanguage);
+        var query = naturalLanguage ? "fatura klasörü" : "fatura";
+        await fixture.Search(query, naturalLanguage);
         var result = Assert.Single(fixture.Model.SearchResults);
 
         await fixture.Navigate(result.FullPath);
@@ -56,7 +57,7 @@ public sealed class MainWindowNavigationTests
         await fixture.Back();
 
         Assert.Null(fixture.Model.CurrentFolderPath);
-        Assert.Equal("fatura", fixture.SearchBox.Text);
+        Assert.Equal(query, fixture.SearchBox.Text);
         Assert.Same(result, Assert.Single(fixture.Model.SearchResults));
         Assert.Equal(Visibility.Visible, fixture.Element("ResultsContainer").Visibility);
         Assert.Equal(Visibility.Collapsed, fixture.Element("FolderPathBar").Visibility);
@@ -79,7 +80,7 @@ public sealed class MainWindowNavigationTests
     {
         using var fixture = new Fixture();
         fixture.RefreshedName = "yeni-fatura";
-        await fixture.Search("fatura", naturalLanguage: true);
+        await fixture.Search("fatura klasörü", naturalLanguage: true);
         await fixture.Navigate(fixture.Model.SearchResults[0].FullPath);
 
         await fixture.Change(new FileChangeEvent { AffectedNames = ["yeni-fatura"] });

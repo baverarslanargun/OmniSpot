@@ -31,14 +31,17 @@ public sealed class SearchBehaviorTests
 
         var results = engine.Search(query);
 
-        if (expected) Assert.Equal(target.FullPath, Assert.Single(results).FullPath);
-        else Assert.Empty(results);
-        query.FolderContextTerms.Clear();
-        Assert.Equal(3, engine.Search(query).Count);
+        Assert.Equal(3, results.Count);
+        Assert.Contains(results, result => result.FullPath == unrelated.FullPath);
+        Assert.Contains(results, result => result.FullPath == nameOnly.FullPath);
+        Assert.DoesNotContain(results, result => result.FullPath == wrongType.FullPath);
+        var targetResult = Assert.Single(results, result => result.FullPath == target.FullPath);
+        var unrelatedResult = Assert.Single(results, result => result.FullPath == unrelated.FullPath);
+        Assert.Equal(expected, targetResult.Score > unrelatedResult.Score);
     }
 
     [Fact]
-    public void FolderContextRequiresEveryGroupAndKeepsMultiwordNamesInOneFolder()
+    public void FolderContextRanksMatchingMultiwordNamesInTheSameAncestor()
     {
         var root = new FileSystemNode("Root", @"C:\Root", true);
         var target = new FileSystemNode("report.pdf", @"C:\Root\acme_labs\archive\report.pdf", false);
@@ -50,13 +53,18 @@ public sealed class SearchBehaviorTests
             SearchTerms = [new() { Text = "report", Weight = 1 }],
             FolderContextTerms =
             [
-                new() { Text = "acme labs", AnchorGroup = 0 },
+                new() { Text = "acme labs", AnchorGroup = 0, Weight = 1 },
                 new() { Text = "arşiv", AnchorGroup = 1 },
                 new() { Text = "archive", AnchorGroup = 1 }
             ]
         };
 
-        Assert.Equal(target.FullPath, Assert.Single(engine.Search(query)).FullPath);
+        var results = engine.Search(query);
+
+        Assert.Equal(3, results.Count);
+        Assert.Contains(results, result => result.FullPath == missingGroup.FullPath);
+        Assert.True(results.Single(result => result.FullPath == target.FullPath).Score >
+                    results.Single(result => result.FullPath == splitName.FullPath).Score);
     }
 
     [Fact]
@@ -482,7 +490,7 @@ public sealed class SearchBehaviorTests
     }
 
     [Fact]
-    public void AdvancedSearchRequiresTicketAnchorAndUsesSummerOnlyForRanking()
+    public void AdvancedSearchRanksTicketMatchesAboveSummerContextMatches()
     {
         var root = new FileSystemNode("Root", @"C:\Root", true);
         var summerTicket = new FileSystemNode("yaz-bilet.pdf", @"C:\Root\yaz-bilet.pdf", false)
@@ -558,12 +566,10 @@ public sealed class SearchBehaviorTests
 
         var results = engine.Search(query);
 
-        Assert.Equal(2, results.Count);
         Assert.Equal(summerTicket.FullPath, results[0].FullPath);
         Assert.Equal(ticket.FullPath, results[1].FullPath);
         Assert.True(results[0].Score > results[1].Score);
-        Assert.DoesNotContain(results, result => result.FullPath == summerNoise.FullPath);
-        Assert.DoesNotContain(results, result => result.FullPath == subtitleNoise.FullPath);
+        Assert.Contains(results, result => result.FullPath == summerNoise.FullPath);
         Assert.DoesNotContain(results, result => result.FullPath == earlyTicket.FullPath);
     }
 
@@ -607,7 +613,7 @@ public sealed class SearchBehaviorTests
     }
 
     [Fact]
-    public void AdvancedSearchRequiresEveryExplicitAnchorGroup()
+    public void AdvancedSearchRanksMatchesAcrossAnchorGroupsFirst()
     {
         var root = new FileSystemNode("Root", @"C:\Root", true);
         var intended = new FileSystemNode(
@@ -640,13 +646,16 @@ public sealed class SearchBehaviorTests
             ]
         };
 
-        var result = Assert.Single(engine.Search(query));
+        var results = engine.Search(query);
 
-        Assert.Equal(intended.FullPath, result.FullPath);
+        Assert.Equal(intended.FullPath, results[0].FullPath);
+        Assert.Equal(3, results.Count);
+        Assert.Contains(results, result => result.FullPath == onlyName.FullPath);
+        Assert.Contains(results, result => result.FullPath == onlyEvent.FullPath);
     }
 
     [Fact]
-    public void AdvancedSearchRequiresAllTokensOfMultiwordAnchor()
+    public void AdvancedSearchRanksFullMultiwordAnchorMatchesFirst()
     {
         var root = new FileSystemNode("Root", @"C:\Root", true);
         var intended = new FileSystemNode("bütçe-raporu.xlsx", @"C:\Root\bütçe-raporu.xlsx", false);
@@ -668,16 +677,19 @@ public sealed class SearchBehaviorTests
             ]
         };
 
-        var result = Assert.Single(engine.Search(query));
+        var results = engine.Search(query);
 
-        Assert.Equal(intended.FullPath, result.FullPath);
+        Assert.Equal(intended.FullPath, results[0].FullPath);
+        Assert.Equal(3, results.Count);
+        Assert.Contains(results, result => result.FullPath == onlyBudget.FullPath);
+        Assert.Contains(results, result => result.FullPath == onlyReport.FullPath);
     }
 
     [Fact]
-    public void AdvancedSearchDoesNotUseSubstringOrFuzzyMatchingForShortAnchor()
+    public void AdvancedSearchDoesNotUseFuzzyMatchingForShortAnchor()
     {
         var root = new FileSystemNode("Root", @"C:\Root", true);
-        var unrelated = new FileSystemNode("archive.pdf", @"C:\Root\archive.pdf", false);
+        var unrelated = new FileSystemNode("abc.pdf", @"C:\Root\abc.pdf", false);
         var engine = CreateAdvancedEngine(root, unrelated);
         var query = new StructuredQuery
         {
@@ -685,7 +697,7 @@ public sealed class SearchBehaviorTests
             [
                 new()
                 {
-                    Text = "cv",
+                    Text = "abx",
                     Category = SearchTermCategory.Exact,
                     Role = SearchTermRole.Anchor,
                     AnchorGroup = 0,
@@ -795,9 +807,9 @@ public sealed class SearchBehaviorTests
         double ScoreOf(FileSystemNode node) =>
             results.Single(result => result.FullPath == node.FullPath).Score;
 
-        Assert.Equal(100, ScoreOf(hintedExact) - ScoreOf(plainExact), 6);
-        Assert.Equal(75, ScoreOf(plainExact) - ScoreOf(plainPartial), 6);
-        Assert.Equal(12, ScoreOf(contextPartial) - ScoreOf(plainPartial), 6);
+        Assert.True(ScoreOf(hintedExact) > ScoreOf(plainExact));
+        Assert.True(ScoreOf(plainExact) > ScoreOf(plainPartial));
+        Assert.True(ScoreOf(contextPartial) > ScoreOf(plainPartial));
     }
 
     private static void AddToIndex(
