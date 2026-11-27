@@ -26,9 +26,10 @@ public sealed partial class FileIndex
             _includeDirectories = filter.IncludeDirectoriesWithoutExtension;
             if (_segments is not null)
             {
+                Array.Sort(_segments, StringComparer.OrdinalIgnoreCase);
                 var rootParts = rootPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
                 for (var i = 0; i + 1 < rootParts.Length; i++)
-                    if (Contains(_segments, rootParts[i])) { _rootMatches = true; break; }
+                    if (MatchesSegment(rootParts[i])) { _rootMatches = true; break; }
             }
         }
 
@@ -86,8 +87,23 @@ public sealed partial class FileIndex
         {
             var flags = (byte)0;
             if (_extensions is not null && Contains(_extensions, Path.GetExtension(name))) flags |= ExtensionMatch;
-            if (_segments is not null && !_rootMatches && Contains(_segments, name)) flags |= SegmentMatch;
+            if (_segments is not null && !_rootMatches && MatchesSegment(name)) flags |= SegmentMatch;
             return flags;
+        }
+
+        private bool MatchesSegment(ReadOnlySpan<char> name)
+        {
+            var lower = 0;
+            var upper = _segments!.Length - 1;
+            while (lower <= upper)
+            {
+                var middle = lower + (upper - lower) / 2;
+                var order = name.CompareTo(_segments[middle].AsSpan(), StringComparison.OrdinalIgnoreCase);
+                if (order == 0) return true;
+                if (order < 0) upper = middle - 1;
+                else lower = middle + 1;
+            }
+            return false;
         }
 
         internal bool Matches(FileIndex index, uint row, bool directory)

@@ -47,6 +47,8 @@ function Assert-Installed([string]$Version) {
 }
 
 $version = [version](Get-Item -LiteralPath $Setup).VersionInfo.FileVersion
+$previousVersion = [version](Get-Item -LiteralPath $PreviousSetup).VersionInfo.FileVersion
+if ($previousVersion -ge $version) { throw 'Geçiş testi için önceki paket daha eski bir sürüm olmalıdır.' }
 $version = $version.ToString(3)
 Invoke-Setup $Setup
 Assert-Installed $version
@@ -54,7 +56,7 @@ Uninstall-OmniSpot
 if (Get-Service $service -ErrorAction SilentlyContinue) { throw 'Temiz kurulum kaldırıldıktan sonra servis kaldı.' }
 
 Invoke-Setup $PreviousSetup
-Assert-Installed '1.0.0'
+Assert-Installed ($previousVersion.ToString(3))
 New-Item -Type Directory -Path $corpus,$settingsDir -Force | Out-Null
 Set-Content -LiteralPath $sample -Value 'release smoke fixture'
 @{ IndexedFolders = @($corpus); SearchDebounceMs = 300; StartMinimized = $false } | ConvertTo-Json | Set-Content -LiteralPath $settings -Encoding utf8

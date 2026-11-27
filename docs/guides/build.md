@@ -1,4 +1,4 @@
-# OmniSpot V1.1 - Build & Release Guide
+# OmniSpot V1.2 - Build & Release Guide
 
 ## 🚀 Hızlı Build
 
@@ -52,13 +52,13 @@ installer ile SHA-256 dosyasını üretir.
 
 ### Komut Satırından
 ```powershell
-& .\scripts\Build-DemoInstaller.ps1 -Version 1.1.0
+& .\scripts\Build-DemoInstaller.ps1 -Version 1.2.0
 ```
 
 Çıktılar:
 
-- `installer\output\OmniSpot-1.1.0-Setup.exe`
-- `installer\output\OmniSpot-1.1.0-Setup.exe.sha256`
+- `installer\output\OmniSpot-1.2.0-Setup.exe`
+- `installer\output\OmniSpot-1.2.0-Setup.exe.sha256`
 
 Installer yükseltilmiş per-machine kurulum yapar. Aynı adlı
 `OmniSpotChangeFeed` servisi zaten varsa mevcut kaydı devralmadan durur.
@@ -106,13 +106,13 @@ Bu ~15MB ama .NET 8 runtime gerektirir.
 
 1. UI ve ChangeFeedService proje dosyalarında sürüm alanlarını güncelle:
 ```xml
-<Version>1.1.0</Version>
-<FileVersion>1.1.0.0</FileVersion>
+<Version>1.2.0</Version>
+<FileVersion>1.2.0.0</FileVersion>
 ```
 
 2. Build betiğine sürümü ver:
 ```powershell
-& .\scripts\Build-DemoInstaller.ps1 -Version 1.1.0
+& .\scripts\Build-DemoInstaller.ps1 -Version 1.2.0
 ```
 
 ## ✅ Release Checklist

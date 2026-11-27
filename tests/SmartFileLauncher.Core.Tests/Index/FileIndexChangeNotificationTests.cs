@@ -98,6 +98,25 @@ public sealed class FileIndexChangeNotificationTests
     }
 
     [Fact]
+    public void ACompactionDuringReconcileReportsUnknownScope()
+    {
+        var entries = Enumerable.Range(100, 70_000)
+            .Select(i => new IndexEntry(1UL << 48 | (uint)i, Root, $"file-{i}.txt", FileAttributes.Archive, 1, Time)).ToArray();
+        using var index = Build(entries);
+        index.Apply(entries.Take(65_000).Select(entry => IndexChange.Delete(entry.FileReference, Root, entry.Name)).ToArray());
+        index.Reconcile(entries.Skip(65_000).Take(100).Select(entry => new IndexRecordState(entry.FileReference, [])).ToArray(),
+            out var small);
+        Assert.Equal(100, small!.Names!.Count);
+
+        index.Reconcile(entries.Skip(65_100).Take(600).Select(entry => new IndexRecordState(entry.FileReference, [])).ToArray(),
+            out var compacted);
+
+        Assert.NotNull(compacted);
+        Assert.Null(compacted.Names);
+        Assert.Equal(4_300, index.Search(".txt", 10_000, ResultView.SearchDefault).Count);
+    }
+
+    [Fact]
     public void DeletionAndRecordReuseStillCountAsChanges()
     {
         using var index = Build([File]);

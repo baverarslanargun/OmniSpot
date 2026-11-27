@@ -411,7 +411,10 @@ public partial class MainWindow
             return;
         }
 
+        Volatile.Write(ref _refreshSearchOutcome, null);
+        EndSearchRefreshPause();
         Volatile.Write(ref _refreshSearchRequest, request);
+        Volatile.Write(ref _refreshSearchOutcome, outcome);
         _presentedFileQuery = snapshot.Query;
         _completedSearchRequest = request;
         _completedSearchOutcome = outcome;

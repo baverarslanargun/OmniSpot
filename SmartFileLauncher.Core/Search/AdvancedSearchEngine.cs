@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.Filtering;
 using SmartFileLauncher.Core.Index;
@@ -108,6 +109,13 @@ public class AdvancedSearchEngine
         if ((query.FilterOnlyMode || !hasEvidence) && state is IQueryCatalogSnapshot catalog)
         {
             return SearchFilterOnly(query, searchTerms, catalog, requiredFolders, maxResults, view, cancellationToken);
+        }
+
+        if (!query.FilterOnlyMode && hasEvidence && state is FileIndexReader rowReader &&
+            TrySearchRows(rowReader, query, searchTerms, metadata, folderHints, requiredFolders, namedFolders, maxResults, view,
+                cancellationToken) is { } rowResults)
+        {
+            return rowResults;
         }
 
         var candidates = query.FilterOnlyMode || !hasEvidence
@@ -230,7 +238,7 @@ public class AdvancedSearchEngine
         {
             var results = new List<SearchResult>();
             var parts = FolderWords(phrase);
-            foreach (var item in state.Get(words[0], cancellationToken))
+            foreach (var item in Directories(words[0]))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (item.IsDirectory && !item.Name.Any(char.IsWhiteSpace) &&
@@ -243,10 +251,14 @@ public class AdvancedSearchEngine
             return results;
         }
 
+        IReadOnlyCollection<SearchItem> Directories(string token) => state is FileIndexReader reader
+            ? reader.GetDirectories(token, cancellationToken)
+            : state.Get(token, cancellationToken);
+
         List<SearchResult> FindMatches(string token, bool nameFirst)
         {
             var results = new List<SearchResult>();
-            foreach (var item in state.Get(token, cancellationToken))
+            foreach (var item in Directories(token))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!item.IsDirectory ||
@@ -407,13 +419,14 @@ public class AdvancedSearchEngine
 
         if (folders != null)
         {
-            var offered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var folder in folders)
             {
-                foreach (var child in state.GetDescendants(folder, cancellationToken))
+                for (var parent = Path.GetDirectoryName(folder.FullPath); parent != null; parent = Path.GetDirectoryName(parent))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (child.IsDirectory && folderPaths!.Contains(child.FullPath) && offered.Add(child.FullPath)) Offer(child);
+                    if (!folderPaths!.Contains(parent)) continue;
+                    Offer(folder);
+                    break;
                 }
             }
         }
@@ -614,6 +627,48 @@ public class AdvancedSearchEngine
             .ToList();
     }
 
+    public static bool MayMatchChangedNames(StructuredQuery query, IEnumerable<string> names, ITokenizer tokenizer)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        ArgumentNullException.ThrowIfNull(names);
+        ArgumentNullException.ThrowIfNull(tokenizer);
+        var extensions = CreateFilterOnlyAllowedExtensions(query, CancellationToken.None);
+        var filtersExtensions = extensions.Count > 0 &&
+            query.TargetType is not { HasStrongPreference: true, PrefersFolder: true };
+        var candidates = new List<string>();
+        foreach (var name in names)
+        {
+            if (filtersExtensions && !extensions.Contains(Path.GetExtension(name))) continue;
+            if (query.RequiredName is { } required && !ContainsRequiredName(name, required)) continue;
+            candidates.Add(SearchTextNormalizer.Fold(name));
+        }
+        if (candidates.Count == 0) return false;
+        if (query.FilterOnlyMode || query.OriginalText == null ||
+            query.FolderHints.Count > 0 || query.RequiredFolders.Count > 0) return true;
+
+        var tokens = new List<string>();
+        foreach (var term in GetSearchTerms(query))
+        {
+            var anchor = term.Role == SearchTermRole.Anchor;
+            foreach (var token in tokenizer.Tokenize(term.Text))
+            {
+                if (token.Length >= 4 && anchor) return true;
+                tokens.Add(SearchTextNormalizer.Fold(token));
+            }
+        }
+        foreach (var term in query.OriginalTerms)
+        foreach (var token in tokenizer.Tokenize(term))
+        {
+            if (token.Length >= 4) return true;
+            tokens.Add(SearchTextNormalizer.Fold(token));
+        }
+        if (tokens.Count == 0) return true;
+        foreach (var name in candidates)
+        foreach (var token in tokens)
+            if (name.Contains(token, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
     private Dictionary<string, (SearchItem node, MatchWeights matches)> GetCandidateNodes(
         StructuredQuery query,
         IReadOnlyList<SearchTerm> searchTerms,
@@ -657,6 +712,38 @@ public class AdvancedSearchEngine
                     if (!keywords.Any(parts => parts.All(matches.Contains))) candidates.Remove(path);
                 }
             }
+        }
+
+        if (query.OriginalText != null && state is IQueryCatalogSnapshot catalogSnapshot)
+        {
+            var matchingFolders = includeContents
+                ? candidates.Values.Where(candidate => candidate.node.IsDirectory &&
+                    candidate.matches.CanExpandFolder)
+                    .ToDictionary(candidate => candidate.node.FullPath, candidate => candidate.matches,
+                        StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, MatchWeights>(StringComparer.OrdinalIgnoreCase);
+            if (folderHints == null && matchingFolders.Count == 0) return candidates;
+            var segments = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (folderHints != null) segments.UnionWith(folderHints);
+            foreach (var folder in matchingFolders.Keys) segments.Add(Path.GetFileName(folder));
+
+            foreach (var item in catalogSnapshot.GetItems(metadata with { PathSegments = segments }, cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!metadata.Matches(item)) continue;
+                var parent = Path.GetDirectoryName(item.FullPath);
+                if (parent == null) continue;
+                if (folderHints != null && PathHasFolder(parent, folderHints))
+                    candidates.TryAdd(item.FullPath, (item, default));
+                if (item.IsDirectory || matchingFolders.Count == 0) continue;
+                for (var ancestor = parent; ancestor != null; ancestor = Path.GetDirectoryName(ancestor))
+                {
+                    if (!matchingFolders.TryGetValue(ancestor, out var matches)) continue;
+                    foreach (var (token, weight) in matches.Terms())
+                        AddMatch(candidates, item, token, weight * 0.65);
+                }
+            }
+            return candidates;
         }
 
         if (folderHints != null)
@@ -723,6 +810,74 @@ public class AdvancedSearchEngine
         }
     }
 
+    private IReadOnlyList<SearchResult>? TrySearchRows(
+        FileIndexReader reader,
+        StructuredQuery query,
+        IReadOnlyList<SearchTerm> searchTerms,
+        QueryCatalogFilter metadata,
+        HashSet<string>? folderHints,
+        HashSet<string>? requiredFolders,
+        IReadOnlyList<SearchResult> namedFolders,
+        int maxResults,
+        ResultView view,
+        CancellationToken cancellationToken)
+    {
+        if (query.OriginalText == null || !view.Sort.IsRelevance || view.Filter.IsActive || view.Scope != null) return null;
+        var tokens = CollectTokens(query, searchTerms, cancellationToken);
+        if (tokens.Length > 64) return null;
+        var scoring = CreateScoringContext(query, searchTerms);
+        if (scoring.FolderHints.Any(hint => hint.Lowered.Length == 0) ||
+            folderHints?.Contains("") == true || requiredFolders?.Contains("") == true) return null;
+        var includeContents = query.IncludeFolderContents &&
+            query.TargetType is not { HasStrongPreference: true, PrefersFolder: true };
+        var plan = new AiRowQuery
+        {
+            Tokens = tokens,
+            TokenFilter = metadata with
+            {
+                PathSegments = null,
+                IncludeDirectories = includeContents || metadata.IncludeDirectories,
+                IncludeDirectoriesWithoutExtension = includeContents,
+                FilterDirectoryDates = !includeContents && metadata.FilterDirectoryDates
+            },
+            Metadata = metadata with { PathSegments = null },
+            IncludeContents = includeContents,
+            FolderHints = folderHints,
+            RequiredFolders = requiredFolders,
+            RequiredName = query.RequiredName,
+            HintScores = scoring.FolderHints,
+            FolderContext = scoring.FolderContext,
+            FolderBonus = query.TargetType is { PrefersFolder: true } folder ? 150 * folder.Folder : null,
+            FileBonus = query.TargetType is { PrefersFile: true } file ? 100 * file.File : null,
+            SoftExtensions = query.SoftExtensions.Select(extension => extension.TrimStart('.')).ToArray(),
+            NameTerms = scoring.ExactAndPhraseTerms,
+            ContextTokens = scoring.ContextTokenWeights.ToArray(),
+            Normalize = NormalizeForComparison,
+            Tokenize = _tokenizer.Tokenize,
+            ConfirmedFolders = namedFolders.Select(result => result.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase)
+        };
+        var volumes = reader.Volumes;
+        var matches = new AiTokenMatches[volumes.Count];
+        var found = 0UL;
+        for (var i = 0; i < volumes.Count; i++)
+        {
+            matches[i] = volumes[i].Index.MatchAiTokens(plan, volumes[i].Scope, cancellationToken);
+            found |= matches[i].Found;
+        }
+        var fuzzy = 0UL;
+        for (var i = 0; i < tokens.Length; i++)
+            if (tokens[i].UseFuzzy && tokens[i].Token.Length >= 4 && (found & 1UL << i) == 0) fuzzy |= 1UL << i;
+        var results = new AiRowResults(maxResults);
+        for (var i = 0; i < volumes.Count; i++)
+            volumes[i].Index.ScoreAiRows(plan, volumes[i].Scope, matches[i], fuzzy, results, cancellationToken);
+        foreach (var named in namedFolders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Offer(named);
+        }
+        return results.ToArray();
+    }
+
     private static void AddTokenMatches(
         Dictionary<string, (SearchItem node, MatchWeights matches)> candidates,
         string token,
@@ -736,12 +891,10 @@ public class AdvancedSearchEngine
         var partialWeight = weight * 0.7;
         if (state is ITokenPartialSnapshot combined)
         {
-            var matches = combined.GetWithPartial(token, cancellationToken);
-            found = matches.Count > 0;
-            foreach (var (node, exact) in matches)
+            foreach (var (node, exact) in combined.GetWithPartial(token, filter, out found, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (filter?.Matches(node) != false) AddMatch(candidates, node, token, exact ? weight : partialWeight);
+                AddMatch(candidates, node, token, exact ? weight : partialWeight);
             }
         }
         else
@@ -784,38 +937,67 @@ public class AdvancedSearchEngine
         string token,
         double contribution)
     {
-        if (!matches.TryGetValue(node.FullPath, out var match)) match = (node, default);
+        ref var match = ref CollectionsMarshal.GetValueRefOrAddDefault(matches, node.FullPath, out var exists);
+        if (!exists) match = (node, default);
         match.matches.Add(token, contribution);
-        matches[node.FullPath] = match;
     }
 
     private struct MatchWeights
     {
-        private Dictionary<string, double>? _values;
+        private string? _firstToken;
+        private double _firstWeight;
+        private List<(string Token, double Weight)>? _others;
 
-        public readonly bool HasMatches => _values is { Count: > 0 };
-        public readonly bool Contains(string token) => _values?.ContainsKey(token) == true;
-        public readonly bool CanExpandFolder => _values?.Any(match => match.Key.Length >= 4 && match.Value >= 1) == true;
+        public readonly bool HasMatches => _firstToken != null;
+
+        public readonly bool Contains(string token) => StringComparer.OrdinalIgnoreCase.Equals(_firstToken, token) ||
+            (_others?.Exists(match => StringComparer.OrdinalIgnoreCase.Equals(match.Token, token)) == true);
+        public readonly bool CanExpandFolder =>
+            (_firstToken is { Length: >= 4 } && _firstWeight >= 1) ||
+            (_others?.Exists(match => match.Token.Length >= 4 && match.Weight >= 1) == true);
 
         public void Add(string token, double weight)
         {
-            var values = _values ??= new(StringComparer.OrdinalIgnoreCase);
-            if (!values.TryGetValue(token, out var old) || weight > old) values[token] = weight;
+            if (_firstToken == null)
+            {
+                _firstToken = token;
+                _firstWeight = weight;
+                return;
+            }
+            if (StringComparer.OrdinalIgnoreCase.Equals(_firstToken, token))
+            {
+                _firstWeight = Math.Max(_firstWeight, weight);
+                return;
+            }
+
+            var others = _others ??= [];
+            for (var i = 0; i < others.Count; i++)
+            {
+                var entry = others[i];
+                if (!StringComparer.OrdinalIgnoreCase.Equals(entry.Token, token)) continue;
+                if (weight > entry.Weight) others[i] = (entry.Token, weight);
+                return;
+            }
+            others.Add((token, weight));
         }
 
         public readonly double Score(HashSet<string>? allowedTokens = null, double factor = 1)
         {
-            var score = 0.0;
-            if (_values != null)
-                foreach (var (token, weight) in _values)
+            var score = _firstToken != null && (allowedTokens == null || allowedTokens.Contains(_firstToken))
+                ? _firstWeight * factor : 0;
+            if (_others != null)
+            {
+                foreach (var (token, weight) in _others)
                     if (allowedTokens == null || allowedTokens.Contains(token)) score += weight * factor;
+            }
             return score;
         }
 
         public readonly IEnumerable<(string Token, double Weight)> Terms()
         {
-            if (_values != null)
-                foreach (var (token, weight) in _values) yield return (token, weight);
+            if (_firstToken != null) yield return (_firstToken, _firstWeight);
+            if (_others != null)
+                foreach (var entry in _others) yield return entry;
         }
     }
 

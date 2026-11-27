@@ -9,7 +9,7 @@ param(
 )
 
 $AppName = "OmniSpot"
-$AppVersion = "1.1.0"
+$AppVersion = "1.2.0"
 $InstallDir = "$env:LOCALAPPDATA\$AppName"
 $SourceExe = Join-Path $PSScriptRoot "..\publish\OmniSpot.exe"
 $SourceIcon = Join-Path $PSScriptRoot "..\SmartFileLauncher.UI\Resources\app.ico"

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using SmartFileLauncher.Core.Search;
 
@@ -42,8 +43,12 @@ public sealed partial class FileIndex
     }
 
     internal IReadOnlyList<(SearchItem Item, bool Exact)> TokenItemsWithPartial(string token, IReadOnlyList<string>? scope,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken) => TokenItemsWithPartial(token, scope, null, out _, cancellationToken);
+
+    internal IReadOnlyList<(SearchItem Item, bool Exact)> TokenItemsWithPartial(string token, IReadOnlyList<string>? scope,
+        QueryCatalogFilter? filter, out bool found, CancellationToken cancellationToken)
     {
+        found = false;
         if (string.IsNullOrWhiteSpace(token)) return [];
         var upper = Encoding.UTF8.GetBytes(token.ToUpperInvariant());
         var plain = Encoding.UTF8.GetBytes(IndexNames.Plain(token));
@@ -55,17 +60,47 @@ public sealed partial class FileIndex
             var partial = _names.Find(upper, plain, false, cancellationToken);
             if (!partial.AsSpan().ContainsAnyExcept(0UL)) return result;
             var exact = _names.Find(upper, plain, true, cancellationToken);
+            var extensions = filter?.AllowedExtensions is { Count: > 0 } allowed ? allowed.ToArray() : null;
             for (var row = 0u; row < _count; row++)
             {
                 if ((row & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
                 var name = _name[row];
                 var bit = 1UL << (name & 63);
                 if ((partial[name >> 6] & bit) == 0 || row == _root || !IsAlive(row) || !InScope(row, rows)) continue;
+                found = true;
+                if (filter is { } candidateFilter && !MatchesTokenCandidate(row, candidateFilter, extensions)) continue;
                 result.Add((ToItem(row), (exact[name >> 6] & bit) != 0));
             }
             return result;
         }
         finally { _lock.ExitReadLock(); }
+    }
+
+    private bool MatchesTokenCandidate(uint row, QueryCatalogFilter filter, string[]? extensions)
+    {
+        var directory = IsDirectory(row);
+        var created = filter.CreatedAfter != null || filter.CreatedBeforeExclusive != null ? CreatedOf(row) : null;
+        DateTime? modified = filter.ModifiedAfter != null || filter.ModifiedBeforeExclusive != null ? ModifiedOf(row) : null;
+        if (!filter.Matches(directory, directory ? null : _size[row], created, modified)) return false;
+        if (extensions == null || directory && filter.IncludeDirectoriesWithoutExtension) return true;
+
+        var name = _name[row];
+        var bytes = _names.Original(name);
+        if (_names.IsWide(name))
+        {
+            var extension = Path.GetExtension(MemoryMarshal.Cast<byte, char>(bytes));
+            foreach (var allowed in extensions)
+                if (extension.Equals(allowed.AsSpan(), StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        var dot = bytes.LastIndexOf((byte)'.');
+        if (dot < 0 || dot == bytes.Length - 1) return false;
+        var suffix = bytes[dot..];
+        if (!Ascii.IsValid(suffix)) return filter.AllowedExtensions!.Contains(Encoding.UTF8.GetString(suffix));
+        foreach (var allowed in extensions)
+            if (Ascii.EqualsIgnoreCase(suffix, allowed.AsSpan())) return true;
+        return false;
     }
 
     internal void PrepareWords(CancellationToken cancellationToken)
@@ -124,16 +159,31 @@ public sealed partial class FileIndex
         finally { _lock.ExitReadLock(); }
     }
 
-    private List<SearchItem> ItemsNamed(ulong[] bits, HashSet<uint>? scope, CancellationToken cancellationToken)
+    private List<SearchItem> ItemsNamed(ulong[] bits, HashSet<uint>? scope, CancellationToken cancellationToken,
+        bool directoriesOnly = false)
     {
         var result = new List<SearchItem>();
         if (!bits.AsSpan().ContainsAnyExcept(0UL)) return result;
         for (var row = 0u; row < _count; row++)
         {
             if ((row & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
-            if (IsNamedRow(bits, row, scope)) result.Add(ToItem(row));
+            if ((!directoriesOnly || IsDirectory(row)) && IsNamedRow(bits, row, scope)) result.Add(ToItem(row));
         }
         return result;
+    }
+
+    internal IReadOnlyList<SearchItem> TokenDirectories(string token, IReadOnlyList<string>? scope, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return [];
+        var upper = Encoding.UTF8.GetBytes(token.ToUpperInvariant());
+        var plain = Encoding.UTF8.GetBytes(IndexNames.Plain(token));
+        _lock.EnterReadLock();
+        try
+        {
+            return ItemsNamed(_names.Find(upper, plain, true, cancellationToken), ResolveScope(scope), cancellationToken,
+                directoriesOnly: true);
+        }
+        finally { _lock.ExitReadLock(); }
     }
 
     private bool IsNamedRow(ulong[] bits, uint row, HashSet<uint>? scope)

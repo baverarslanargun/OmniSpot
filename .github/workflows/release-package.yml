@@ -44,15 +44,15 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download v1.0.0 --pattern 'OmniSpot-1.0.0-Setup.exe' --pattern 'SHA256SUMS.txt' --dir previous
+          gh release download v1.1.0 --pattern 'OmniSpot-1.1.0-Setup.exe' --pattern 'SHA256SUMS.txt' --dir previous
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $hash = (Get-FileHash previous/OmniSpot-1.0.0-Setup.exe).Hash
-          if (-not (Select-String -Path previous/SHA256SUMS.txt -Pattern "^$hash\s+\*?OmniSpot-1\.0\.0-Setup\.exe$")) { throw 'Önceki paket hash değeri uyuşmuyor.' }
+          $hash = (Get-FileHash previous/OmniSpot-1.1.0-Setup.exe).Hash
+          if (-not (Select-String -Path previous/SHA256SUMS.txt -Pattern "^$hash\s+\*?OmniSpot-1\.1\.0-Setup\.exe$")) { throw 'Önceki paket hash değeri uyuşmuyor.' }
       - name: Temiz kurulum, sürüm geçişi ve kurulu arayüzde arama
         shell: powershell
         run: |
           $setup = (Get-Item release-files/*-Setup.exe).FullName
-          & ./scripts/Test-ReleaseInstaller.ps1 -Setup $setup -PreviousSetup (Get-Item previous/OmniSpot-1.0.0-Setup.exe).FullName
+          & ./scripts/Test-ReleaseInstaller.ps1 -Setup $setup -PreviousSetup (Get-Item previous/OmniSpot-1.1.0-Setup.exe).FullName
       - uses: actions/upload-artifact@v4
         with:
           name: omnispot-release

@@ -6,7 +6,7 @@
 
 Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek noktadan erişin!
 
-![OmniSpot](https://img.shields.io/badge/version-1.1.0-blue) ![.NET](https://img.shields.io/badge/.NET-8.0-purple) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
+![OmniSpot](https://img.shields.io/badge/version-1.2.0-blue) ![.NET](https://img.shields.io/badge/.NET-8.0-purple) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
 
 ## 🚀 Özellikler
 
@@ -63,7 +63,7 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 ## 📦 Kurulum
 
 ### Yöntem 1: Hazır Kurulum (Önerilen)
-1. [Releases](https://github.com/baverarslanargun/OmniSpot/releases) sayfasından `OmniSpot-1.1.0-Setup.exe` indirin
+1. [Releases](https://github.com/baverarslanargun/OmniSpot/releases) sayfasından son kararlı kurulum paketini indirin
 2. Kurulum sihirbazını takip edin
 3. Ctrl+Space ile başlatın!
 
