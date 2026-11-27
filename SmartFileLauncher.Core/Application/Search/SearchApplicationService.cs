@@ -140,6 +140,16 @@ public sealed class SearchApplicationService : ISearchApplicationService
         cancellationToken.ThrowIfCancellationRequested();
         structuredQuery ??= CreateDefaultQuery(request.Query);
 
+        if (CanTryLiteralNameSearch(request.Query, structuredQuery))
+        {
+            var literal = await StandardOutcomeAsync(request, SearchExecutionMode.Standard, null, cancellationToken)
+                .ConfigureAwait(false);
+            if (literal.Results.Count > 0)
+            {
+                return literal;
+            }
+        }
+
         IReadOnlyList<SearchResult> results;
         try
         {
@@ -214,6 +224,19 @@ public sealed class SearchApplicationService : ISearchApplicationService
                 request.View with { LiteralRanking = ranking },
                 cancellationToken),
             cancellationToken);
+
+    private static bool CanTryLiteralNameSearch(string query, StructuredQuery parsedQuery)
+    {
+        var name = query.Trim();
+        return name.Length > 0 && !name.Any(char.IsWhiteSpace) &&
+            !parsedQuery.FilterOnlyMode &&
+            parsedQuery.FileTypes.Count == 0 && parsedQuery.HardExtensions.Count == 0 &&
+            parsedQuery.PredictedExtensions.Count == 0 && parsedQuery.FolderContextTerms.Count == 0 &&
+            parsedQuery.RequiredFolders.Count == 0 &&
+            (parsedQuery.RequiredName == null || string.Equals(SearchTextNormalizer.Fold(parsedQuery.RequiredName),
+                SearchTextNormalizer.Fold(name.ToLowerInvariant()), StringComparison.OrdinalIgnoreCase)) &&
+            parsedQuery.DateFilter == null && parsedQuery.SizeFilter == null && parsedQuery.OpenAction?.ShouldOpen != true;
+    }
 
     private static string? ResolveAutoOpenPath(
         StructuredQuery query,

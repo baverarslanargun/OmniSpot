@@ -275,6 +275,23 @@ public sealed partial class MainWindowSearchRefreshTests
     });
 
     [Fact]
+    public Task AiNameResultsUseTheNormalResultCountAndPages() => RunSta(async () =>
+    {
+        using var fixture = new Fixture { AiNameQuery = true, StandardPrefix = "baver", StandardTotal = 450 };
+        fixture.ReleaseParser.TrySetResult();
+        await fixture.Search("baver", naturalLanguage: true);
+        Assert.Equal(100, fixture.Model.SearchResults.Count);
+        Assert.Equal("450 sonuç", await fixture.WaitForCount("450 sonuç"));
+
+        await fixture.LoadNextPage();
+
+        Assert.Equal(300, fixture.Model.SearchResults.Count);
+        Assert.Equal((100, 200), Assert.Single(fixture.PageCalls));
+        Assert.Equal(1, fixture.ParserCalls);
+        Assert.Equal(0, fixture.LocalCalls);
+    });
+
+    [Fact]
     public Task GridViewRealizesOnlyTheVisibleRowsOfEveryLoadedPage() => RunSta(async () =>
     {
         using var fixture = new Fixture(gridView: true) { StandardTotal = 450 };
@@ -509,6 +526,7 @@ public sealed partial class MainWindowSearchRefreshTests
         internal Func<SmartFileLauncher.Core.Filtering.ResultView, int>? CountFor;
         internal readonly List<string> SuggestedQueries = [];
         internal bool FailRefresh;
+        internal bool AiNameQuery;
         internal int StandardTotal = 1;
         internal string StandardPrefix = "fatura";
         internal int LastStandardLimit;
@@ -540,7 +558,11 @@ public sealed partial class MainWindowSearchRefreshTests
                     ParserToken = token;
                     ParserEntered.TrySetResult();
                     await ReleaseParser.Task.WaitAsync(token);
-                    return new StructuredQuery { Keywords = [query] };
+                    return new StructuredQuery
+                    {
+                        Keywords = [query],
+                        HardExtensions = AiNameQuery ? [] : ["pdf"]
+                    };
                 },
                 _ => throw new InvalidOperationException("Rule-based parser çağrılmamalı"),
                 (_, offset, limit, _, _) =>

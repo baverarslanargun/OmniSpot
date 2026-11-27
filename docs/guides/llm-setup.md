@@ -19,6 +19,8 @@ AI düğmesine fareyle gelindiğinde veya klavyeyle odaklanıldığında yanınd
 
 Sorgudaki iki ad indekslenmiş bir klasöre ve onun doğrudan üst klasörüne tam olarak uyduğunda AI araması klasörü gösterir. Örneğin `çıkmış sorular ayrık matematik` sorgusu `Ayrık Matematik\Çıkmış Sorular` klasörünü bulabilir. Türkçe karakterlerin ASCII karşılıkları ve `altındaki` gibi konum ifadeleri desteklenir; `altındaki` ile adı verilen klasörün daha derindeki aynı adlı alt klasörleri doğrudan alt klasörden sonra gelir. Sözcüklere bölünerek yazılmış tek bir klasör adı da bulunur: `lale tr` sorgusu `lale.tr` klasörünü, `lale` adlı başka bir klasörün derinindeki `tr` klasörlerinin önüne koyar.
 
+Tek parçalı bir ad sorgusunda, açık filtre veya açma komutu bulunmadığında normal ad aramasının eşleşmeleri kullanılır. Örneğin `bav`, `baver` ve `baver.tr` sorguları AI modu açıkken aynı klasörü bulabilir. Ad eşleşmesi yoksa AI terimleriyle arama devam eder.
+
 AI aramasında aday bulmak için kullanılan anahtar kelimeler, uzunluklarına bakılmadan ad içinde kısmi eşleşebilir. Örneğin AI'nin ürettiği `Abc` terimi `Abc.pdf` ve `Abcd.pdf` adlarını eşleştirir. Tam kelime eşleşmesi daha yüksek puan alır.
 
 `baver tr resim dosyaları` sorgusunda resim türü zorunludur. `baver.tr` eşleşmesi, bu klasörün altındaki `banner.png` gibi resimleri öne çıkarır. `baver.tr klasöründeki resim dosyaları` sorgusu aynı klasörü kapsam filtresi olarak uygular.

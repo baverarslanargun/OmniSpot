@@ -91,6 +91,40 @@ public sealed class IntentSearchLayoutContractTests
         Assert.Equal(expected, outcome.Results.Select(result => result.Name).Order());
     }
 
+    [Theory]
+    [InlineData("bav", "baver.tr", true)]
+    [InlineData("BAV", "baver.tr", true)]
+    [InlineData("baver", "baver.tr", true)]
+    [InlineData("baver.tr", "baver.tr", true)]
+    [InlineData("derleme-2026", "OmniSpot-derleme-2026.exe", false)]
+    public async Task NameUsesTheNormalIndexLookupInAiMode(string query, string name, bool isDirectory)
+    {
+        const ulong root = 5;
+        using var index = FileIndex.Build(@"C:\Synthetic", root,
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "baver.tr", FileAttributes.Directory, 0, 0, 0),
+            new(17, 16, "index.html", FileAttributes.Archive, 100, 0, 0),
+            new(18, root, "bav.txt", FileAttributes.Archive, 100, 0, 0),
+            new(19, root, "notlar.txt", FileAttributes.Archive, 100, 0, 0),
+            new(20, root, "OmniSpot-derleme-2026.exe", FileAttributes.Archive, 100, 0, 0)
+        ]);
+        const string intent = """{"mode":"keyword","target":"file","folders":[],"open":false}""";
+        const string keywords = """
+            {"anchors":[{"primary":"bav","variants":[],"translations":[]}],"phrases":[],"context":[]}
+            """;
+
+        var state = new FileIndexReader([(index, null)]);
+        var standard = new SearchEngine(_ => state, new BasicTokenizer(), new BasicScoringStrategy(), literalNamesOnly: true);
+        var expected = standard.Search(query);
+        var outcome = await ExecuteAsync(state, intent, keywords, query: query);
+
+        Assert.Contains(expected, result => result.Name == name && result.IsDirectory == isDirectory);
+        Assert.Equal(expected.Select(ResultKey), outcome.Results.Select(ResultKey));
+        Assert.True(outcome.IsPageable);
+        Assert.Null(outcome.AutoOpenPath);
+    }
+
     [Fact]
     public async Task OriginalNameOutranksModelCandidateDespiteUnrequestedMetadata()
     {
