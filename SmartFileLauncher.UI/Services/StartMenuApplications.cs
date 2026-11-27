@@ -33,6 +33,7 @@ public sealed class StartMenuApplications
     private readonly IReadOnlyList<StartMenuApplication> _applications;
     private readonly CompareInfo _names;
     private readonly bool[]? _recheckNames;
+    private readonly string[] _initials;
 
     public static StartMenuApplications Empty { get; } = new([]);
     internal IReadOnlySet<string>? ChangedIds { get; init; }
@@ -53,6 +54,7 @@ public sealed class StartMenuApplications
 
         SetDisambiguationDetails(sorted, comparer);
         _applications = Array.AsReadOnly(sorted);
+        _initials = Array.ConvertAll(sorted, app => Initials(app.Name));
         if (_names.Name is "" or "en" or "en-US" or "en-GB" or "tr" or "tr-TR")
             _recheckNames = Array.ConvertAll(sorted, app => !IsPrintableAscii(app.Name));
     }
@@ -113,7 +115,7 @@ public sealed class StartMenuApplications
         for (int positionInCatalog = 0; positionInCatalog < count; positionInCatalog++)
         {
             int i = previousCount.HasValue ? candidates[positionInCatalog] : positionInCatalog;
-            var rank = GetRank(_applications[i].Name.AsSpan(), term);
+            var rank = Math.Max(GetRank(_applications[i].Name.AsSpan(), term), GetInitialsRank(i, term));
             if (!candidates.IsEmpty && (rank > 0 || _recheckNames![i]))
                 candidates[retained++] = i;
             if (rank == 0 || (requiresExactName && rank != ExactNameRank))
@@ -166,13 +168,39 @@ public sealed class StartMenuApplications
         }
 
         List<(StartMenuApplication App, int Rank)>? matches = null;
-        foreach (var app in _applications)
+        for (var i = 0; i < _applications.Count; i++)
         {
-            if (_names.IndexOf(app.Name.AsSpan(), term, NameOptions) >= 0)
-                (matches ??= []).Add((app, Score(GetRank(app.Name.AsSpan(), term), app, pinned)));
+            var app = _applications[i];
+            var initials = GetInitialsRank(i, term);
+            if (initials > 0 || _names.IndexOf(app.Name.AsSpan(), term, NameOptions) >= 0)
+                (matches ??= []).Add((app, Score(Math.Max(GetRank(app.Name.AsSpan(), term), initials), app, pinned)));
         }
 
         return matches is null ? [] : matches.OrderByDescending(match => match.Rank).Select(match => match.App).ToArray();
+    }
+
+    private int GetInitialsRank(int index, ReadOnlySpan<char> term)
+    {
+        if (term.Length < 2) return 0;
+        foreach (var character in term)
+            if (!char.IsLetterOrDigit(character)) return 0;
+        var initials = _initials[index];
+        if (initials.Length < 2 || !_names.IsPrefix(initials.AsSpan(), term, NameOptions)) return 0;
+        return initials.Length == term.Length ? NameStartRank : WordStartRank;
+    }
+
+    private static string Initials(string name)
+    {
+        var builder = new StringBuilder();
+        var previous = ' ';
+        foreach (var character in name)
+        {
+            if (char.IsLetterOrDigit(character) &&
+                (!char.IsLetterOrDigit(previous) || char.IsUpper(character) && char.IsLower(previous)))
+                builder.Append(character);
+            previous = character;
+        }
+        return builder.ToString();
     }
 
     private int GetRank(ReadOnlySpan<char> name, ReadOnlySpan<char> term)

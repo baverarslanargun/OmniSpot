@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using SmartFileLauncher.Core.Index;
 using Brushes = System.Windows.Media.Brushes;
 
 namespace SmartFileLauncher.UI.Services;
@@ -13,9 +14,52 @@ public static class FileNameTrimming
     public static readonly DependencyProperty FileNameProperty = DependencyProperty.RegisterAttached(
         "FileName", typeof(string), typeof(FileNameTrimming), new PropertyMetadata(null, OnFileNameChanged));
 
+    public static readonly DependencyProperty HighlightProperty = DependencyProperty.RegisterAttached(
+        "Highlight", typeof(string), typeof(FileNameTrimming), new PropertyMetadata(null, OnFileNameChanged));
+
+    private static readonly DependencyProperty ShownProperty = DependencyProperty.RegisterAttached(
+        "Shown", typeof(string), typeof(FileNameTrimming), new PropertyMetadata(null));
+
+    private static readonly SolidColorBrush HighlightBrush = CreateHighlightBrush();
+
+    internal static string ShownText(TextBlock block) => (string?)block.GetValue(ShownProperty) ?? block.Text;
+
     public static string? GetFileName(DependencyObject element) => (string?)element.GetValue(FileNameProperty);
 
     public static void SetFileName(DependencyObject element, string? value) => element.SetValue(FileNameProperty, value);
+
+    public static string? GetHighlight(DependencyObject element) => (string?)element.GetValue(HighlightProperty);
+
+    public static void SetHighlight(DependencyObject element, string? value) => element.SetValue(HighlightProperty, value);
+
+    private static SolidColorBrush CreateHighlightBrush()
+    {
+        var brush = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x00, 0x7A, 0xFF));
+        brush.Freeze();
+        return brush;
+    }
+
+    private static void Show(TextBlock block, string text)
+    {
+        block.SetValue(ShownProperty, text);
+        var ranges = string.IsNullOrWhiteSpace(GetHighlight(block)) ? [] : NameHighlights.Find(text, GetHighlight(block));
+        if (ranges.Count == 0)
+        {
+            block.Text = text;
+            return;
+        }
+        var weight = FontWeight.FromOpenTypeWeight(Math.Min(900, block.FontWeight.ToOpenTypeWeight() + 100));
+        block.Inlines.Clear();
+        var at = 0;
+        foreach (var (start, length) in ranges)
+        {
+            if (start > at) block.Inlines.Add(new System.Windows.Documents.Run(text[at..start]));
+            block.Inlines.Add(new System.Windows.Documents.Run(text.Substring(start, length))
+                { FontWeight = weight, Foreground = HighlightBrush });
+            at = start + length;
+        }
+        if (at < text.Length) block.Inlines.Add(new System.Windows.Documents.Run(text[at..]));
+    }
 
     private static void OnFileNameChanged(DependencyObject element, DependencyPropertyChangedEventArgs e)
     {
@@ -37,16 +81,16 @@ public static class FileNameTrimming
         var singleLine = block.TextWrapping == TextWrapping.NoWrap;
         if (width <= 0 || !singleLine && double.IsInfinity(block.MaxHeight))
         {
-            block.Text = name;
+            Show(block, name);
             return;
         }
         var maxHeight = block.MaxHeight;
-        block.Text = Trim(name, candidate =>
+        Show(block, Trim(name, candidate =>
         {
             if (singleLine) return Format(block, candidate, null).WidthIncludingTrailingWhitespace <= width + 0.5;
             var formatted = Format(block, candidate, width);
             return formatted.Height <= maxHeight + 0.5 && formatted.Width <= width + 0.5;
-        });
+        }));
     }
 
     internal static double LayoutHeight(TextBlock block, string text) =>

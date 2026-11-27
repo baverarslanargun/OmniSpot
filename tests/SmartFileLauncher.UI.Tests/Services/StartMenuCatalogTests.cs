@@ -201,6 +201,25 @@ public sealed class StartMenuApplicationsTests
     }
 
     [Fact]
+    public void WordInitialsFindApplicationsAndFullInitialsRankLikeANameStart()
+    {
+        var catalog = Catalog(App("code", "Visual Studio Code"), App("vs", "Visual Studio 2022"), App("ps", "PowerShell 7 (x64)"),
+            App("vlc", "VLC media player"), App("calc", "Calculator"));
+        var session = new StartMenuApplications.SearchSession(catalog);
+
+        Assert.Equal("code", catalog.MatchGeneral("vsc").UniqueFirst?.Id);
+        Assert.Equal(["code", "vs"], catalog.MatchGeneral("vs").Items.Select(app => app.Id).Order());
+        Assert.Contains(catalog.MatchGeneral("ps").Items, app => app.Id == "ps");
+        Assert.Equal("ps", catalog.MatchGeneral("ps7").UniqueFirst?.Id);
+        Assert.Contains(catalog.MatchAll("vsc"), app => app.Id == "code");
+        Assert.DoesNotContain(catalog.MatchGeneral("v").Items, app => app.Id == "calc");
+        Assert.Empty(catalog.MatchGeneral("v.").Items);
+        foreach (var query in new[] { "v", "vs", "vsc" })
+            Assert.Equal(catalog.MatchGeneral(query).Items.Select(app => app.Id),
+                session.MatchGeneral(query).Items.Select(app => app.Id));
+    }
+
+    [Fact]
     public void AppendingNarrowsAllCandidatesIncludingThoseOutsideTheVisibleThree()
     {
         var catalog = Catalog(App("a", "Cal"), App("b", "Cam"), App("c", "Cat"), App("d", "Google Chrome"),

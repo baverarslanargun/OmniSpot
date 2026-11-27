@@ -12,8 +12,8 @@ Modern, hafif ve hızlı dosya tarayıcısı. Ctrl+Space ile tüm dosyalara tek 
 
 ### Temel Özellikler
 - ✅ **Global Hotkey**: Ctrl+Space ile her yerden açın
-- ✅ **Akıllı Arama**: Dosya adlarında hızlı arama
-- **Başlat uygulamaları** genel aramada en üstte görünür. Benzersiz en iyi eşleşmeyi Enter ile açabilir, ok tuşlarıyla başka bir uygulamaya veya dosyaya geçebilirsiniz. Pencere menüsündeki **Tüm uygulamalar** Windows kataloğunu alfabetik açar. Esc önceki aramaya döner.
+- ✅ **Akıllı Arama**: Dosya adlarında hızlı arama. Türkçe harf farkı gözetilmez (`çıkmış` → `cikmis_sorular`); boşluk ya da `_ - , [ ] ( )` ile ayrılan her kelime adın herhangi bir yerinde aranır (`çıkmış sorular` ve `cikmis_sorular` → `Çıkmış Sorular.pdf`); nokta kelimeyi bölmez, `.pdf` uzantı gibi aranır. Tırnak içinde Türkçe harf farkı korunur, büyük/küçük harf gözetilmez (`"çam"` `cam`'ı getirmez); başına `!` konan kelime dışlanır (`rapor !taslak`). Eşleşen kısımlar sonuç adında vurgulanır. Alaka sıralamasında yazdığınız biçimle birebir eşleşen adlar önce gelir. Standart arama sonuç vermezse ve uygun bir aday bulunursa yazmayı bıraktığınızda "Bunu mu demek istediniz: **fatura**" önerisi çıkar (harflerin yer değiştirmesi de desteklenir, örneğin `fatrua`). Öneriyi tıklayarak veya Enter ile uygulayabilirsiniz. Etkin filtre tüm sonuçları gizliyorsa "Filtreyi kaldır · 12 sonuç" düğmesi görünür.
+- **Başlat uygulamaları** genel aramada en üstte görünür; kelimelerin baş harfleriyle de bulunur (`vsc` → Visual Studio Code). Benzersiz en iyi eşleşmeyi Enter ile açabilir, ok tuşlarıyla başka bir uygulamaya veya dosyaya geçebilirsiniz. Pencere menüsündeki **Tüm uygulamalar** Windows kataloğunu alfabetik açar. Esc önceki aramaya döner.
 - ✅ **Doğal Dil Arama**: İsteğe bağlı Groq desteği ve kural tabanlı fallback ile sorguları yapılandırın
 - ✅ **Klasör Navigasyonu**: Uygulama içinde klasörlerde gezinin
 - ✅ **Adres Çubuğu ve Geçmiş**: Klasördeyken içeriğin üstünde tıklanabilir yol; Geri/İleri aramaya da döner ve aramayı yeniden çalıştırmaz; yola sağ tıklayıp "Yolu Kopyala"

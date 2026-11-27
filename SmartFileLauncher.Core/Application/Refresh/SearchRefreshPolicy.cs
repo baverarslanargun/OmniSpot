@@ -13,7 +13,7 @@ public static class SearchRefreshPolicy
         if (!literalNamesOnly || request.NaturalLanguageMode || change.IsDirectory ||
             request.View.Filter.Date != FilterDateRange.Any || change.AffectedNames == null) return true;
 
-        var pattern = IndexNames.FoldQuery(request.Query);
-        return change.AffectedNames.Any(name => IndexNames.FoldQuery(name).AsSpan().IndexOf(pattern) >= 0);
+        var names = NameQuery.Create(request.Query)!;
+        return change.AffectedNames.Any(names.Matches);
     }
 }

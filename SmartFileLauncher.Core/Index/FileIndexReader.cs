@@ -10,7 +10,7 @@ namespace SmartFileLauncher.Core.Index;
 
 internal sealed class FileIndexReader(IReadOnlyList<(FileIndex Index, IReadOnlyList<string>? Scope)> volumes) :
     IQueryCatalogSnapshot, ILiteralNameQuerySnapshot, ILiteralNamePageSnapshot, IQuerySnapshotLease, ITokenIndexSnapshot, ITokenPartialSnapshot,
-    ITokenSummaryReader
+    ITokenSummaryReader, ILiteralNameSuggestionSnapshot
 {
     public TokenSummary SummarizeToken(string token, int sampleCount, CancellationToken cancellationToken = default)
     {
@@ -111,6 +111,15 @@ internal sealed class FileIndexReader(IReadOnlyList<(FileIndex Index, IReadOnlyL
 
     public int CountLiteralNames(string query, ResultView view, CancellationToken cancellationToken) =>
         volumes.Sum(volume => volume.Index.CountMatches(query, view, volume.Scope, cancellationToken));
+
+    public string? SuggestLiteralName(string query, ResultView view, CancellationToken cancellationToken)
+    {
+        (string Query, int Count)? best = null;
+        foreach (var (index, scope) in volumes)
+            if (index.SuggestQuery(query, view, scope, cancellationToken) is { } found && (best is null || found.Count > best.Value.Count))
+                best = found;
+        return best?.Query;
+    }
 
     public bool TryGetItem(string path, out SearchItem item)
     {

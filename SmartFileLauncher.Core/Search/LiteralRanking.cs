@@ -17,6 +17,8 @@ public sealed class LiteralRanking
 
     public double Boost(string fullPath) => _opened.GetValueOrDefault(fullPath);
 
+    internal IEnumerable<string> OpenedPaths => _opened.Keys;
+
     public IReadOnlyList<string> MatchingOpenedPaths(string query)
     {
         if (_opened.Count == 0 || string.IsNullOrWhiteSpace(query)) return [];

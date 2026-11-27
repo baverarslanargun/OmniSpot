@@ -77,6 +77,21 @@ public class SearchEngine
         return window.Count <= offset ? Array.Empty<SearchResult>() : window.Skip(offset).ToArray();
     }
 
+    public string? SuggestQuery(
+        string query,
+        ResultView view,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(view);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (string.IsNullOrWhiteSpace(query) || !_literalNamesOnly || _searchStateProvider == null) return null;
+        var state = _searchStateProvider(cancellationToken).ForQuery();
+        using var lease = state as IQuerySnapshotLease;
+        return state is ILiteralNameSuggestionSnapshot suggestions
+            ? suggestions.SuggestLiteralName(query, view, cancellationToken)
+            : null;
+    }
+
     public int? CountMatches(
         string query,
         ResultView view,

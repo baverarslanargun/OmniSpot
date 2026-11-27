@@ -88,13 +88,13 @@ public sealed partial class FileIndex
         }
     }
 
-    private List<byte[]> NearWords(byte[] word, int maxDistance, CancellationToken cancellationToken)
+    private List<byte[]> NearWords(byte[] word, int maxDistance, CancellationToken cancellationToken, int limit = NearWordLimit)
     {
         lock (_wordsGate)
         {
             if (_words is null || _words.Source != _names) _words = new IndexWords(_names);
             _words.Extend(int.MaxValue, cancellationToken);
-            return _words.Near(word, maxDistance, NearWordLimit, cancellationToken);
+            return _words.Near(word, maxDistance, limit, cancellationToken);
         }
     }
 

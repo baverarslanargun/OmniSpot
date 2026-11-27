@@ -118,7 +118,22 @@ public sealed class CardNameRevealTests
         Assert.Equal("kisaltilmis ad", CardNameReveal.Partial("kisaltilmis ad", "kisa…", -1, "", 0.3));
     }
 
-    private static (AdornerDecorator Root, Button Card, Border Icon, TextBlock Name) Card(string fileName)
+    [Fact]
+    public Task HighlightedNamesStillRevealOnlyWhenTrimmed() => RunSta(() =>
+    {
+        var (_, shortCard, _, shortName) = Card("rapor.pdf", "rapor");
+        Assert.Equal("rapor.pdf", FileNameTrimming.ShownText(shortName));
+        CardNameReveal.Open(shortCard, animate: false);
+        Assert.Null(CardNameReveal.RevealedText(shortCard));
+
+        var (_, longCard, _, longName) = Card(LongName, "ladybug");
+        Assert.Contains("…", FileNameTrimming.ShownText(longName));
+        CardNameReveal.Open(longCard, animate: false);
+        Assert.Equal(LongName, CardNameReveal.RevealedText(longCard));
+        return Task.CompletedTask;
+    });
+
+    private static (AdornerDecorator Root, Button Card, Border Icon, TextBlock Name) Card(string fileName, string? highlight = null)
     {
         var icon = new Border { Name = CardNameReveal.IconPart, Width = 72, Height = 72, Margin = new Thickness(0, 0, 0, 12) };
         var name = new TextBlock
@@ -126,6 +141,7 @@ public sealed class CardNameRevealTests
             Name = CardNameReveal.NamePart, FontSize = 12, LineHeight = 16, MaxHeight = 36,
             TextWrapping = TextWrapping.Wrap, TextAlignment = TextAlignment.Center, TextTrimming = TextTrimming.CharacterEllipsis
         };
+        FileNameTrimming.SetHighlight(name, highlight);
         FileNameTrimming.SetFileName(name, fileName);
         var content = new StackPanel { Width = 100 };
         content.Children.Add(icon);

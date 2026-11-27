@@ -137,8 +137,8 @@ public static class CardNameReveal
         if (card.GetValue(StateProperty) is RevealState stale) stale.Detach();
         card.ClearValue(StateProperty);
         if (Parts(card) is not var (icon, name) || name.ActualWidth <= 0 || icon.ActualHeight <= 0) return null;
-        var full = FileNameTrimming.GetFileName(name) ?? name.Text;
-        var shown = name.Text;
+        var shown = FileNameTrimming.ShownText(name);
+        var full = FileNameTrimming.GetFileName(name) ?? shown;
         if (shown == full) return null;
         if (AdornerLayer.GetAdornerLayer(name) is not { } layer) return null;
 

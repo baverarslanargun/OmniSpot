@@ -1997,6 +1997,26 @@
                                 </Grid>
                                 <TextBlock Text="Sonuç bulunamadı" Style="{StaticResource StateTitle}"/>
                                 <TextBlock x:Name="NoResultsHint" Text="Farklı anahtar kelimeler deneyin" Style="{StaticResource StateHint}"/>
+                                <Button x:Name="NoResultsClearFilterButton"
+                                        Style="{StaticResource StateGhostButton}"
+                                        Margin="0,18,0,0"
+                                        Visibility="Collapsed"
+                                        Click="NoResultsClearFilter_Click">
+                                    <TextBlock>
+                                        <Run Text="Filtreyi kaldır"/>
+                                        <Run x:Name="NoResultsClearFilterCount" FontWeight="Normal" Foreground="#5B6472"/>
+                                    </TextBlock>
+                                </Button>
+                                <Button x:Name="NoResultsSuggestionButton"
+                                        Style="{StaticResource StateGhostButton}"
+                                        Margin="0,18,0,0"
+                                        Visibility="Collapsed"
+                                        Click="NoResultsSuggestion_Click">
+                                    <TextBlock>
+                                        <Run Text="Bunu mu demek istediniz:" FontWeight="Normal" Foreground="#5B6472"/>
+                                        <Run x:Name="NoResultsSuggestionText"/>
+                                    </TextBlock>
+                                </Button>
                                 <Button x:Name="NoResultsWidenButton"
                                         Content="Tüm bilgisayarda ara"
                                         Style="{StaticResource StateGhostButton}"
@@ -2088,7 +2108,7 @@
                                         
                                         <!-- File Info -->
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock services:FileNameTrimming.FileName="{Binding Name}"
+                                            <TextBlock services:FileNameTrimming.FileName="{Binding Name}" services:FileNameTrimming.Highlight="{Binding HighlightQuery}"
                                                        FontSize="14" 
                                                        FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis">
@@ -2249,7 +2269,7 @@
                                                         </Border>
 
                                                         <!-- File Name -->
-                                                        <TextBlock x:Name="CardName" services:FileNameTrimming.FileName="{Binding Name}"
+                                                        <TextBlock x:Name="CardName" services:FileNameTrimming.FileName="{Binding Name}" services:FileNameTrimming.Highlight="{Binding HighlightQuery}"
                                                                    FontSize="12"
                                                                    FontWeight="Medium"
                                                                    Foreground="#334155"

@@ -16,7 +16,7 @@ public sealed class FileIndexTests
     private static readonly string[] Queries =
     [
         "read", "READ", "md", "rapor", "2024", "ışık", "IŞIK", "ı", "i", "ss", "ß", "straße", ".", "x1", "😀",
-        "dup", "zzz", "a", "e.j", "_20", "index", "json", "no_ext", "git"
+        "dup", "zzz", "a", "e.j", "_20", "index", "json", "no_ext", "git", "isik", "read md", "rapor 2024", "ışık  rapor", "read_md", "rapor-2024", "(x1)", "_", "-(", "no_ext.json"
     ];
 
     private static readonly ResultView[] Views = new[]
@@ -406,8 +406,12 @@ public sealed class FileIndexTests
             for (var j = 0; j <= right.Length; j++) table[0, j] = j;
             for (var i = 1; i <= left.Length; i++)
             for (var j = 1; j <= right.Length; j++)
+            {
                 table[i, j] = Math.Min(Math.Min(table[i - 1, j] + 1, table[i, j - 1] + 1),
                     table[i - 1, j - 1] + (left[i - 1] == right[j - 1] ? 0 : 1));
+                if (i > 1 && j > 1 && left[i - 1] == right[j - 2] && left[i - 2] == right[j - 1])
+                    table[i, j] = Math.Min(table[i, j], table[i - 2, j - 2] + 1);
+            }
             return table[left.Length, right.Length];
         }
     }
@@ -670,16 +674,33 @@ public sealed class FileIndexTests
                 (RootPath + "\\" + string.Join("\\", Chain(link.Parent).Append(link.Name)), link.Name, node.Created)))
             .ToList();
 
+        private static bool NameHasEveryWord(string name, (string Upper, string Plain)[] words)
+        {
+            var upper = name.ToUpperInvariant();
+            var plain = Ascii.IsValid(name) ? upper : SearchTextNormalizer.Fold(name).ToUpperInvariant();
+            foreach (var word in words)
+            {
+                if (upper.Contains(word.Upper, StringComparison.Ordinal)) continue;
+                if (word.Plain.Length == 0 || !upper.Contains(word.Plain, StringComparison.Ordinal) &&
+                    !plain.Contains(word.Plain, StringComparison.Ordinal)) return false;
+            }
+            return true;
+        }
+
         internal List<string> Expected(string query, ResultView view, DateTime now)
         {
-            var needle = query.ToUpperInvariant();
+            var parts = query.Split([' ', '\t', '_', '-', ',', '[', ']', '(', ')'], StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length == 0) parts = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            var words = parts
+                .Select(word => (Upper: word.ToUpperInvariant(), Plain: SearchTextNormalizer.Fold(word).ToUpperInvariant()))
+                .ToArray();
             var items = new List<Item>();
             foreach (var node in _nodes.Values)
             {
                 if (node.Reference == RootReference) continue;
                 foreach (var link in node.Links)
                 {
-                    if (!link.Name.ToUpperInvariant().Contains(needle, StringComparison.Ordinal)) continue;
+                    if (!NameHasEveryWord(link.Name, words)) continue;
                     var chain = Chain(link.Parent);
                     var item = new Item(node, link.Name, chain, RootPath + "\\" + string.Join("\\", chain.Append(link.Name)));
                     if (view.Filter.IsActive && !view.Filter.Matches(link.Name, node.Directory, node.Directory ? null : node.Size,

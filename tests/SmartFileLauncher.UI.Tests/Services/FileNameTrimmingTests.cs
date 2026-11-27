@@ -104,4 +104,24 @@ public sealed class FileNameTrimmingTests
         const string name = "uzun-bir-dosya-adi.docx";
         Assert.Equal(name, FileNameTrimming.Trim(name, _ => false));
     }
+
+    [Fact]
+    public Task MatchedPartsOfTheNameAreDrawnHeavierAndInTheAccentColor() => SmartFileLauncher.UI.Tests.Views.MainWindowNavigationTests.RunSta(() =>
+    {
+        var block = new System.Windows.Controls.TextBlock { FontSize = 14, FontWeight = System.Windows.FontWeights.SemiBold };
+        FileNameTrimming.SetHighlight(block, "çıkmış sorular");
+        FileNameTrimming.SetFileName(block, "cikmis_sorular.pdf");
+
+        var runs = block.Inlines.OfType<System.Windows.Documents.Run>().ToArray();
+        Assert.Equal(["cikmis", "_", "sorular", ".pdf"], runs.Select(run => run.Text));
+        Assert.Equal("cikmis_sorular.pdf", FileNameTrimming.ShownText(block));
+        Assert.Equal(System.Windows.FontWeights.Bold, runs[0].FontWeight);
+        Assert.Equal(System.Windows.FontWeights.SemiBold, runs[1].FontWeight);
+        Assert.NotEqual(runs[1].Foreground, runs[2].Foreground);
+
+        FileNameTrimming.SetHighlight(block, null);
+        Assert.Single(block.Inlines);
+        Assert.Equal("cikmis_sorular.pdf", block.Text);
+        return Task.CompletedTask;
+    });
 }
