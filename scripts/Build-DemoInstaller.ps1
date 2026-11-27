@@ -1,6 +1,6 @@
 param(
     [ValidatePattern('^[0-9]+\.[0-9]+\.[0-9]+$')]
-    [string]$Version = '1.1.0',
+    [string]$Version = '1.2.0',
     [string]$InnoCompilerPath
 )
 

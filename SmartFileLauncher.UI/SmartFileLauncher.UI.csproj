@@ -17,9 +17,9 @@
     <Copyright>© 2025-2026 Baver ARSLANARGUN</Copyright>
     
     <!-- Version -->
-    <Version>1.1.0</Version>
-    <FileVersion>1.1.0.0</FileVersion>
-    <AssemblyVersion>1.1.0.0</AssemblyVersion>
+    <Version>1.2.0</Version>
+    <FileVersion>1.2.0.0</FileVersion>
+    <AssemblyVersion>1.2.0.0</AssemblyVersion>
     
     <!-- Publish Settings -->
     <PublishSingleFile>true</PublishSingleFile>
