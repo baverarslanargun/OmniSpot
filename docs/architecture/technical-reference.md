@@ -106,7 +106,7 @@ Normal `ApplicationCompositionRoot`, ölçüm profili seçilmediğinde `EnableLi
 ### AdvancedSearchEngine.cs (Gelişmiş Arama)
 *   **İşlev:** Yapılandırılmış sorguları (StructuredQuery) işler.
 *   **Özellikler:** Filtreleme (Tür, Tarih, Boyut), Filter-Only Mode, AI Entegrasyonu.
-*   **Algoritma:** Aday bulma -> LINQ ile filtreleme.
+*   **Algoritma:** Aday bulma -> filtreleme -> puanlama -> ilk N. MFT indeksinde (`FileIndexReader`) anahtar kelimeli sorgular aday bulma, klasör genişletme ve puanlamayı `FileIndex` satırları ve ad bit kümeleri üzerinde yapar; yalnız ilk N sonuç için ad ve tam yol üretilir. Alaka dışı sıralama, etkin görünüm filtresi, klasör kapsamı veya başka durum okuyucusunda aynı sonucu veren genel yol çalışır.
 
 ### BasicTokenizer.cs
 *   **İşlev:** Metni anlamlı parçalara (token) böler.

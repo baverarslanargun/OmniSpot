@@ -105,6 +105,8 @@ Doğal dil sorgusunun tamamen fallback'e düşmeden intent sonucuyla devam etti�
 
 `baver.tr klasörü içindeki resimler` gibi yalnız filtre üreten bir AI sorgusunda, FileIndex klasör segmenti ve uzantı koşullarını dosya nesnesi ve tam yol oluşturmadan önce uygular. Puanlama, sıralama ve sonuç limiti mevcut arama aşamasında uygulanmaya devam eder. Klasörler yalnız atası da filtreyi geçtiğinde sonuç olur; bu karar alt ağaç okunmadan verilir.
 
+Anahtar kelimeli AI sorgusu MFT indeksinde aday bulma, klasör içeriği genişletme ve puanlamayı indeks satırları üzerinde yapar; nesne ve tam yol yalnız ilk sonuç penceresi için oluşturulur. Sonuçlar ve puanlar genel arama yoluyla aynıdır. Görünüm filtresi, klasör kapsamı veya alaka dışı bir sıralama seçildiğinde genel yol çalışır.
+
 1. Tanılama günlüğünü ve sayaç kaydını başlatın; sorguyu AI modunda yazın.
 2. Sonuçları, alt klasörlerin kapsamını ve seçili sıralamayı gözden geçirin. Aynı adı taşıyan farklı klasörler ve büyük/küçük harfli uzantılar için de deneyin.
 3. Dosya aramasının ardından yalnız klasör isteyen bir sorgu deneyin. Klasör tercihi uzantı filtresi nedeniyle daralmamalıdır.

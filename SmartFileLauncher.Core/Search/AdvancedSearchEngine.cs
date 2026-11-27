@@ -111,6 +111,13 @@ public class AdvancedSearchEngine
             return SearchFilterOnly(query, searchTerms, catalog, requiredFolders, maxResults, view, cancellationToken);
         }
 
+        if (!query.FilterOnlyMode && hasEvidence && state is FileIndexReader rowReader &&
+            TrySearchRows(rowReader, query, searchTerms, metadata, folderHints, requiredFolders, namedFolders, maxResults, view,
+                cancellationToken) is { } rowResults)
+        {
+            return rowResults;
+        }
+
         var candidates = query.FilterOnlyMode || !hasEvidence
             ? state.GetAllItems(cancellationToken).Select(item => (item, default(MatchWeights)))
             : GetCandidateNodes(query, searchTerms, state, metadata, folderHints, cancellationToken).Values;
@@ -231,7 +238,7 @@ public class AdvancedSearchEngine
         {
             var results = new List<SearchResult>();
             var parts = FolderWords(phrase);
-            foreach (var item in state.Get(words[0], cancellationToken))
+            foreach (var item in Directories(words[0]))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (item.IsDirectory && !item.Name.Any(char.IsWhiteSpace) &&
@@ -244,10 +251,14 @@ public class AdvancedSearchEngine
             return results;
         }
 
+        IReadOnlyCollection<SearchItem> Directories(string token) => state is FileIndexReader reader
+            ? reader.GetDirectories(token, cancellationToken)
+            : state.Get(token, cancellationToken);
+
         List<SearchResult> FindMatches(string token, bool nameFirst)
         {
             var results = new List<SearchResult>();
-            foreach (var item in state.Get(token, cancellationToken))
+            foreach (var item in Directories(token))
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 if (!item.IsDirectory ||
@@ -797,6 +808,74 @@ public class AdvancedSearchEngine
             else
                 tokens[key] = (old.Token, Math.Max(old.Weight, weight), old.UseFuzzy || useFuzzy);
         }
+    }
+
+    private IReadOnlyList<SearchResult>? TrySearchRows(
+        FileIndexReader reader,
+        StructuredQuery query,
+        IReadOnlyList<SearchTerm> searchTerms,
+        QueryCatalogFilter metadata,
+        HashSet<string>? folderHints,
+        HashSet<string>? requiredFolders,
+        IReadOnlyList<SearchResult> namedFolders,
+        int maxResults,
+        ResultView view,
+        CancellationToken cancellationToken)
+    {
+        if (query.OriginalText == null || !view.Sort.IsRelevance || view.Filter.IsActive || view.Scope != null) return null;
+        var tokens = CollectTokens(query, searchTerms, cancellationToken);
+        if (tokens.Length > 64) return null;
+        var scoring = CreateScoringContext(query, searchTerms);
+        if (scoring.FolderHints.Any(hint => hint.Lowered.Length == 0) ||
+            folderHints?.Contains("") == true || requiredFolders?.Contains("") == true) return null;
+        var includeContents = query.IncludeFolderContents &&
+            query.TargetType is not { HasStrongPreference: true, PrefersFolder: true };
+        var plan = new AiRowQuery
+        {
+            Tokens = tokens,
+            TokenFilter = metadata with
+            {
+                PathSegments = null,
+                IncludeDirectories = includeContents || metadata.IncludeDirectories,
+                IncludeDirectoriesWithoutExtension = includeContents,
+                FilterDirectoryDates = !includeContents && metadata.FilterDirectoryDates
+            },
+            Metadata = metadata with { PathSegments = null },
+            IncludeContents = includeContents,
+            FolderHints = folderHints,
+            RequiredFolders = requiredFolders,
+            RequiredName = query.RequiredName,
+            HintScores = scoring.FolderHints,
+            FolderContext = scoring.FolderContext,
+            FolderBonus = query.TargetType is { PrefersFolder: true } folder ? 150 * folder.Folder : null,
+            FileBonus = query.TargetType is { PrefersFile: true } file ? 100 * file.File : null,
+            SoftExtensions = query.SoftExtensions.Select(extension => extension.TrimStart('.')).ToArray(),
+            NameTerms = scoring.ExactAndPhraseTerms,
+            ContextTokens = scoring.ContextTokenWeights.ToArray(),
+            Normalize = NormalizeForComparison,
+            Tokenize = _tokenizer.Tokenize,
+            ConfirmedFolders = namedFolders.Select(result => result.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase)
+        };
+        var volumes = reader.Volumes;
+        var matches = new AiTokenMatches[volumes.Count];
+        var found = 0UL;
+        for (var i = 0; i < volumes.Count; i++)
+        {
+            matches[i] = volumes[i].Index.MatchAiTokens(plan, volumes[i].Scope, cancellationToken);
+            found |= matches[i].Found;
+        }
+        var fuzzy = 0UL;
+        for (var i = 0; i < tokens.Length; i++)
+            if (tokens[i].UseFuzzy && tokens[i].Token.Length >= 4 && (found & 1UL << i) == 0) fuzzy |= 1UL << i;
+        var results = new AiRowResults(maxResults);
+        for (var i = 0; i < volumes.Count; i++)
+            volumes[i].Index.ScoreAiRows(plan, volumes[i].Scope, matches[i], fuzzy, results, cancellationToken);
+        foreach (var named in namedFolders)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            results.Offer(named);
+        }
+        return results.ToArray();
     }
 
     private static void AddTokenMatches(

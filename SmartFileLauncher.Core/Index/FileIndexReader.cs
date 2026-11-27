@@ -25,6 +25,8 @@ internal sealed class FileIndexReader(IReadOnlyList<(FileIndex Index, IReadOnlyL
         return new TokenSummary(count, samples);
     }
 
+    internal IReadOnlyList<(FileIndex Index, IReadOnlyList<string>? Scope)> Volumes => volumes;
+
     public int ItemCount => volumes.Sum(volume => volume.Index.Count);
 
     public int TokenCount => 0;
@@ -171,6 +173,11 @@ internal sealed class FileIndexReader(IReadOnlyList<(FileIndex Index, IReadOnlyL
 
     public IReadOnlyCollection<SearchItem> Get(string token, CancellationToken cancellationToken = default) =>
         Tokens(token, TokenMatch.Exact, 0, cancellationToken);
+
+    internal IReadOnlyCollection<SearchItem> GetDirectories(string token, CancellationToken cancellationToken = default) =>
+        volumes.Count == 1
+            ? volumes[0].Index.TokenDirectories(token, volumes[0].Scope, cancellationToken)
+            : volumes.SelectMany(volume => volume.Index.TokenDirectories(token, volume.Scope, cancellationToken)).ToArray();
 
     public IReadOnlyCollection<SearchItem> GetPartial(string token, CancellationToken cancellationToken = default) =>
         Tokens(token, TokenMatch.Partial, 0, cancellationToken);

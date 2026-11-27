@@ -159,16 +159,31 @@ public sealed partial class FileIndex
         finally { _lock.ExitReadLock(); }
     }
 
-    private List<SearchItem> ItemsNamed(ulong[] bits, HashSet<uint>? scope, CancellationToken cancellationToken)
+    private List<SearchItem> ItemsNamed(ulong[] bits, HashSet<uint>? scope, CancellationToken cancellationToken,
+        bool directoriesOnly = false)
     {
         var result = new List<SearchItem>();
         if (!bits.AsSpan().ContainsAnyExcept(0UL)) return result;
         for (var row = 0u; row < _count; row++)
         {
             if ((row & 65535) == 0) cancellationToken.ThrowIfCancellationRequested();
-            if (IsNamedRow(bits, row, scope)) result.Add(ToItem(row));
+            if ((!directoriesOnly || IsDirectory(row)) && IsNamedRow(bits, row, scope)) result.Add(ToItem(row));
         }
         return result;
+    }
+
+    internal IReadOnlyList<SearchItem> TokenDirectories(string token, IReadOnlyList<string>? scope, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return [];
+        var upper = Encoding.UTF8.GetBytes(token.ToUpperInvariant());
+        var plain = Encoding.UTF8.GetBytes(IndexNames.Plain(token));
+        _lock.EnterReadLock();
+        try
+        {
+            return ItemsNamed(_names.Find(upper, plain, true, cancellationToken), ResolveScope(scope), cancellationToken,
+                directoriesOnly: true);
+        }
+        finally { _lock.ExitReadLock(); }
     }
 
     private bool IsNamedRow(ulong[] bits, uint row, HashSet<uint>? scope)
