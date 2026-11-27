@@ -13,6 +13,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
     private readonly Func<string, int, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>>? _standardPage;
     private readonly Func<string, ResultView, CancellationToken, int?>? _standardCount;
     private readonly Func<LiteralRanking>? _literalRanking;
+    private readonly Func<string, ResultView, CancellationToken, string?>? _standardSuggestion;
 
     public SearchApplicationService(
         Func<string, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>> standardSearch,
@@ -35,7 +36,8 @@ public sealed class SearchApplicationService : ISearchApplicationService
         Func<string, StructuredQuery> ruleBasedIntentParser,
         Func<string, int, int, ResultView, CancellationToken, IReadOnlyList<SearchResult>>? standardPage = null,
         Func<string, ResultView, CancellationToken, int?>? standardCount = null,
-        Func<LiteralRanking>? literalRanking = null)
+        Func<LiteralRanking>? literalRanking = null,
+        Func<string, ResultView, CancellationToken, string?>? standardSuggestion = null)
     {
         _standardSearch = standardSearch ?? throw new ArgumentNullException(nameof(standardSearch));
         _advancedSearch = advancedSearch ?? throw new ArgumentNullException(nameof(advancedSearch));
@@ -44,6 +46,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
         _standardPage = standardPage;
         _standardCount = standardCount;
         _literalRanking = literalRanking;
+        _standardSuggestion = standardSuggestion;
     }
 
     public Task<IReadOnlyList<SearchResult>> LoadPageAsync(
@@ -80,6 +83,18 @@ public sealed class SearchApplicationService : ISearchApplicationService
         cancellationToken.ThrowIfCancellationRequested();
         if (!outcome.IsPageable || _standardCount == null) return Task.FromResult<int?>(null);
         return Task.Run(() => _standardCount(request.Query, request.View, cancellationToken), cancellationToken);
+    }
+
+    public Task<string?> SuggestAsync(
+        SearchRequest request,
+        SearchOutcome outcome,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(outcome);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (!outcome.IsPageable || outcome.Results.Count > 0 || _standardSuggestion == null) return Task.FromResult<string?>(null);
+        return Task.Run(() => _standardSuggestion(request.Query, request.View, cancellationToken), cancellationToken);
     }
 
     public async Task<SearchOutcome> SearchAsync(

@@ -127,6 +127,7 @@ internal sealed class IndexWords(IndexNames source)
 
     internal static int Distance(ReadOnlySpan<byte> left, ReadOnlySpan<byte> right, int limit)
     {
+        Span<int> before = stackalloc int[right.Length + 1];
         Span<int> previous = stackalloc int[right.Length + 1];
         Span<int> current = stackalloc int[right.Length + 1];
         for (var j = 0; j <= right.Length; j++) previous[j] = j;
@@ -138,10 +139,13 @@ internal sealed class IndexWords(IndexNames source)
             {
                 var cost = left[i - 1] == right[j - 1] ? 0 : 1;
                 current[j] = Math.Min(Math.Min(previous[j] + 1, current[j - 1] + 1), previous[j - 1] + cost);
+                if (i > 1 && j > 1 && left[i - 1] == right[j - 2] && left[i - 2] == right[j - 1])
+                    current[j] = Math.Min(current[j], before[j - 2] + 1);
                 best = Math.Min(best, current[j]);
             }
             if (best > limit) return limit + 1;
-            var swap = previous;
+            var swap = before;
+            before = previous;
             previous = current;
             current = swap;
         }

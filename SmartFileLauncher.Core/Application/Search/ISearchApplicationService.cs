@@ -24,4 +24,9 @@ public interface ISearchApplicationService
         SearchRequest request,
         SearchOutcome outcome,
         CancellationToken cancellationToken = default);
+
+    Task<string?> SuggestAsync(
+        SearchRequest request,
+        SearchOutcome outcome,
+        CancellationToken cancellationToken = default) => Task.FromResult<string?>(null);
 }

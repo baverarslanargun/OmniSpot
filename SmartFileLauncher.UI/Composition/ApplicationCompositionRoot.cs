@@ -147,7 +147,8 @@ public sealed class ApplicationCompositionRoot : IDisposable
             intentParser.ParseIntent,
             standardSearch.SearchPage,
             standardSearch.CountMatches,
-            literalRanking: _openHistory == null ? null : () => _openHistory.Snapshot);
+            literalRanking: _openHistory == null ? null : () => _openHistory.Snapshot,
+            standardSuggestion: standardSearch.SuggestQuery);
         _searchDiagnostics = new SearchDiagnosticsService(
             tokenizer,
             _indexLifecycle.CreateSearchState);

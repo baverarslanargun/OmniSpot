@@ -2021,7 +2021,11 @@ public partial class MainWindow : Window {
     private void SearchBox_KeyDown(object sender, System.Windows.Input.KeyEventArgs e) {
         if (HandleApplicationKey(e)) return;
         if (e.Key == Key.Enter) {
-            if (HasCurrentFileSearch) {
+            var suggested = HasCurrentFileSearch && Keyboard.Modifiers == ModifierKeys.None && _searchResults.Count == 0 &&
+                            ApplySearchSuggestion();
+            if (suggested) {
+                Log("💡 Arama önerisi uygulandı");
+            } else if (HasCurrentFileSearch) {
                 if (Keyboard.Modifiers == ModifierKeys.None && ResultsList.SelectedIndex < 0 && _searchResults.Count > 0)
                     SelectFileSearchResult(0);
                 OpenSelected();

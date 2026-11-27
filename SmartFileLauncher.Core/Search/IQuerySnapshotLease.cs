@@ -19,6 +19,11 @@ internal interface ILiteralNamePageSnapshot
     int CountLiteralNames(string query, ResultView view, CancellationToken cancellationToken);
 }
 
+internal interface ILiteralNameSuggestionSnapshot
+{
+    string? SuggestLiteralName(string query, ResultView view, CancellationToken cancellationToken);
+}
+
 internal interface IStandardQuerySnapshot
 {
     IReadOnlyList<SearchResult> SearchStandard(

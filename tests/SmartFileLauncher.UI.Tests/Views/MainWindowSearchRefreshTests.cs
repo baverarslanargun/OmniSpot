@@ -505,6 +505,9 @@ public sealed partial class MainWindowSearchRefreshTests
         internal int LocalCalls;
         internal int StandardCalls;
         internal string RefreshedName = "ilk-fatura";
+        internal string? Suggestion;
+        internal Func<SmartFileLauncher.Core.Filtering.ResultView, int>? CountFor;
+        internal readonly List<string> SuggestedQueries = [];
         internal bool FailRefresh;
         internal int StandardTotal = 1;
         internal string StandardPrefix = "fatura";
@@ -531,7 +534,7 @@ public sealed partial class MainWindowSearchRefreshTests
                     if (FailRefresh && call > 1) throw new InvalidOperationException("Yerel indeks hazır değil");
                     return [Result(call == 1 ? "ilk-fatura" : RefreshedName)];
                 },
-                async (query, token) =>
+                async (query, _, token) =>
                 {
                     Interlocked.Increment(ref ParserCalls);
                     ParserToken = token;
@@ -545,7 +548,12 @@ public sealed partial class MainWindowSearchRefreshTests
                     lock (PageCalls) PageCalls.Add((offset, limit));
                     return Standard(offset, limit);
                 },
-                (_, _, _) => StandardTotal);
+                (_, view, _) => CountFor?.Invoke(view) ?? StandardTotal,
+                standardSuggestion: (query, _, _) =>
+                {
+                    lock (SuggestedQueries) SuggestedQueries.Add(query);
+                    return Suggestion;
+                });
             var settings = new AppSettings { AnimationsEnabled = false, ThumbnailPreviewsEnabled = false, GridViewEnabled = gridView };
             Window = new MainWindow(Model, settings,
                 Stub<ISettingsApplicationService>(), Stub<IIndexMaintenanceService>(),

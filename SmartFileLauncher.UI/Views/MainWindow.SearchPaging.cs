@@ -37,6 +37,7 @@ public partial class MainWindow
 
     private void StartSearchPaging(SearchRequest request, SearchOutcome outcome, long version)
     {
+        StartSearchSuggestion(request, outcome, version);
         ResetSearchPaging();
         if (!outcome.IsPageable || outcome.Results.Count == 0) return;
         var cancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCancellation.Token);
@@ -54,6 +55,7 @@ public partial class MainWindow
 
     private void RestoreSearchPaging(bool hasMore, int? total)
     {
+        ResetSearchSuggestion();
         ResetSearchPaging();
         if (_completedSearchOutcome is not { IsPageable: true } || _searchResults.Count == 0) return;
         _searchPageCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetimeCancellation.Token);
