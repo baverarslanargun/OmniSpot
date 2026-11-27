@@ -1,4 +1,5 @@
 using SmartFileLauncher.Core.Filtering;
+using SmartFileLauncher.Core.Index;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Search;
 
@@ -226,7 +227,7 @@ public sealed class SearchApplicationService : ISearchApplicationService
         }
 
         var best = results[0];
-        if (best.Score < 100)
+        if (best.Score < 100 || !HasOpeningNameEvidence(query, best.Name))
         {
             return null;
         }
@@ -242,6 +243,18 @@ public sealed class SearchApplicationService : ISearchApplicationService
         }
 
         return best.FullPath;
+    }
+
+    private static bool HasOpeningNameEvidence(StructuredQuery query, string name)
+    {
+        if (query.OriginalText == null) return true;
+        if (query.RequiredName is { } required)
+            return NameQuery.Create(required)?.Matches(name) == true;
+
+        return query.OriginalTerms.Any(term => term.Any(char.IsLetter) && NameQuery.Create(term)?.Matches(name) == true) &&
+            query.SearchTerms.Where(term => term.Role == SearchTermRole.Anchor)
+                .GroupBy(term => term.AnchorGroup)
+                .All(group => group.Any(term => NameQuery.Create(term.Text)?.Matches(name) == true));
     }
 
     private static StructuredQuery CreateDefaultQuery(string query) =>

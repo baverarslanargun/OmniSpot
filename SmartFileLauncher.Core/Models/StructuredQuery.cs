@@ -4,6 +4,18 @@ using System.Text.Json.Serialization;
 namespace SmartFileLauncher.Core.Models;
 
 public class StructuredQuery {
+    [JsonIgnore]
+    internal string? OriginalText { get; init; }
+
+    [JsonIgnore]
+    internal IReadOnlyList<string> OriginalTerms { get; set; } = [];
+
+    [JsonIgnore]
+    internal IReadOnlyList<FolderHint> RequiredFolders { get; set; } = [];
+
+    [JsonIgnore]
+    internal string? RequiredName { get; set; }
+
     [JsonPropertyName("intent")]
     public string Intent { get; set; } = "search";
     

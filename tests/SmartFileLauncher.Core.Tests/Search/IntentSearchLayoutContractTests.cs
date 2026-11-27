@@ -2,6 +2,7 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using SmartFileLauncher.Core.Application.Search;
+using SmartFileLauncher.Core.Index;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Search;
 using SmartFileLauncher.Core.Services;
@@ -12,6 +13,193 @@ namespace SmartFileLauncher.Core.Tests.Search;
 
 public sealed class IntentSearchLayoutContractTests
 {
+    [Theory]
+    [InlineData("baver tr resim dosyaları", false)]
+    [InlineData("baver.tr fotoğraflar", false)]
+    [InlineData("baver.tr klasöründeki resim adlı JPG dosyaları", true)]
+    public async Task ImageCategoryFindsFolderContentsAndExplicitNamesNarrowResults(string query, bool explicitScope)
+    {
+        const ulong root = 5;
+        using var index = FileIndex.Build(@"C:\Synthetic", root,
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "baver.tr", FileAttributes.Directory, 0, 0, 0),
+            new(17, 16, "assets", FileAttributes.Directory, 0, 0, 0),
+            new(18, 17, "banner.png", FileAttributes.Archive, 100, 0, 0),
+            new(19, 17, "logo.svg", FileAttributes.Archive, 100, 0, 0),
+            new(20, 16, "resim-kapak.jpg", FileAttributes.Archive, 100, 0, 0),
+            new(21, 16, "resim.txt", FileAttributes.Archive, 100, 0, 0),
+            new(22, root, "baver.tr-eski", FileAttributes.Directory, 0, 0, 0),
+            new(23, 22, "dışarı.jpg", FileAttributes.Archive, 100, 0, 0)
+        ]);
+        const string intent = """
+            {"mode":"keyword","target":"file","folders":["baver tr"],"hard_extensions":["jpg","jpeg","png","gif"],"open":false}
+            """;
+        const string keywords = """
+            {"anchors":[{"primary":"baver","variants":[],"translations":[]},
+                {"primary":"resim","variants":["resimleri"],"translations":["image","photo"]}],
+             "phrases":[],"context":["tr"]}
+            """;
+
+        var outcome = await ExecuteAsync(new FileIndexReader([(index, null)]), intent, keywords, query: query);
+
+        Assert.False(outcome.StructuredQuery!.FilterOnlyMode);
+        if (explicitScope)
+        {
+            Assert.Equal("resim", outcome.StructuredQuery.RequiredName);
+            Assert.Single(outcome.StructuredQuery.RequiredFolders);
+            Assert.Equal("resim-kapak.jpg", Assert.Single(outcome.Results).Name);
+        }
+        else
+        {
+            Assert.Empty(outcome.StructuredQuery.RequiredFolders);
+            Assert.Equal(new[] { "banner.png", "logo.svg", "resim-kapak.jpg" },
+                outcome.Results.Take(3).Select(result => result.Name).Order(StringComparer.Ordinal));
+            Assert.DoesNotContain(outcome.Results, result => result.Name == "resim.txt");
+        }
+    }
+
+    [Theory]
+    [InlineData("a")]
+    [InlineData("ab")]
+    [InlineData("Abc")]
+    public async Task ShortGeneratedKeywordsMatchTheSameNamesAsLiteralSearch(string keyword)
+    {
+        const ulong root = 5;
+        using var index = FileIndex.Build(@"C:\Synthetic", root,
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "Abc.pdf", FileAttributes.Archive, 100, 0, 0),
+            new(17, root, "Abcd.pdf", FileAttributes.Archive, 100, 0, 0),
+            new(18, root, "not.pdf", FileAttributes.Archive, 100, 0, 0)
+        ]);
+        const string intent = """{"mode":"keyword","target":"file","folders":[],"open":false}""";
+        var keywords = JsonSerializer.Serialize(new
+        {
+            anchors = new[] { new { primary = keyword, variants = Array.Empty<string>(), translations = Array.Empty<string>() } },
+            phrases = Array.Empty<string>(),
+            context = Array.Empty<string>()
+        });
+
+        var state = new FileIndexReader([(index, null)]);
+        var expected = new SearchEngine(_ => state, new BasicTokenizer(), new BasicScoringStrategy(), literalNamesOnly: true)
+            .Search(keyword).Select(result => result.Name).Order().ToArray();
+        var outcome = await ExecuteAsync(state, intent, keywords, query: "uygun dosyayı bul");
+
+        Assert.Equal(SearchExecutionMode.Advanced, outcome.Mode);
+        Assert.Contains("Abcd.pdf", expected);
+        Assert.Equal(expected, outcome.Results.Select(result => result.Name).Order());
+    }
+
+    [Fact]
+    public async Task OriginalNameOutranksModelCandidateDespiteUnrequestedMetadata()
+    {
+        using var workspace = new TemporaryDirectory();
+        var original = FileNode("nehir-planı.xlsx", folder: "Projects");
+        var modelMatch = FileNode("nakit.pdf", folder: "Downloads");
+        const string intent = """
+            {"mode":"filter","target":"folder","hard_extensions":["pdf"],"folders":["Downloads"],
+             "created_from":"2026-08-01","min_mb":50,"open":true}
+            """;
+        const string keywords = """
+            {"anchors":[{"primary":"nakit","variants":[],"translations":[]}],"phrases":[],"context":[]}
+            """;
+
+        var outcome = await ExecuteAsync(CreateState("legacy", [original, modelMatch], workspace), intent, keywords,
+            query: "nehir planı dosyası");
+
+        Assert.Equal(SearchExecutionMode.Advanced, outcome.Mode);
+        Assert.Equal(new[] { original.FullPath, modelMatch.FullPath }, outcome.Results.Select(result => result.FullPath));
+        Assert.Empty(outcome.StructuredQuery!.HardExtensions);
+        Assert.Empty(outcome.StructuredQuery.RequiredFolders);
+        Assert.Null(outcome.StructuredQuery.DateFilter);
+        Assert.Null(outcome.StructuredQuery.SizeFilter);
+        Assert.Null(outcome.AutoOpenPath);
+    }
+
+    [Fact]
+    public async Task ExplicitDateAndFolderWorkWhenTheModelOmitsThem()
+    {
+        const ulong root = 5;
+        var date = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Local).ToUniversalTime().Ticks;
+        var previousDay = new DateTime(2026, 6, 30, 12, 0, 0, DateTimeKind.Local).ToUniversalTime().Ticks;
+        using var index = FileIndex.Build(@"C:\Synthetic", root,
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "Arşiv", FileAttributes.Directory, 0, 0, 0),
+            new(17, 16, "rapor.pdf", FileAttributes.Archive, 100, date, previousDay),
+            new(18, 16, "rapor-eski.pdf", FileAttributes.Archive, 100, previousDay, date),
+            new(19, 16, "rapor-klasör", FileAttributes.Directory, 0, previousDay, date),
+            new(20, root, "rapor.pdf", FileAttributes.Archive, 100, date, previousDay)
+        ]);
+        const string intent = """{"mode":"keyword","target":"folder","folders":[],"open":false}""";
+        const string keywords = """{"anchors":[{"primary":"rapor","variants":[],"translations":[]}],"phrases":[],"context":[]}""";
+
+        var outcome = await ExecuteAsync(new FileIndexReader([(index, null)]), intent, keywords,
+            query: "01.07.2026 tarihinde değiştirilen raporu Arşiv klasöründe ara");
+
+        Assert.Equal(@"C:\Synthetic\Arşiv\rapor.pdf", Assert.Single(outcome.Results).FullPath);
+        Assert.Equal("2026-07-01", outcome.StructuredQuery!.DateFilter?.ModifiedAfter);
+        Assert.Equal("2026-07-02", outcome.StructuredQuery.DateFilter?.ModifiedBeforeExclusive);
+    }
+
+    [Fact]
+    public async Task AShortExplicitExtensionStillUsesAiFilters()
+    {
+        const ulong root = 5;
+        using var index = FileIndex.Build(@"C:\Synthetic", root,
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "pdf", FileAttributes.Directory, 0, 0, 0),
+            new(17, root, "kitap.pdf", FileAttributes.Archive, 100, 0, 0),
+            new(18, root, "pdf-notlari.txt", FileAttributes.Archive, 100, 0, 0)
+        ]);
+        const string intent = """{"mode":"filter","target":"file","hard_extensions":["pdf"],"open":false}""";
+        const string keywords = """{"anchors":[],"phrases":[],"context":[]}""";
+
+        var outcome = await ExecuteAsync(new FileIndexReader([(index, null)]), intent, keywords, query: "pdf");
+
+        Assert.Equal("kitap.pdf", Assert.Single(outcome.Results).Name);
+        Assert.Equal(SearchExecutionMode.Advanced, outcome.Mode);
+    }
+
+    [Theory]
+    [InlineData("çıkmış sorular ayrık matematik")]
+    [InlineData("çıkmış sorular ayrık matematik klasöründe")]
+    [InlineData("Ayrık Matematik Çıkmış Sorular")]
+    [InlineData("Ayrık Matematik altındaki Çıkmış Sorular klasörünü")]
+    [InlineData("cikmis sorular ayrik matematik klasorunde")]
+    public async Task ExactFolderAndAncestorNamesSurviveIncorrectAiTerms(string query)
+    {
+        const ulong root = 5;
+        using var index = FileIndex.Build(@"C:\Synthetic", root,
+        [
+            new(root, root, ".", FileAttributes.Directory, 0, 0, 0),
+            new(16, root, "Ayrık Matematik", FileAttributes.Directory, 0, 0, 0),
+            new(17, 16, "Çıkmış Sorular", FileAttributes.Directory, 0, 0, 0),
+            new(18, 17, "2025.pdf", FileAttributes.Archive, 1024, 0, 0),
+            new(20, root, "Matematik", FileAttributes.Directory, 0, 0, 0),
+            new(21, 20, "Çıkmış Sorular", FileAttributes.Directory, 0, 0, 0),
+            new(22, 16, "Örnek Çıkmış Sorular", FileAttributes.Directory, 0, 0, 0),
+            new(30, root, "Ayrık Matematik Çıkmış Sorular.pdf", FileAttributes.Archive, 1024, 0, 0)
+        ]);
+        const string intent = """{"mode":"keyword","target":"file","folders":["matematik klas"],"open":false}""";
+        const string keywords = """
+            {"anchors":[{"primary":"çıkış","variants":["cikis"],"translations":["exit"]},
+                {"primary":"soru","variants":["sorusu"],"translations":["question"]},
+                {"primary":"ayrık","variants":["ayrik"],"translations":["discrete"]}],
+             "phrases":["çıkış soruları","ayrık matematik"],"context":["matematik"]}
+            """;
+
+        var outcome = await ExecuteAsync(new FileIndexReader([(index, null)]), intent, keywords, query: query);
+
+        var result = outcome.Results[0];
+        Assert.Equal(@"C:\Synthetic\Ayrık Matematik\Çıkmış Sorular", result.FullPath);
+        Assert.True(result.IsDirectory);
+        Assert.Contains(outcome.Results, candidate => candidate.FullPath == @"C:\Synthetic\Matematik\Çıkmış Sorular");
+        Assert.Null(outcome.AutoOpenPath);
+    }
+
     [Theory]
     [InlineData("compact32")]
     [InlineData("compact-varint")]
@@ -88,10 +276,12 @@ public sealed class IntentSearchLayoutContractTests
                 {"primary":"2026", "variants":[], "translations":[]}],
               "phrases":[], "context":["finance"] }
             """;
-        var expected = await ExecuteAsync(CreateState("legacy", nodes, workspace), intent, keywords);
-        var actual = await ExecuteAsync(CreateState(layout, nodes, workspace), intent, keywords);
+        const string query = "2026 bütçe raporu temmuz ayında oluşturulan 1-3 MB PDF";
+        var expected = await ExecuteAsync(CreateState("legacy", nodes, workspace), intent, keywords, query: query);
+        var actual = await ExecuteAsync(CreateState(layout, nodes, workspace), intent, keywords, query: query);
 
-        Assert.Equal(@"C:\Synthetic\budget-2026.pdf", Assert.Single(actual.Results).FullPath);
+        Assert.Equal(new[] { "2026-finance.pdf", "budget-2026.pdf", "bütçe-2025.pdf" },
+            actual.Results.Select(result => result.Name).Order(StringComparer.Ordinal));
         Assert.Equal(SearchExecutionMode.Advanced, actual.Mode);
         Assert.False(actual.UsedFallback);
         Assert.Null(actual.WarningMessage);
@@ -105,11 +295,15 @@ public sealed class IntentSearchLayoutContractTests
             term.Text == "finance" && term.Role == SearchTermRole.Context);
         AssertSameOutcome(expected, actual);
 
-        var explicitOpen = await ExecuteAsync(CreateState(layout, nodes, workspace), intent, keywords,
-            query: "2026 bütçe raporu pdf aç");
-        Assert.Equal(actual.Results.Select(ResultKey), explicitOpen.Results.Select(ResultKey));
+        const string openQuery = "2026 budget temmuz ayında oluşturulan 1-3 MB PDF aç";
+        var explicitOpen = await ExecuteAsync(CreateState(layout, [nodes[0]], workspace), intent, keywords,
+            query: openQuery);
         Assert.True(explicitOpen.StructuredQuery!.OpenAction!.ShouldOpen);
-        Assert.Equal(actual.Results[0].FullPath, explicitOpen.AutoOpenPath);
+        Assert.Equal(@"C:\Synthetic\budget-2026.pdf", explicitOpen.AutoOpenPath);
+        var partialOnly = await ExecuteAsync(CreateState(layout, [nodes[^1]], workspace), intent, keywords,
+            query: openQuery);
+        Assert.Equal("2026-finance.pdf", Assert.Single(partialOnly.Results).Name);
+        Assert.Null(partialOnly.AutoOpenPath);
     }
 
     [Theory]
@@ -136,8 +330,9 @@ public sealed class IntentSearchLayoutContractTests
         const string keywords = """
             { "anchors":[], "phrases":[], "context":[] }
             """;
-        var expected = await ExecuteAsync(CreateState("legacy", nodes, workspace), intent, keywords, 1);
-        var actual = await ExecuteAsync(CreateState(layout, nodes, workspace), intent, keywords, 1);
+        const string query = "Downloads klasöründe 2026-07-01 tarihli 1-3 MB PDF";
+        var expected = await ExecuteAsync(CreateState("legacy", nodes, workspace), intent, keywords, 1, query);
+        var actual = await ExecuteAsync(CreateState(layout, nodes, workspace), intent, keywords, 1, query);
 
         Assert.Equal(@"C:\Synthetic\Downloads\z-match.pdf", Assert.Single(actual.Results).FullPath);
         Assert.True(actual.StructuredQuery!.FilterOnlyMode);
@@ -299,7 +494,7 @@ public sealed class IntentSearchLayoutContractTests
             timeZone: TimeZoneInfo.Utc, model: "qwen/qwen3.8-27b");
         var tokenizer = new BasicTokenizer();
         var scoring = new BasicScoringStrategy();
-        var standard = new SearchEngine(_ => state, tokenizer, scoring);
+        var standard = new SearchEngine(_ => state, tokenizer, scoring, literalNamesOnly: state is ILiteralNameQuerySnapshot);
         var advanced = new AdvancedSearchEngine(_ => state, tokenizer, scoring);
         var service = new SearchApplicationService(standard.Search, advanced.Search,
             parser.ParseWithGroqAsync, parser.ParseIntent);

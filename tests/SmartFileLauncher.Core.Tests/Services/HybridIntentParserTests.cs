@@ -76,7 +76,7 @@ public sealed class HybridIntentParserTests
         var intent = new Handler(async token => { await release.Task.WaitAsync(token); return Completion(Intent); });
         var keyword = new Handler(async token => { await release.Task.WaitAsync(token); return Completion(Keywords); });
         var parser = new IntentParser(new HttpClient(intent), new HttpClient(keyword));
-        var pending = parser.ParseWithGroqAsync("geçen ay değiştirdiğim faturalar");
+        var pending = parser.ParseWithGroqAsync("Downloads klasöründe geçen ay değiştirdiğim PDF faturalar");
         try
         {
             await Task.WhenAll(intent.Started.Task, keyword.Started.Task).WaitAsync(TimeSpan.FromSeconds(5));
@@ -93,7 +93,7 @@ public sealed class HybridIntentParserTests
         Assert.Equal("2026-09-01", result.DateFilter?.ModifiedAfter);
         Assert.Equal("2026-10-01", result.DateFilter?.ModifiedBeforeExclusive);
         Assert.Equal("Downloads", Assert.Single(result.FolderHints).Name);
-        Assert.Equal("pdf", Assert.Single(result.HardExtensions));
+        Assert.Equal(".pdf", Assert.Single(result.HardExtensions));
         Assert.Contains(result.SearchTerms, term => term.Text == "invoice" && term.Role == SearchTermRole.Anchor);
         Assert.All(result.SearchTerms, term => Assert.Equal(0, term.AnchorGroup));
     }
@@ -148,7 +148,7 @@ public sealed class HybridIntentParserTests
         var keyword = new Handler(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
             { Content = new StringContent("{}") }));
         var parser = new IntentParser(new HttpClient(Handler.Returning(Intent.Replace("\"filter\"", "\"keyword\""))), new HttpClient(keyword));
-        var result = await parser.ParseWithGroqAsync("fatura pdf");
+        var result = await parser.ParseWithGroqAsync("geçen ay değiştirdiğim fatura pdf");
         Assert.False(result.UsedFallback);
         Assert.Contains("400", result.WarningMessage);
         Assert.Equal("2026-09-01", result.DateFilter?.ModifiedAfter);

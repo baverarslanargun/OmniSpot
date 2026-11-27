@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using SmartFileLauncher.Core.DataStructures;
 using SmartFileLauncher.Core.Filtering;
+using SmartFileLauncher.Core.Index;
 using SmartFileLauncher.Core.Models;
 using SmartFileLauncher.Core.Services;
 
@@ -87,205 +88,231 @@ public class AdvancedSearchEngine
             return Array.Empty<SearchResult>();
         }
 
-        List<(SearchItem node, Dictionary<string, double> matches)> candidates;
+        var namedFolders = FindNamedSubfolders(query, state, maxResults, view, cancellationToken);
         var searchTerms = GetSearchTerms(query);
-        if ((query.FilterOnlyMode || searchTerms.Count == 0) &&
-            state is IQueryCatalogSnapshot catalogSnapshot)
+        var requiredFolders = ExpandFilterFolderNames(query.OriginalText == null && query.FilterOnlyMode
+            ? query.FolderHints : query.RequiredFolders, cancellationToken);
+        var folderHints = ExpandFilterFolderNames(query.FolderHints, cancellationToken);
+        var extensions = CreateFilterOnlyAllowedExtensions(query, cancellationToken);
+        var metadata = CreateInitialCatalogFilter(query) with
         {
-            return SearchFilterOnly(
-                query,
-                searchTerms,
-                catalogSnapshot,
-                maxResults,
-                view,
-                cancellationToken);
+            AllowedExtensions = extensions.Count > 0 && query.TargetType is not { HasStrongPreference: true, PrefersFolder: true }
+                ? extensions : null,
+            PathSegments = requiredFolders
+        };
+        var hasEvidence = searchTerms.Count > 0 || query.OriginalTerms.Count > 0 || folderHints != null;
+        if (!hasEvidence && !query.FilterOnlyMode && query.OriginalText != null)
+        {
+            return namedFolders;
+        }
+        if ((query.FilterOnlyMode || !hasEvidence) && state is IQueryCatalogSnapshot catalog)
+        {
+            return SearchFilterOnly(query, searchTerms, catalog, requiredFolders, maxResults, view, cancellationToken);
         }
 
-        if (query.FilterOnlyMode || searchTerms.Count == 0)
-        {
-            candidates = GetAllFilesForFiltering(query, state, cancellationToken);
-        }
-        else
-        {
-            candidates = GetCandidateNodes(searchTerms, state, cancellationToken);
-        }
+        var candidates = query.FilterOnlyMode || !hasEvidence
+            ? state.GetAllItems(cancellationToken).Select(item => (item, default(MatchWeights)))
+            : GetCandidateNodes(query, searchTerms, state, metadata, folderHints, cancellationToken).Values;
 
-        if (query.TargetType != null && query.TargetType.HasStrongPreference)
-        {
-            if (query.TargetType.PrefersFolder)
-            {
-                candidates = candidates.Where(candidate =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return candidate.node.IsDirectory;
-                }).ToList();
-            }
-            else if (query.TargetType.PrefersFile && query.TargetType.File > 0.7)
-            {
-                candidates = candidates.Where(candidate =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return !candidate.node.IsDirectory;
-                }).ToList();
-            }
-        }
-
-        var allowedExtensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (query.HardExtensions.Any())
-        {
-            foreach (var extension in query.HardExtensions)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                allowedExtensions.Add(extension.StartsWith(".", StringComparison.Ordinal) ? extension : $".{extension}");
-            }
-        }
-        else if (query.PredictedExtensions.Any())
-        {
-            foreach (var extension in query.PredictedExtensions)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                allowedExtensions.Add(extension.StartsWith(".", StringComparison.Ordinal) ? extension : $".{extension}");
-            }
-        }
-        else if (query.FileTypes.Any())
-        {
-            foreach (var extension in FileTypeMapper.GetExtensionsForTypes(query.FileTypes))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                allowedExtensions.Add(extension);
-            }
-        }
-
-        var userWantsFolders = query.TargetType?.PrefersFolder == true;
-        if (allowedExtensions.Any() && !userWantsFolders)
-        {
-            candidates = candidates.Where(candidate =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                if (candidate.node.IsDirectory && query.IncludeFolderContents)
-                {
-                    return true;
-                }
-
-                return allowedExtensions.Contains(Path.GetExtension(candidate.node.Name));
-            }).ToList();
-        }
-
-        var finalResults = new List<(SearchItem node, Dictionary<string, double> matches)>();
+        var order = SortedResultOrder.For(view.Sort);
+        var queue = new PriorityQueue<SearchResult, SearchResult>(
+            Comparer<SearchResult>.Create((left, right) => order.Compare(right, left)));
+        var confirmedFolders = namedFolders.Select(folder => folder.FullPath).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var scoring = CreateScoringContext(query, searchTerms);
+        var now = DateTime.Now;
         foreach (var (node, matches) in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (!node.IsDirectory)
+            if (confirmedFolders.Contains(node.FullPath) ||
+                !metadata.Matches(node) ||
+                !MatchesExplicitNameAndFolder(query, node, requiredFolders) ||
+                !filter.Matches(node.Name, node.IsDirectory, node.SizeBytes, node.LastWriteTime, now) ||
+                !PathScope.Contains(view.Scope, node.FullPath))
             {
-                finalResults.Add((node, matches));
                 continue;
             }
 
-            if (userWantsFolders)
-            {
-                finalResults.Add((node, matches));
-            }
-            else if (query.IncludeFolderContents)
-            {
-                var children = state.GetDescendants(node, cancellationToken);
-                if (allowedExtensions.Any())
-                {
-                    children = children.Where(child =>
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        return !child.IsDirectory &&
-                               allowedExtensions.Contains(Path.GetExtension(child.Name));
-                    }).ToArray();
-                }
-
-                foreach (var child in children)
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    finalResults.Add((child, new Dictionary<string, double>(matches)));
-                }
-            }
-        }
-
-        finalResults = finalResults
-            .GroupBy(item => item.node.FullPath, StringComparer.OrdinalIgnoreCase)
-            .Select(group => (
-                group.First().node,
-                MergeMatches(group.Select(item => item.matches))))
-            .ToList();
-
-        if (query.FolderContextTerms.Count > 0)
-        {
-            var groups = query.FolderContextTerms
-                .GroupBy(term => term.AnchorGroup)
-                .Select(group => group.Select(term => _tokenizer.Tokenize(term.Text)
-                    .Select(SearchTextNormalizer.Fold).Distinct(StringComparer.OrdinalIgnoreCase).ToArray()).ToArray())
-                .ToArray();
-            finalResults = finalResults.Where(candidate =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var segments = (Path.GetDirectoryName(candidate.node.FullPath) ?? "")
-                    .Split([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar], StringSplitOptions.RemoveEmptyEntries)
-                    .Select(segment => _tokenizer.Tokenize(segment).Select(SearchTextNormalizer.Fold).ToHashSet(StringComparer.OrdinalIgnoreCase))
-                    .ToArray();
-                return groups.All(group => group.Any(tokens => tokens.Length > 0 &&
-                    segments.Any(segment => tokens.All(token => segment.Any(part =>
-                        part.Equals(token, StringComparison.OrdinalIgnoreCase) ||
-                        (token.Length >= 4 && part.Contains(token, StringComparison.OrdinalIgnoreCase)))))));
-            }).ToList();
-        }
-
-        if (query.DateFilter != null)
-        {
-            finalResults = ApplyDateFilter(finalResults, query.DateFilter, cancellationToken);
-        }
-
-        if (query.SizeFilter != null)
-        {
-            finalResults = ApplySizeFilter(finalResults, query.SizeFilter, cancellationToken);
-        }
-
-        if (filter.IsActive)
-        {
-            finalResults = ApplyItemFilter(finalResults, filter, cancellationToken);
-        }
-
-        if (view.Scope is { } scope)
-        {
-            finalResults = finalResults.Where(candidate => PathScope.Contains(scope, candidate.node.FullPath)).ToList();
-        }
-
-        var scoringContext = CreateScoringContext(query, searchTerms);
-        var scoredResults = new List<SearchResult>(finalResults.Count);
-        foreach (var (node, matches) in finalResults)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            scoredResults.Add(new SearchResult
+            Offer(new SearchResult
             {
                 Name = node.Name,
                 FullPath = node.FullPath,
-                Score = CalculateScore(query, node, matches, scoringContext, cancellationToken),
+                Score = CalculateScore(query, node, matches, scoring, cancellationToken),
                 IsDirectory = node.IsDirectory,
                 SizeBytes = node.SizeBytes,
                 LastWriteTime = node.LastWriteTime
             });
         }
-
-        var queue = new PriorityQueue<SearchResult, SearchResult>(SortedResultOrder.For(view.Sort));
-        foreach (var result in scoredResults)
+        foreach (var folder in namedFolders)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            queue.Enqueue(result, result);
+            Offer(folder);
         }
 
-        var results = new List<SearchResult>(Math.Min(maxResults, queue.Count));
-        while (queue.Count > 0 && results.Count < maxResults)
+        var results = new SearchResult[queue.Count];
+        for (var i = results.Length - 1; i >= 0; i--)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            results.Add(queue.Dequeue());
+            results[i] = queue.Dequeue();
         }
-
         return results;
+
+        void Offer(SearchResult result)
+        {
+            if (queue.Count < maxResults) queue.Enqueue(result, result);
+            else if (order.Compare(result, queue.Peek()) < 0) queue.EnqueueDequeue(result, result);
+        }
     }
+
+    private static bool MatchesExplicitNameAndFolder(StructuredQuery query, SearchItem item, HashSet<string>? folders) =>
+        (folders == null || PathHasFolder(Path.GetDirectoryName(item.FullPath) ?? "", folders)) &&
+        (query.RequiredName == null || ContainsRequiredName(item.Name, query.RequiredName));
+
+    internal static bool ContainsRequiredName(string name, string required) =>
+        WithoutSeparators(name).Contains(WithoutSeparators(required), StringComparison.OrdinalIgnoreCase);
+
+    private static string WithoutSeparators(string value)
+    {
+        var folded = SearchTextNormalizer.Fold(value);
+        return folded.AsSpan().IndexOfAny(" ._-") < 0 ? folded : string.Concat(folded.Where(c => c is not (' ' or '.' or '_' or '-')));
+    }
+
+    private static IReadOnlyList<SearchResult> FindNamedSubfolders(
+        StructuredQuery query, ISearchStateReader state, int maxResults, ResultView view,
+        CancellationToken cancellationToken)
+    {
+        if (query.OriginalText is not { } text || query.FilterOnlyMode || view.Filter.HidesFolders ||
+            query.RequiredName != null || query.RequiredFolders.Count > 0 ||
+            query.TargetType is { HasStrongPreference: true, PrefersFile: true } ||
+            query.HardExtensions.Count > 0 || query.PredictedExtensions.Count > 0 || query.FileTypes.Count > 0 ||
+            query.DateFilter != null || query.SizeFilter != null || query.OpenAction?.ShouldOpen == true)
+        {
+            return [];
+        }
+
+        var words = NormalizeFolderText(text).Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length < 2)
+        {
+            return [];
+        }
+
+        var nameFirstOnly = words[^1] is "klasorunde" or "altinda";
+        string? namedAncestor = null;
+        var location = Array.FindIndex(words, word => word is "altindaki" or "klasorundeki");
+        if (location > 0 && location < words.Length - 1)
+        {
+            var end = words[^1] is "klasoru" or "klasorunu" ? words.Length - 1 : words.Length;
+            namedAncestor = string.Join(' ', words[..location]);
+            words = words[(location + 1)..end];
+        }
+        else if (nameFirstOnly)
+        {
+            words = words[..^1];
+        }
+        if (words.Length < (namedAncestor == null ? 2 : 1))
+        {
+            return [];
+        }
+
+        var phrase = string.Join(' ', words);
+        var matches = FindMatches(words[0], nameFirst: true);
+        if (matches.Count == 0 && !nameFirstOnly && namedAncestor == null)
+        {
+            matches = FindMatches(words[^1], nameFirst: false);
+        }
+        if (namedAncestor == null)
+        {
+            matches.AddRange(FindCompoundNames().Where(compound =>
+                !matches.Exists(match => string.Equals(match.FullPath, compound.FullPath, StringComparison.OrdinalIgnoreCase))));
+        }
+        return matches.OrderBy(result => result, SortedResultOrder.For(view.Sort)).Take(maxResults).ToArray();
+
+        List<SearchResult> FindCompoundNames()
+        {
+            var results = new List<SearchResult>();
+            var parts = FolderWords(phrase);
+            foreach (var item in state.Get(words[0], cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (item.IsDirectory && !item.Name.Any(char.IsWhiteSpace) &&
+                    (view.Scope is not { } scope || PathScope.Contains(scope, item.FullPath)) &&
+                    FolderWords(NormalizeFolderText(item.Name)) == parts)
+                {
+                    results.Add(Named(item, 2000));
+                }
+            }
+            return results;
+        }
+
+        List<SearchResult> FindMatches(string token, bool nameFirst)
+        {
+            var results = new List<SearchResult>();
+            foreach (var item in state.Get(token, cancellationToken))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!item.IsDirectory ||
+                    (view.Scope is { } scope && !PathScope.Contains(scope, item.FullPath)))
+                {
+                    continue;
+                }
+
+                var name = NormalizeFolderText(item.Name);
+                string ancestorName;
+                if (namedAncestor != null)
+                {
+                    if (name != phrase) continue;
+                    ancestorName = namedAncestor;
+                }
+                else
+                {
+                    var nameWithBoundary = nameFirst ? name + " " : " " + name;
+                    var hasName = nameFirst
+                        ? phrase.StartsWith(nameWithBoundary, StringComparison.Ordinal)
+                        : phrase.EndsWith(nameWithBoundary, StringComparison.Ordinal);
+                    if (!hasName) continue;
+                    ancestorName = nameFirst ? phrase[nameWithBoundary.Length..] : phrase[..^nameWithBoundary.Length];
+                }
+
+                var depth = NamedAncestorDepth(item.FullPath, ancestorName);
+                if (depth == 1 || depth > 1 && namedAncestor != null)
+                {
+                    results.Add(Named(item, depth == 1 ? 2000 : 1000));
+                }
+            }
+            return results;
+        }
+
+        static SearchResult Named(SearchItem item, double score) => new()
+        {
+            Name = item.Name,
+            FullPath = item.FullPath,
+            IsDirectory = true,
+            Score = score,
+            SizeBytes = item.SizeBytes,
+            LastWriteTime = item.LastWriteTime
+        };
+
+        static string FolderWords(string value) =>
+            string.Join(' ', value.Split(FolderWordSeparators, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    private static readonly char[] FolderWordSeparators = [' ', '.', '_', '-'];
+
+    private static int NamedAncestorDepth(string path, string name)
+    {
+        var depth = 1;
+        for (var parent = Path.GetDirectoryName(path); !string.IsNullOrEmpty(parent); parent = Path.GetDirectoryName(parent), depth++)
+        {
+            if (NormalizeFolderText(Path.GetFileName(parent)) == name)
+            {
+                return depth;
+            }
+        }
+        return 0;
+    }
+
+    private static string NormalizeFolderText(string value) =>
+        string.Join(' ', SearchTextNormalizer.Fold(value.ToLowerInvariant())
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     private readonly record struct FilterCandidate(SearchItem Item, double Score);
 
@@ -322,6 +349,7 @@ public class AdvancedSearchEngine
         StructuredQuery query,
         IReadOnlyList<SearchTerm> searchTerms,
         IQueryCatalogSnapshot state,
+        HashSet<string>? expandedFolderNames,
         int maxResults,
         ResultView view,
         CancellationToken cancellationToken)
@@ -330,21 +358,22 @@ public class AdvancedSearchEngine
         var userFilter = view.Filter;
         var filter = CreateInitialCatalogFilter(query);
         var allowedExtensions = CreateFilterOnlyAllowedExtensions(query, cancellationToken);
-        var expandedFolderNames = ExpandFilterFolderNames(query, cancellationToken);
-        var userWantsFolders = query.TargetType?.PrefersFolder == true;
+        var userWantsFolders = query.TargetType is { HasStrongPreference: true, PrefersFolder: true };
         filter = filter with
         {
             PathSegments = expandedFolderNames,
             AllowedExtensions = !userWantsFolders && allowedExtensions.Count > 0 ? allowedExtensions : null,
             IncludeDirectoriesWithoutExtension = query.IncludeFolderContents
         };
-        var expandsFolders = query.IncludeFolderContents && !userWantsFolders && filter.IncludeDirectories;
-        var seen = expandsFolders ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
+        var nestsFolders = query.IncludeFolderContents && !userWantsFolders && filter.IncludeDirectories &&
+            allowedExtensions.Count == 0;
+        var folders = nestsFolders ? new List<SearchItem>() : null;
+        var folderPaths = nestsFolders ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) : null;
         var winners = new PriorityQueue<FilterCandidate, FilterCandidate>(
             FilterCandidateOrder.Create(view.Sort, reverse: true));
         var bestFirst = FilterCandidateOrder.Create(view.Sort, reverse: false);
         var scoringContext = CreateScoringContext(query, searchTerms);
-        var noMatches = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        var noMatches = default(MatchWeights);
 
         foreach (var node in state.GetItems(filter, cancellationToken))
         {
@@ -369,18 +398,22 @@ public class AdvancedSearchEngine
             {
                 Offer(node);
             }
-            else if (query.IncludeFolderContents)
+            else if (folders != null)
             {
-                foreach (var child in state.GetDescendants(node, cancellationToken))
+                folders.Add(node);
+                folderPaths!.Add(node.FullPath);
+            }
+        }
+
+        if (folders != null)
+        {
+            var offered = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var folder in folders)
+            {
+                foreach (var child in state.GetDescendants(folder, cancellationToken))
                 {
                     cancellationToken.ThrowIfCancellationRequested();
-                    if (allowedExtensions.Count > 0 &&
-                        (child.IsDirectory || !allowedExtensions.Contains(Path.GetExtension(child.Name))))
-                    {
-                        continue;
-                    }
-
-                    Offer(child);
+                    if (child.IsDirectory && folderPaths!.Contains(child.FullPath) && offered.Add(child.FullPath)) Offer(child);
                 }
             }
         }
@@ -405,8 +438,8 @@ public class AdvancedSearchEngine
 
         void Offer(SearchItem item)
         {
-            if ((seen != null && !seen.Add(item.FullPath)) ||
-                !PathScope.Contains(view.Scope, item.FullPath) ||
+            if (!PathScope.Contains(view.Scope, item.FullPath) ||
+                !MatchesExplicitNameAndFolder(query, item, expandedFolderNames) ||
                 !PassesFilterOnlyDate(item, query.DateFilter) ||
                 !PassesFilterOnlySize(item, query.SizeFilter) ||
                 !userFilter.Matches(
@@ -445,7 +478,7 @@ public class AdvancedSearchEngine
         return new QueryCatalogFilter(
             IncludeFiles: !strongFolder,
             IncludeDirectories: includeDirectories,
-            FilterDirectoryDates: userWantsFolders,
+            FilterDirectoryDates: query.DateFilter != null,
             FilterFileSize: query.SizeFilter != null,
             CreatedAfter: ParseDate(query.DateFilter?.CreatedAfter),
             CreatedBeforeExclusive: ParseDate(query.DateFilter?.CreatedBeforeExclusive),
@@ -477,10 +510,10 @@ public class AdvancedSearchEngine
     }
 
     private static HashSet<string>? ExpandFilterFolderNames(
-        StructuredQuery query,
+        IReadOnlyList<FolderHint> hints,
         CancellationToken cancellationToken)
     {
-        if (query.FolderHints.Count == 0) return null;
+        if (hints.Count == 0) return null;
         var mappings = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
         {
             ["downloads"] = ["downloads", "indirilenler", "download"],
@@ -497,13 +530,22 @@ public class AdvancedSearchEngine
             ["videolar"] = ["videos", "videolar", "video"]
         };
         var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var hint in query.FolderHints)
+        foreach (var hint in hints)
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (hint.Weight <= 0.3) continue;
             var lowered = hint.Name.ToLowerInvariant();
             expanded.Add(lowered);
-            if (!mappings.TryGetValue(lowered, out var alternatives)) continue;
+            if (!mappings.TryGetValue(lowered, out var alternatives))
+            {
+                if (lowered.Contains(' '))
+                {
+                    expanded.Add(lowered.Replace(' ', '.'));
+                    expanded.Add(lowered.Replace(' ', '-'));
+                    expanded.Add(lowered.Replace(' ', '_'));
+                }
+                continue;
+            }
             foreach (var alternative in alternatives)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -572,374 +614,215 @@ public class AdvancedSearchEngine
             .ToList();
     }
 
-    private List<(SearchItem node, Dictionary<string, double> matches)> GetCandidateNodes(
+    private Dictionary<string, (SearchItem node, MatchWeights matches)> GetCandidateNodes(
+        StructuredQuery query,
         IReadOnlyList<SearchTerm> searchTerms,
         ISearchStateReader state,
+        QueryCatalogFilter metadata,
+        HashSet<string>? folderHints,
         CancellationToken cancellationToken)
     {
-        var anchorGroups = searchTerms
-            .Where(term => term.Role == SearchTermRole.Anchor)
-            .GroupBy(term => term.AnchorGroup)
-            .OrderBy(group => group.Key)
-            .ToList();
-        if (anchorGroups.Count == 0)
-        {
-            return [];
-        }
+        var candidates = new Dictionary<string, (SearchItem node, MatchWeights matches)>(
+            StringComparer.OrdinalIgnoreCase);
+        var tokens = CollectTokens(query, searchTerms, cancellationToken);
 
-        Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>? candidates = null;
-        foreach (var anchorGroup in anchorGroups)
+        var includeContents = query.IncludeFolderContents &&
+            query.TargetType is not { HasStrongPreference: true, PrefersFolder: true };
+        QueryCatalogFilter? tokenFilter = query.OriginalText == null ? null : metadata with
+        {
+            PathSegments = null,
+            IncludeDirectories = includeContents || metadata.IncludeDirectories,
+            IncludeDirectoriesWithoutExtension = includeContents,
+            FilterDirectoryDates = !includeContents && metadata.FilterDirectoryDates
+        };
+        foreach (var (token, weight, useFuzzy) in tokens)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var groupMatches = new Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>(
+            AddTokenMatches(candidates, token, weight, useFuzzy, state, tokenFilter, cancellationToken);
+        }
+
+        if (query.OriginalText == null && query.SearchTerms.Count == 0)
+        {
+            var spelling = tokens.ToDictionary(entry => SearchTextNormalizer.Fold(entry.Token), entry => entry.Token,
                 StringComparer.OrdinalIgnoreCase);
-            foreach (var searchTerm in anchorGroup)
+            var keywords = searchTerms.Select(term => _tokenizer.Tokenize(term.Text)
+                .Select(token => spelling[SearchTextNormalizer.Fold(token)])
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray()).Where(parts => parts.Length > 0).ToArray();
+            if (keywords.Any(parts => parts.Length > 1))
             {
-                MergeCandidateUnion(groupMatches, GetTermMatches(searchTerm, state, cancellationToken));
-            }
-
-            if (groupMatches.Count == 0)
-            {
-                return [];
-            }
-
-            if (candidates == null)
-            {
-                candidates = groupMatches;
-                continue;
-            }
-
-            foreach (var path in candidates.Keys.ToArray())
-            {
-                if (!groupMatches.TryGetValue(path, out var groupMatch))
+                foreach (var path in candidates.Keys.ToArray())
                 {
-                    candidates.Remove(path);
-                    continue;
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var matches = candidates[path].matches;
+                    if (!keywords.Any(parts => parts.All(matches.Contains))) candidates.Remove(path);
                 }
-
-                MergeContributions(candidates[path].matches, groupMatch.matches);
-            }
-
-            if (candidates.Count == 0)
-            {
-                return [];
             }
         }
 
-        return candidates?.Values.ToList() ?? [];
+        if (folderHints != null)
+        {
+            var folderFilter = metadata with { PathSegments = folderHints };
+            var items = state is IQueryCatalogSnapshot catalog
+                ? catalog.GetItems(folderFilter, cancellationToken)
+                : state.GetAllItems(cancellationToken).Where(folderFilter.Matches);
+            foreach (var item in items)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (PathHasFolder(Path.GetDirectoryName(item.FullPath) ?? "", folderHints))
+                    candidates.TryAdd(item.FullPath, (item, default));
+            }
+        }
+
+        if (includeContents)
+        {
+            foreach (var (folder, matches) in candidates.Values.Where(candidate => candidate.node.IsDirectory).ToArray())
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (query.OriginalText != null && !matches.CanExpandFolder)
+                    continue;
+                foreach (var child in state.GetDescendants(folder, cancellationToken))
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!child.IsDirectory && metadata.Matches(child))
+                    {
+                        foreach (var (token, weight) in matches.Terms())
+                            AddMatch(candidates, child, token, query.OriginalText == null ? weight : weight * 0.65);
+                    }
+                }
+                if (query.OriginalText == null) candidates.Remove(folder.FullPath);
+            }
+        }
+        return candidates;
     }
 
-    private Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> GetTermMatches(
-        SearchTerm searchTerm,
-        ISearchStateReader state,
+    private (string Token, double Weight, bool UseFuzzy)[] CollectTokens(
+        StructuredQuery query,
+        IReadOnlyList<SearchTerm> searchTerms,
         CancellationToken cancellationToken)
     {
-        var alternativeGroups = _tokenizer.Tokenize(searchTerm.Text)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .GroupBy(SearchTextNormalizer.Fold, StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-        Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>? termMatches = null;
-        foreach (var group in alternativeGroups)
+        var tokens = new Dictionary<string, (string Token, double Weight, bool UseFuzzy)>(StringComparer.OrdinalIgnoreCase);
+        foreach (var term in searchTerms)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> groupMatches =
-                new(StringComparer.OrdinalIgnoreCase);
-            foreach (var token in group)
-            {
-                MergeCandidateUnion(
-                    groupMatches,
-                    GetTokenMatches(token, searchTerm.Weight, state, cancellationToken));
-            }
-
-            if (groupMatches.Count == 0)
-            {
-                return [];
-            }
-
-            if (termMatches == null)
-            {
-                termMatches = groupMatches;
-                continue;
-            }
-
-            foreach (var path in termMatches.Keys.ToArray())
-            {
-                if (!groupMatches.TryGetValue(path, out var groupMatch))
-                {
-                    termMatches.Remove(path);
-                    continue;
-                }
-
-                MergeContributions(termMatches[path].matches, groupMatch.matches);
-            }
+            var weight = term.Role == SearchTermRole.Anchor ? term.Weight : Math.Min(term.Weight, 0.65);
+            foreach (var token in _tokenizer.Tokenize(term.Text))
+                AddToken(token, weight, term.Role == SearchTermRole.Anchor);
         }
+        foreach (var term in query.OriginalTerms)
+        foreach (var token in _tokenizer.Tokenize(term))
+            AddToken(token, 1.4, false);
+        return tokens.Values.ToArray();
 
-        return termMatches ?? [];
-    }
-
-    private static void MergeCandidateUnion(
-        Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> destination,
-        Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> source)
-    {
-        foreach (var (path, candidate) in source)
+        void AddToken(string token, double weight, bool useFuzzy)
         {
-            if (destination.TryGetValue(path, out var existing))
-            {
-                MergeContributions(existing.matches, candidate.matches);
-            }
+            var key = SearchTextNormalizer.Fold(token);
+            if (!tokens.TryGetValue(key, out var old))
+                tokens[key] = (token, weight, useFuzzy);
             else
-            {
-                destination[path] = (
-                    candidate.node,
-                    new Dictionary<string, double>(candidate.matches, StringComparer.OrdinalIgnoreCase));
-            }
+                tokens[key] = (old.Token, Math.Max(old.Weight, weight), old.UseFuzzy || useFuzzy);
         }
     }
 
-    private Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> GetTokenMatches(
+    private static void AddTokenMatches(
+        Dictionary<string, (SearchItem node, MatchWeights matches)> candidates,
         string token,
         double weight,
+        bool useFuzzy,
         ISearchStateReader state,
+        QueryCatalogFilter? filter,
         CancellationToken cancellationToken)
     {
-        var matches = new Dictionary<string, (SearchItem node, Dictionary<string, double> matches)>(
-            StringComparer.OrdinalIgnoreCase);
-        var allowPartial = token.Length >= 4 ||
-            (token.Length >= 3 && token.Any(char.IsDigit));
-        if (allowPartial && state is ITokenPartialSnapshot combined)
+        var found = false;
+        var partialWeight = weight * 0.7;
+        if (state is ITokenPartialSnapshot combined)
         {
-            var found = combined.GetWithPartial(token, cancellationToken);
-            foreach (var (node, exact) in found)
+            var matches = combined.GetWithPartial(token, cancellationToken);
+            found = matches.Count > 0;
+            foreach (var (node, exact) in matches)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (exact) AddMatch(matches, node, token, weight);
-            }
-
-            foreach (var (node, _) in found)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                AddMatch(matches, node, token, weight * 0.7);
+                if (filter?.Matches(node) != false) AddMatch(candidates, node, token, exact ? weight : partialWeight);
             }
         }
         else
         {
-            foreach (var node in state.Get(token, cancellationToken))
+            AddSpelling(token);
+            var folded = SearchTextNormalizer.Fold(token);
+            if (!StringComparer.OrdinalIgnoreCase.Equals(folded, token)) AddSpelling(folded);
+        }
+
+        void AddSpelling(string spelling)
+        {
+            foreach (var node in state.Get(spelling, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                AddMatch(matches, node, token, weight);
+                if (filter?.Matches(node) != false) AddMatch(candidates, node, token, weight);
+                found = true;
             }
-
-            if (allowPartial)
+            foreach (var node in state.GetPartial(spelling, cancellationToken))
             {
-                foreach (var node in state.GetPartial(token, cancellationToken))
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    AddMatch(matches, node, token, weight * 0.7);
-                }
+                cancellationToken.ThrowIfCancellationRequested();
+                if (filter?.Matches(node) != false) AddMatch(candidates, node, token, partialWeight);
+                found = true;
             }
         }
 
-        if (matches.Count == 0 && token.Length >= 4)
+        if (!found && useFuzzy && token.Length >= 4)
         {
             var maxDistance = token.Length >= 7 ? 2 : 1;
             foreach (var node in state.GetFuzzy(token, maxDistance, cancellationToken))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                AddMatch(matches, node, token, weight * 0.4);
+                if (filter?.Matches(node) != false) AddMatch(candidates, node, token, weight * 0.4);
             }
         }
-
-        return matches;
-    }
-
-    private List<(SearchItem node, Dictionary<string, double> matches)> GetAllFilesForFiltering(
-        StructuredQuery query,
-        ISearchStateReader state,
-        CancellationToken cancellationToken)
-    {
-        var allNodes = state.GetAllItems(cancellationToken).ToList();
-        if (query.FolderHints.Any())
-        {
-            var folderNames = query.FolderHints
-                .Where(hint =>
-                {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    return hint.Weight > 0.3;
-                })
-                .Select(hint => hint.Name.ToLowerInvariant())
-                .ToHashSet();
-            var folderMappings = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["downloads"] = ["downloads", "indirilenler", "download"],
-                ["indirilenler"] = ["downloads", "indirilenler", "download"],
-                ["desktop"] = ["desktop", "masaüstü", "masa üstü"],
-                ["masaüstü"] = ["desktop", "masaüstü", "masa üstü"],
-                ["documents"] = ["documents", "belgeler", "dökümanlar", "dokümanlar"],
-                ["belgeler"] = ["documents", "belgeler", "dökümanlar", "dokümanlar"],
-                ["pictures"] = ["pictures", "resimler", "fotograflar", "fotoğraflar"],
-                ["resimler"] = ["pictures", "resimler", "fotograflar", "fotoğraflar"],
-                ["music"] = ["music", "müzik", "muzik"],
-                ["müzik"] = ["music", "müzik", "muzik"],
-                ["videos"] = ["videos", "videolar", "video"],
-                ["videolar"] = ["videos", "videolar", "video"]
-            };
-            var expandedFolderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var folderName in folderNames)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                expandedFolderNames.Add(folderName);
-                if (folderMappings.TryGetValue(folderName, out var mappings))
-                {
-                    foreach (var mapping in mappings)
-                    {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        expandedFolderNames.Add(mapping);
-                    }
-                }
-            }
-
-            allNodes = allNodes.Where(node =>
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var pathParts = node.FullPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                return pathParts.Any(part => expandedFolderNames.Contains(part));
-            }).ToList();
-        }
-
-        return allNodes
-            .Select(node => (node, new Dictionary<string, double>()))
-            .ToList();
     }
 
     private static void AddMatch(
-        Dictionary<string, (SearchItem node, Dictionary<string, double> matches)> matches,
+        Dictionary<string, (SearchItem node, MatchWeights matches)> matches,
         SearchItem node,
         string token,
         double contribution)
     {
-        if (!matches.TryGetValue(node.FullPath, out var match))
-        {
-            match = (node, new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase));
-            matches[node.FullPath] = match;
-        }
-
-        if (!match.matches.TryGetValue(token, out var current) || contribution > current)
-        {
-            match.matches[token] = contribution;
-        }
+        if (!matches.TryGetValue(node.FullPath, out var match)) match = (node, default);
+        match.matches.Add(token, contribution);
+        matches[node.FullPath] = match;
     }
 
-    private static Dictionary<string, double> MergeMatches(
-        IEnumerable<Dictionary<string, double>> sources)
+    private struct MatchWeights
     {
-        var result = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
-        foreach (var source in sources)
+        private Dictionary<string, double>? _values;
+
+        public readonly bool HasMatches => _values is { Count: > 0 };
+        public readonly bool Contains(string token) => _values?.ContainsKey(token) == true;
+        public readonly bool CanExpandFolder => _values?.Any(match => match.Key.Length >= 4 && match.Value >= 1) == true;
+
+        public void Add(string token, double weight)
         {
-            foreach (var (token, contribution) in source)
-            {
-                if (!result.TryGetValue(token, out var current) || contribution > current)
-                {
-                    result[token] = contribution;
-                }
-            }
+            var values = _values ??= new(StringComparer.OrdinalIgnoreCase);
+            if (!values.TryGetValue(token, out var old) || weight > old) values[token] = weight;
         }
 
-        return result;
-    }
-
-    private static void MergeContributions(
-        Dictionary<string, double> destination,
-        Dictionary<string, double> source)
-    {
-        foreach (var (token, contribution) in source)
+        public readonly double Score(HashSet<string>? allowedTokens = null, double factor = 1)
         {
-            if (!destination.TryGetValue(token, out var current) || contribution > current)
-            {
-                destination[token] = contribution;
-            }
+            var score = 0.0;
+            if (_values != null)
+                foreach (var (token, weight) in _values)
+                    if (allowedTokens == null || allowedTokens.Contains(token)) score += weight * factor;
+            return score;
+        }
+
+        public readonly IEnumerable<(string Token, double Weight)> Terms()
+        {
+            if (_values != null)
+                foreach (var (token, weight) in _values) yield return (token, weight);
         }
     }
-
-    private static List<(SearchItem node, Dictionary<string, double> matches)> ApplyItemFilter(
-        List<(SearchItem node, Dictionary<string, double> matches)> candidates,
-        ItemFilter filter,
-        CancellationToken cancellationToken)
-    {
-        var now = DateTime.Now;
-        return candidates.Where(candidate =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var node = candidate.node;
-            return filter.Matches(
-                node.Name,
-                node.IsDirectory,
-                node.SizeBytes,
-                node.LastWriteTime,
-                now);
-        }).ToList();
-    }
-
-    private static List<(SearchItem node, Dictionary<string, double> matches)> ApplyDateFilter(
-        List<(SearchItem node, Dictionary<string, double> matches)> candidates,
-        DateFilter filter,
-        CancellationToken cancellationToken) =>
-        candidates.Where(candidate =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (filter.CreatedAfter != null && DateTime.TryParse(filter.CreatedAfter, out var createdAfter) &&
-                (candidate.node.CreatedTime == null || candidate.node.CreatedTime < createdAfter))
-            {
-                return false;
-            }
-
-            if (filter.CreatedBeforeExclusive != null &&
-                DateTime.TryParse(filter.CreatedBeforeExclusive, out var createdBeforeExclusive) &&
-                (candidate.node.CreatedTime == null || candidate.node.CreatedTime >= createdBeforeExclusive))
-            {
-                return false;
-            }
-
-            if (filter.ModifiedAfter != null && DateTime.TryParse(filter.ModifiedAfter, out var modifiedAfter) &&
-                (candidate.node.LastWriteTime == null || candidate.node.LastWriteTime < modifiedAfter))
-            {
-                return false;
-            }
-
-            if (filter.ModifiedBeforeExclusive != null &&
-                DateTime.TryParse(filter.ModifiedBeforeExclusive, out var modifiedBeforeExclusive) &&
-                (candidate.node.LastWriteTime == null || candidate.node.LastWriteTime >= modifiedBeforeExclusive))
-            {
-                return false;
-            }
-
-            return true;
-        }).ToList();
-
-    private static List<(SearchItem node, Dictionary<string, double> matches)> ApplySizeFilter(
-        List<(SearchItem node, Dictionary<string, double> matches)> candidates,
-        SizeFilter filter,
-        CancellationToken cancellationToken) =>
-        candidates.Where(candidate =>
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (candidate.node.IsDirectory)
-            {
-                return true;
-            }
-
-            if (candidate.node.SizeBytes == null)
-            {
-                return false;
-            }
-
-            var sizeMb = candidate.node.SizeBytes.Value / (1024.0 * 1024.0);
-            return (!filter.MinMb.HasValue || sizeMb >= filter.MinMb.Value) &&
-                   (!filter.MaxMb.HasValue || sizeMb <= filter.MaxMb.Value);
-        }).ToList();
 
     private sealed record QueryScoringContext(
         IReadOnlyList<(string Normalized, double Weight)> ExactAndPhraseTerms,
         IReadOnlyList<(string Lowered, double Weight)> FolderHints,
+        IReadOnlyList<(int Group, string[] Tokens, double Weight)> FolderContext,
         Dictionary<string, double> ContextTokenWeights);
 
     private QueryScoringContext CreateScoringContext(
@@ -952,10 +835,23 @@ public class AdvancedSearchEngine
                 (term.Role == SearchTermRole.Anchor && term.Category == SearchTermCategory.Exact))
             .Select(term => (Normalized: NormalizeForComparison(term.Text), term.Weight))
             .ToList();
+        if (query.OriginalTerms.Count > 0)
+        {
+            exactAndPhraseTerms.Add((
+                NormalizeForComparison(string.Join(' ', query.OriginalTerms)), 1.4));
+        }
 
-        var folderHints = query.FolderHints
-            .Select(hint => (Lowered: hint.Name.ToLowerInvariant(), Weight: Math.Clamp(hint.Weight, 0, 1)))
+        var original = " " + NormalizeForComparison(query.OriginalText ?? "") + " ";
+        var folderHints = query.FolderHints.Select(hint => (
+                Lowered: NormalizeForComparison(hint.Name), Weight: Math.Clamp(hint.Weight, 0, 1)))
+            .Select(hint => (hint.Lowered, Weight: hint.Weight *
+                (original.Contains(" " + hint.Lowered + " ", StringComparison.OrdinalIgnoreCase) ? 400 : 100)))
             .ToList();
+        var folderContext = query.FolderContextTerms.Select(term => (
+            Group: term.AnchorGroup,
+            Tokens: _tokenizer.Tokenize(term.Text).Select(SearchTextNormalizer.Fold)
+                .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+            Weight: Math.Clamp(term.Weight, 0, 1))).ToList();
 
         var contextTokenWeights = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
         foreach (var term in searchTerms.Where(term => term.Role == SearchTermRole.Context))
@@ -969,37 +865,46 @@ public class AdvancedSearchEngine
             }
         }
 
-        return new QueryScoringContext(exactAndPhraseTerms, folderHints, contextTokenWeights);
+        return new QueryScoringContext(exactAndPhraseTerms, folderHints, folderContext, contextTokenWeights);
     }
 
     private double CalculateScore(
         StructuredQuery query,
         SearchItem node,
-        Dictionary<string, double> matches,
+        MatchWeights matches,
         QueryScoringContext context,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var score = matches.Values.Sum() * 100;
-        if (matches.Count > 0 && node.FullPath.Contains(Path.DirectorySeparatorChar))
+        var score = matches.Score() * 100;
+        if (matches.HasMatches && node.FullPath.Contains(Path.DirectorySeparatorChar))
         {
             var parentFolder = Path.GetFileName(Path.GetDirectoryName(node.FullPath) ?? string.Empty);
             var folderTokens = _tokenizer.Tokenize(parentFolder).ToHashSet();
-            score += matches
-                .Where(match => folderTokens.Contains(match.Key))
-                .Sum(match => match.Value * 60);
+            score += matches.Score(folderTokens, 60);
         }
 
-        if (context.FolderHints.Count > 0)
+        if (context.FolderHints.Count > 0 || context.FolderContext.Count > 0)
         {
-            var pathLower = node.FullPath.ToLowerInvariant();
+            var segments = (Path.GetDirectoryName(node.FullPath) ?? "")
+                .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var names = segments.Select(NormalizeForComparison).ToHashSet(StringComparer.OrdinalIgnoreCase);
             foreach (var (lowered, weight) in context.FolderHints)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (pathLower.Contains(lowered))
+                if (names.Contains(lowered))
                 {
-                    score += 100 * weight;
+                    score += weight;
                 }
+            }
+            if (context.FolderContext.Count > 0)
+            {
+                var folderTokens = segments.Select(segment => _tokenizer.Tokenize(segment)
+                    .Select(SearchTextNormalizer.Fold).ToHashSet(StringComparer.OrdinalIgnoreCase)).ToArray();
+                score += context.FolderContext
+                    .Where(term => term.Tokens.Length > 0 && folderTokens.Any(segment => term.Tokens.All(segment.Contains)))
+                    .GroupBy(term => term.Group)
+                    .Sum(group => group.Max(term => term.Weight) * 100);
             }
         }
 
@@ -1058,7 +963,7 @@ public class AdvancedSearchEngine
     }
 
     private string NormalizeForComparison(string value) =>
-        string.Join(' ', _tokenizer.Tokenize(value));
+        string.Join(' ', _tokenizer.Tokenize(value).Select(SearchTextNormalizer.Fold).Distinct(StringComparer.Ordinal));
 
     private static IEnumerable<FileSystemNode> GetTreeNodes(
         FileSystemNode root,

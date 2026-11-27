@@ -10,7 +10,7 @@ using SmartFileLauncher.Core.Search;
 
 namespace SmartFileLauncher.Core.Services;
 
-public class IntentParser
+public partial class IntentParser
 {
     private const string IntentApiKeyEnvironmentVariable = "OMNISPOT_GROQ_INTENT_API_KEY";
     private const string KeywordApiKeyEnvironmentVariable = "OMNISPOT_GROQ_KEYWORD_API_KEY";
@@ -52,17 +52,21 @@ public class IntentParser
         ["document"] = ["document", "belge", "doküman", "doc", "pdf", "text", "txt", "docx", "rtf", "odt"],
         ["audio"] = ["audio", "music", "müzik", "şarkı", "song", "sound", "mp3", "wav", "flac", "ogg"],
         ["code"] = ["code", "kod", "source", "script", "cs", "js", "py", "cpp", "java", "html"],
-        ["subtitle"] = ["subtitle", "altyazı", "sub", "srt", "vtt", "ass"]
+        ["subtitle"] = ["subtitle", "altyazı", "sub", "srt", "vtt", "ass"],
+        ["presentation"] = ["presentation", "sunum", "slayt", "ppt", "pptx", "odp"],
+        ["spreadsheet"] = ["spreadsheet", "excel", "xls", "xlsx", "csv", "ods"]
     };
 
     private static readonly Dictionary<string, string[]> ExtensionMappings = new()
     {
         ["video"] = [".mp4", ".avi", ".mkv", ".mov", ".wmv", ".flv", ".m4v", ".3gp"],
-        ["image"] = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".svg", ".webp"],
+        ["image"] = [".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".tif", ".svg", ".webp", ".heic", ".heif", ".avif"],
         ["document"] = [".pdf", ".doc", ".docx", ".txt", ".rtf", ".odt", ".xls", ".xlsx", ".ppt", ".pptx"],
         ["audio"] = [".mp3", ".wav", ".flac", ".ogg", ".aac", ".wma", ".m4a"],
         ["code"] = [".cs", ".js", ".py", ".cpp", ".java", ".html", ".css", ".xml", ".json", ".sql"],
-        ["subtitle"] = [".srt", ".vtt", ".ass", ".sub"]
+        ["subtitle"] = [".srt", ".vtt", ".ass", ".sub"],
+        ["presentation"] = [".ppt", ".pptx", ".pps", ".ppsx", ".odp"],
+        ["spreadsheet"] = [".xls", ".xlsx", ".xlsm", ".csv", ".ods"]
     };
 
     private static readonly HashSet<string> Stopwords = new(StringComparer.OrdinalIgnoreCase)
@@ -73,6 +77,12 @@ public class IntentParser
         "göster", "dosya", "dosyaları", "klasör", "aç", "lütfen", "bu", "ait", "dair",
         "nin", "nın", "nun", "nün"
     };
+
+    private static readonly HashSet<string> KnownExtensions = ExtensionMappings.Values
+        .SelectMany(extensions => extensions)
+        .Select(extension => extension.TrimStart('.'))
+        .Concat(["7z", "zip", "rar", "exe", "msi", "dll", "csv", "heic", "heif", "tif", "avif", "m4a"])
+        .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     private static readonly HashSet<string> TemporalFallbackTerms = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -85,7 +95,7 @@ public class IntentParser
     private static readonly HashSet<string> GenericMetadataTerms = new(StringComparer.OrdinalIgnoreCase)
     {
         "pdf", "excel", "image", "picture", "photo", "fotoğraf", "resim", "video", "film",
-        "audio", "music", "müzik", "document", "belge", "doküman"
+        "audio", "music", "müzik", "document", "belge", "doküman", "sunum", "slayt", "presentation", "spreadsheet"
     };
 
     public IntentParser(
@@ -216,13 +226,7 @@ public class IntentParser
             }
 
             var result = MapIntentResultToStructuredQuery(intentResult, query);
-            if (result.FilterOnlyMode &&
-                keywordResult != null &&
-                keywordError == null &&
-                HasNonMetadataAnchor(result, keywordResult))
-            {
-                result.FilterOnlyMode = false;
-            }
+            ApplyExplicitFilters(result, query);
 
             if (result.FilterOnlyMode)
             {
@@ -269,31 +273,18 @@ public class IntentParser
             return CreateDefaultQuery();
         }
 
-        var keywords = ExtractKeywords(query);
-        var fileTypes = DetectFileTypes(query);
-        var hardExtensions = fileTypes
-            .Where(ExtensionMappings.ContainsKey)
-            .SelectMany(type => ExtensionMappings[type])
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        return new StructuredQuery
+        var result = new StructuredQuery
         {
+            OriginalText = query,
             Intent = "search_files",
-            Keywords = keywords,
-            SearchTerms = keywords
-                .Select((text, index) => new SearchTerm
-                {
-                    Text = text,
-                    Category = SearchTermCategory.Legacy,
-                    Weight = Math.Max(0.7, 1.0 - index * 0.05)
-                })
-                .ToList(),
-            FileTypes = fileTypes,
-            PredictedExtensions = hardExtensions.ToList(),
-            HardExtensions = hardExtensions,
             IncludeFolderContents = true
         };
+        ApplyExplicitFilters(result, query);
+        if (!result.FilterOnlyMode)
+        {
+            ApplyRuleBasedTerms(result, query);
+        }
+        return result;
     }
 
     private async Task<(GroqIntentResult? Result, Exception? Error)> CallIntentApiWithErrorHandlingAsync(
@@ -873,7 +864,6 @@ public class IntentParser
         GroqIntentResult intent,
         string query)
     {
-        var filterOnly = intent.Mode == "filter";
         var targetType = intent.Target switch
         {
             "file" => new TargetType { File = 1, Folder = 0 },
@@ -883,8 +873,8 @@ public class IntentParser
 
         var structuredQuery = new StructuredQuery
         {
+            OriginalText = query,
             Intent = intent.Open == true ? "open_best_match" : $"search_{intent.Target}",
-            FilterOnlyMode = filterOnly,
             IncludeFolderContents = true,
             HardExtensions = intent.HardExtensions.ToList(),
             SoftExtensions = intent.SoftExtensions.ToList(),
@@ -911,15 +901,6 @@ public class IntentParser
                 CreatedBeforeExclusive = intent.CreatedToExclusive,
                 ModifiedAfter = intent.ModifiedFrom,
                 ModifiedBeforeExclusive = intent.ModifiedToExclusive
-            };
-        }
-
-        if (intent.MinMb.HasValue || intent.MaxMb.HasValue)
-        {
-            structuredQuery.SizeFilter = new SizeFilter
-            {
-                MinMb = intent.MinMb,
-                MaxMb = intent.MaxMb
             };
         }
 
@@ -1013,29 +994,6 @@ public class IntentParser
         query.SearchTerms = query.SearchTerms.Except(query.FolderContextTerms).ToList();
     }
 
-    private static bool HasNonMetadataAnchor(
-        StructuredQuery intent,
-        GroqKeywordResult keywordResult)
-    {
-        var extensions = intent.HardExtensions
-            .Concat(intent.SoftExtensions)
-            .Select(extension => extension.TrimStart('.'))
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var folders = intent.FolderHints
-            .Select(folder => folder.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        return keywordResult.Anchors.Any(anchor =>
-        {
-            var primary = CanonicalizeFallbackTerm(
-                (anchor.Primary ?? "").Trim().ToLowerInvariant());
-            return primary.Length > 0 &&
-                !GenericMetadataTerms.Contains(primary) &&
-                !extensions.Contains(primary) &&
-                !folders.Contains(primary);
-        });
-    }
-
     private static void AddTerms(
         Dictionary<string, SearchTerm> destination,
         IReadOnlyList<string> values,
@@ -1073,8 +1031,7 @@ public class IntentParser
             keywords.Add(query);
         }
 
-        result.Keywords = keywords;
-        result.SearchTerms = keywords
+        var anchors = keywords
             .Select((text, index) => new SearchTerm
             {
                 Text = text,
@@ -1084,6 +1041,8 @@ public class IntentParser
                 Weight = Math.Max(0.7, 1.0 - index * 0.05)
             })
             .ToList();
+        result.SearchTerms.InsertRange(0, anchors);
+        result.Keywords = result.SearchTerms.Select(term => term.Text).ToList();
     }
 
     private static bool HasExplicitOpenVerb(string query)
@@ -1182,24 +1141,10 @@ public class IntentParser
         return suffix == null ? term : term[..^suffix.Length];
     }
 
-    private static List<string> DetectFileTypes(string query)
-    {
-        var detectedTypes = new HashSet<string>();
-        var lowerQuery = query.ToLowerInvariant();
-        foreach (var (fileType, patterns) in FileTypePatterns)
-        {
-            if (patterns.Any(lowerQuery.Contains))
-            {
-                detectedTypes.Add(fileType);
-            }
-        }
-
-        return detectedTypes.ToList();
-    }
-
     private static StructuredQuery CreateDefaultQuery() =>
         new()
         {
+            OriginalText = "",
             Intent = "search_files",
             IncludeFolderContents = true
         };
@@ -1304,16 +1249,14 @@ Return exactly one valid JSON object and nothing else:
 
 Retrieval semantics:
 - Use 0-3 anchors.
-- Different anchor objects are required together: AND.
-- primary, variants, and translations inside one anchor are alternatives: OR.
-- Every token of a multiword anchor term is required together.
-- Only anchor terms can admit candidates.
-- phrases and context only improve ranking; they cannot admit candidates.
-- An anchor that matches no filename removes every candidate, even when every other anchor matches.
-- Exception: a name explicitly identifying the containing project, application, site or repository may be an anchor. This includes an owner or client name used to identify that site or project. The intent classifier identifies that name as folder context, and the search engine then checks it in ancestor folders instead of requiring it in the filename. A person mentioned only as author, recipient or subject is not a containing folder.
+- Anchors supply strong filename or folder clues. Each matching term can admit a candidate.
+- primary, variants, and translations represent alternatives for one concept.
+- A match on more concepts helps ranking. Missing terms do not reject a candidate.
+- Phrases and context are weaker clues for matching and ranking.
+- A name identifying a project, application, site or repository may be a folder clue. A person mentioned as author, recipient or subject is a content clue.
 
 Selection rules:
-- Put each independently required lexical concept in its own anchor, and prefer the fewest anchors that identify the file. Use one anchor when a single word identifies it, two in an ordinary query, and a third only when that word is certain to appear in the filename.
+- Put each distinctive lexical concept in its own anchor, and prefer the fewest anchors that identify the file. Use one anchor when a single word identifies it, two in an ordinary query, and a third only when that word is certain to appear in the filename.
 - An anchor term must be a single word. Use a multiword anchor only for a proper name or identifier that files are actually named after, where those words nearly always appear together in such a name.
 - A concept unlikely to appear literally in a filename belongs in context, never in an anchor. This covers possessives, pronouns, relational descriptions, and the circumstances under which the file was made or received.
 - Do not discard spatial or directional terms merely because they describe position or direction. They may be anchors when they are distinctive filename clues supported by the query.
@@ -1321,7 +1264,7 @@ Selection rules:
 - primary: the closest concise expression of the user's concept.
 - variants: at most 3 high-confidence alternatives for the same concept. Prefer inflections, ASCII forms, joined/underscore/hyphen filename forms, established abbreviations, official aliases, and highly reliable same-intent artifact names. For a Turkish term always include the suffix-stripped stem and the ASCII-folded form.
 - translations: at most 2 direct, likely filename equivalents. Never add merely related foreign concepts.
-- phrases: at most 2 precise multiword combinations useful only for ranking.
+- phrases: at most 2 precise multiword combinations that strengthen a match.
 - context: at most 3 query-supported or strongly diagnostic ranking clues. Leave it empty rather than inventing a domain or meaning.
 - Preserve explicit identifiers, ticket numbers, product names, and meaningful qualifiers.
 - Keep an explicit year only when it is part of the searched name or content identity, not merely a date filter.
