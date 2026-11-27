@@ -156,6 +156,12 @@ public partial class MainWindow
         UpdateTabStrip();
     }
 
+    private void UpdateHeaderCorners()
+    {
+        var radius = TabStrip.Visibility == Visibility.Visible ? 0 : 8;
+        SearchHeader.CornerRadius = new CornerRadius(radius, radius, 0, 0);
+    }
+
     private void UpdateTabStrip()
     {
         if (_tabs.Count <= 1)

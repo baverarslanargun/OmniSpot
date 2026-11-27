@@ -83,7 +83,7 @@ public partial class MainWindow
         if (NameEditing) return;
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
         var modifiers = Keyboard.Modifiers;
-        if (BrowsingApplications && !KeyboardInDualPane)
+        if (BrowsingApplications)
         {
             if (key == Key.BrowserBack || (modifiers == ModifierKeys.Alt && key == Key.Left))
             {
@@ -120,7 +120,6 @@ public partial class MainWindow
 
     private bool CanNavigateBackWithBackspace() =>
         _navigationHistory.CanGoBack
-        && !KeyboardInDualPane
         && SearchBox.Text.Length == 0
         && (Keyboard.FocusedElement is not TextBoxBase || ReferenceEquals(Keyboard.FocusedElement, SearchBox))
         && Stopwatch.GetElapsedTime(_searchBoxEmptiedAt) >= BackspaceNavigationGuard;
@@ -128,7 +127,7 @@ public partial class MainWindow
     private void NavigationPreviewMouseDown(object sender, MouseButtonEventArgs e)
     {
         if (e.ChangedButton is MouseButton.XButton1 or MouseButton.XButton2 &&
-            BrowsingApplications && !(DualPaneOpen && DualPane.IsMouseOver))
+            BrowsingApplications)
         {
             e.Handled = true;
             if (e.ChangedButton == MouseButton.XButton1) CloseApplicationBrowser();
@@ -163,7 +162,6 @@ public partial class MainWindow
         if (sender is not ContextMenu menu) return;
         UpdateBatchMenuItems(menu, PathFromMenuTarget(menu));
         UpdateTabMenuItems(menu);
-        UpdateDualMenuItems(menu);
         UpdateSearchInFolderMenuItem(menu);
         var goToFolder = menu.Items.OfType<MenuItem>().FirstOrDefault(item => item.Name == "GoToContainingFolderMenuItem");
         if (goToFolder == null) return;
@@ -183,9 +181,9 @@ public partial class MainWindow
         return true;
     }
 
-    private async Task OpenFolderItemAsync(string path, bool inDualPane = false)
+    private async Task OpenFolderItemAsync(string path)
     {
-        var opened = inDualPane ? await ShowPaneFolderAsync(path) : await NavigateToFolderAsync(path);
+        var opened = await NavigateToFolderAsync(path);
         if (opened) _recordFolderOpened?.Invoke(path);
     }
 
@@ -500,7 +498,6 @@ public partial class MainWindow
             ? $"{backText}\nİleri: {DescribeNavigation(forward)} (Alt+→ veya farenin ileri tuşu)"
             : backText;
         UpdateTabStrip();
-        if (DualPaneOpen) UpdateDualPaneFooter();
     }
 
     private static string DescribeNavigation(NavigationEntry entry) =>
@@ -524,7 +521,7 @@ public partial class MainWindow
         SyncFolderPathBarVisibility();
         if (string.IsNullOrEmpty(_currentFolderPath)) return;
 
-        FillPathSegments(FolderPathSegments, _currentFolderPath, FolderPathBudget, parentHint: true, target =>
+        FillPathSegments(FolderPathSegments, _currentFolderPath, FolderPathBudget, target =>
         {
             _navigationDirection = -1;
             if (target.Path == null) NavigateHome();
@@ -537,7 +534,6 @@ public partial class MainWindow
         System.Windows.Controls.Panel panel,
         string folder,
         int budget,
-        bool parentHint,
         Action<FolderPathTarget> navigate)
     {
         var trail = FolderPathTrail.Build(folder, _indexedRootPaths);
@@ -578,7 +574,7 @@ public partial class MainWindow
                 return;
             }
 
-            var isParent = parentHint && trail.Count >= 2 && segment == trail[^2];
+            var isParent = trail.Count >= 2 && segment == trail[^2];
             var button = CreateButton(isParent ? $"{segment.Path} (Alt+↑)" : segment.Path, () => navigate(TargetOf(segment)));
             button.Content = CreateFolderPathText(segment.Name, FontWeights.Normal, null);
             panel.Children.Add(button);

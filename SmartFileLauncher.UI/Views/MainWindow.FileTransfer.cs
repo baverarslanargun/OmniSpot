@@ -324,7 +324,7 @@ public partial class MainWindow
     private void FileTransferPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
         if (NameEditing) return;
-        if ((ApplicationOwnsCommands || StaleFileResults) && !KeyboardInDualPane) return;
+        if (ApplicationOwnsCommands || StaleFileResults) return;
         if (e.Key != Key.V || Keyboard.Modifiers != ModifierKeys.Control ||
             Keyboard.FocusedElement is not TextBoxBase || GetPasteDestination() is not { } destination)
             return;
@@ -446,8 +446,6 @@ public partial class MainWindow
 
     private string? GetDropDestination(DependencyObject? source)
     {
-        if (DualPaneOpen && FileVisualParents(source).Contains(DualPane))
-            return FileVisualParents(source).Any(parent => parent is ScrollBar) ? null : DualPaneDropDestination(source);
         if (!FileVisualParents(source).Contains(FileContentArea) ||
             FileVisualParents(source).Any(parent => parent is ScrollBar))
             return null;

@@ -31,7 +31,7 @@ public sealed class MainWindowNavigationTests
         await fixture.Search("fatura", false);
         var path = Assert.Single(fixture.Model.SearchResults).FullPath;
 
-        await fixture.Invoke("OpenFolderItemAsync", path, false);
+        await fixture.Invoke("OpenFolderItemAsync", path);
         await fixture.Back();
         await fixture.Forward();
 
