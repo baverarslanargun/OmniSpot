@@ -283,7 +283,8 @@ public partial class MainWindow
             FullPath = newPath,
             Score = old.Score,
             Icon = old.IsDirectory ? "folder" : GetFileIcon(newName),
-            IsDirectory = old.IsDirectory
+            IsDirectory = old.IsDirectory,
+            HighlightQuery = old.HighlightQuery
         };
         if (old.IsDirectory) replacement.SetFolderColors(newName);
         _searchResults[index] = replacement;

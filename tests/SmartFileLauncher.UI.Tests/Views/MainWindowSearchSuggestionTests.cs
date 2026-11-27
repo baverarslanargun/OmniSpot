@@ -108,6 +108,28 @@ public sealed partial class MainWindowSearchRefreshTests
         Assert.Null(fixture.Window.CurrentFilterHiddenCount);
     });
 
+    [Fact]
+    public Task StandardResultsCarryTheQueryForHighlightingButAiResultsDoNot() => RunSta(async () =>
+    {
+        using var fixture = new Fixture { StandardTotal = 3 };
+        var results = (System.Collections.ObjectModel.ObservableCollection<SmartFileLauncher.UI.ViewModels.SearchResultViewModel>)
+            typeof(MainWindow).GetProperty("_searchResults", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(fixture.Window)!;
+
+        fixture.Type("fatura", naturalLanguage: false);
+        await fixture.CurrentSearchCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.NotEmpty(results);
+        Assert.All(results, item => Assert.Equal("fatura", item.HighlightQuery));
+
+        fixture.Type("fatura-", naturalLanguage: false);
+        await fixture.CurrentSearchCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.All(results, item => Assert.Equal("fatura-", item.HighlightQuery));
+
+        fixture.ReleaseParser.TrySetResult();
+        await fixture.Search("fatura bul", naturalLanguage: true);
+        Assert.NotEmpty(results);
+        Assert.All(results, item => Assert.Null(item.HighlightQuery));
+    });
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

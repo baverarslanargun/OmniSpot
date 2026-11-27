@@ -1708,6 +1708,7 @@ public partial class MainWindow : Window {
             }
 
             _presentedFileQuery = query;
+            _resultHighlightQuery = outcome.IsPageable ? request.Query : null;
             FinishApplicationLayout();
             await RenderSearchResultsAsync(outcome.Results, previousOutcome == null, searchVersion, cancellationToken);
             cancellationToken.ThrowIfCancellationRequested();
@@ -1951,6 +1952,7 @@ public partial class MainWindow : Window {
             cancellationToken.ThrowIfCancellationRequested();
             if (existing.Remove(result.FullPath, out var item)) {
                 item.Score = result.Score;
+                item.HighlightQuery = _resultHighlightQuery;
                 if (slot < _searchResults.Count && ReferenceEquals(_searchResults[slot], item)) {
                     slot++;
                     continue;

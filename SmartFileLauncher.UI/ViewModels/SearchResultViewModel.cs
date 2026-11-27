@@ -13,6 +13,18 @@ public class SearchResultViewModel : INotifyPropertyChanged
     public double Score { get; set; }
     public string Icon { get; set; } = "file";
     public bool IsDirectory { get; set; }
+    private string? _highlightQuery;
+
+    public string? HighlightQuery
+    {
+        get => _highlightQuery;
+        set
+        {
+            if (_highlightQuery == value) return;
+            _highlightQuery = value;
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(HighlightQuery)));
+        }
+    }
 
     private static MediaBrush GetFrozenBrush(byte r, byte g, byte b)
     {

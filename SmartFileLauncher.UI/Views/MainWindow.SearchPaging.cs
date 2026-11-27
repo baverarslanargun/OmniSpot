@@ -16,6 +16,7 @@ public partial class MainWindow
     private bool _searchPageLoading;
     private int? _searchTotal;
     private CancellationTokenSource? _searchPageCancellation;
+    private string? _resultHighlightQuery;
 
     private void InitializeSearchPaging()
     {
@@ -193,7 +194,8 @@ public partial class MainWindow
             FullPath = result.FullPath,
             Score = result.Score,
             Icon = result.IsDirectory ? "folder" : GetFileIcon(result.Name),
-            IsDirectory = result.IsDirectory
+            IsDirectory = result.IsDirectory,
+            HighlightQuery = _resultHighlightQuery
         };
         if (result.IsDirectory) viewModel.SetFolderColors(result.Name);
         return viewModel;

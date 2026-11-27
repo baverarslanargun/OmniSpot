@@ -2108,7 +2108,7 @@
                                         
                                         <!-- File Info -->
                                         <StackPanel Grid.Column="1" VerticalAlignment="Center">
-                                            <TextBlock services:FileNameTrimming.FileName="{Binding Name}"
+                                            <TextBlock services:FileNameTrimming.FileName="{Binding Name}" services:FileNameTrimming.Highlight="{Binding HighlightQuery}"
                                                        FontSize="14" 
                                                        FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis">
@@ -2269,7 +2269,7 @@
                                                         </Border>
 
                                                         <!-- File Name -->
-                                                        <TextBlock x:Name="CardName" services:FileNameTrimming.FileName="{Binding Name}"
+                                                        <TextBlock x:Name="CardName" services:FileNameTrimming.FileName="{Binding Name}" services:FileNameTrimming.Highlight="{Binding HighlightQuery}"
                                                                    FontSize="12"
                                                                    FontWeight="Medium"
                                                                    Foreground="#334155"
